@@ -8,6 +8,7 @@ using Unity.Collections;
 using System.IO;
 using System;
 
+// ⭐ 블록의 원래 위치와 '최대 흔들림(Max Displacement)'을 기억하는 센서
 public struct VibrationTracker : IComponentData
 {
     public float3 OriginalPos;
@@ -18,371 +19,237 @@ public struct VibrationTracker : IComponentData
 [UpdateInGroup(typeof(SimulationSystemGroup))]
 public partial struct VibrationTestSystem : ISystem
 {
+    // ⭐ 스포너에게 지금 세팅 중인지 알려주는 글로벌 전광판 스위치!
     public static bool IsBModeActive = false;
-    private bool isBMode; private int vibeLevel; private float actualVibePower;
-    private bool isVibrating; private float vibeTimer;
-    public static bool IsSimulationRunning = false; // ⭐ 지진 시뮬레이션 진행 중 여부 (StressVisualizationSystem이 이걸 보고 영구삭제를 잠시 멈춤)
-    // ⭐ [설정 통합] 원본 하드코딩값(5.0f)은 fallback으로 유지, 있으면 SimulationSettings 값 사용
-    private static float MAX_VIBE_TIME => SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.vibrationMaxTime : 5.0f;
 
-    private static readonly int3[] gridDirs = new int3[] { new int3(1, 0, 0), new int3(0, 0, 1), new int3(0, 1, 0) };
-    private static readonly float3[] internalDirs = new float3[] { new float3(1, 0, 0), new float3(0, 0, 1), new float3(0, 1, 0) };
+    private bool isBMode;
+    private int vibeLevel; // 진도 1 ~ 8단계
+    private float actualVibePower; // 실제 적용되는 물리적 힘 (2배씩 증가)
+
+    private bool isVibrating;
+    private float vibeTimer;
+    private const float MAX_VIBE_TIME = 5.0f; // ⭐ 소장님 지시: 정확히 5초간 지진 발생!
 
     public void OnCreate(ref SystemState state)
     {
-        isBMode = false; IsBModeActive = false; vibeLevel = 1; actualVibePower = 1f; isVibrating = false; vibeTimer = 0f; state.RequireForUpdate<PhysicsWorldSingleton>();
+        isBMode = false;
+        IsBModeActive = false;
+
+        vibeLevel = 1;
+        actualVibePower = 1f;
+
+        isVibrating = false;
+        vibeTimer = 0f;
+        state.RequireForUpdate<PhysicsWorldSingleton>();
     }
 
     public void OnUpdate(ref SystemState state)
     {
         if (!SystemAPI.HasSingleton<PhysicsWorldSingleton>()) return;
 
+        // =========================================================
+        // 1. [B키] 세팅 모드 진입 (안전핀 해제)
+        // =========================================================
         if (Input.GetKeyDown(KeyCode.B) && !isVibrating)
         {
-            if (!isBMode) 
-            {
-                isBMode = true; IsBModeActive = true;
-                Debug.Log($"🚨 [지진 세팅 모드] B모드 켜짐! (현재 진도: {vibeLevel}단계) 한 번 더 B를 누르면 격발합니다.");
-                foreach (var color in SystemAPI.Query<RefRW<URPMaterialPropertyBaseColor>>().WithAll<BlockTag>()) { color.ValueRW.Value = new float4(1, 1, 1, 1); }
-            }
-            else 
-            {
-                isBMode = false; IsBModeActive = false;
-                isVibrating = true; vibeTimer = MAX_VIBE_TIME;
-                IsSimulationRunning = true;
-                Debug.Log($"💥 [격발!] 진도 {vibeLevel} 강진 발생!!");
+            isBMode = !isBMode;
+            IsBModeActive = isBMode; // 스포너에게 "대기해!" 라고 알림
 
-                var initEcb = new EntityCommandBuffer(Allocator.Temp);
-                foreach (var (transform, mass, gravity, entity) in SystemAPI.Query<RefRO<LocalTransform>, RefRW<PhysicsMass>, RefRW<PhysicsGravityFactor>>().WithAll<BlockTag>().WithEntityAccess())
+            if (isBMode)
+            {
+                Debug.Log($"🚨 [지진 세팅 모드] B모드 켜짐! 마우스 휠로 진도(1~8)를 조절하고 G를 눌러 격발하세요! (현재 진도: {vibeLevel}단계)");
+
+                // ⭐ B 누를 때마다 현장 세차 (이전 테스트 색상 하얗게 초기화)
+                foreach (var color in SystemAPI.Query<RefRW<URPMaterialPropertyBaseColor>>().WithAll<BlockTag>())
                 {
-                    gravity.ValueRW.Value = 1.0f;
-                    if (transform.ValueRO.Position.y <= 3.1f) { 
-                        mass.ValueRW.InverseMass = 0f; 
-                        mass.ValueRW.InverseInertia = float3.zero; 
-                    }
-                    else { 
-                        mass.ValueRW.InverseMass = 0.1f; 
-                        mass.ValueRW.InverseInertia = new float3(0.1f, 0.1f, 0.1f); 
-                    }
-
-                    float3 trueOrig = SystemAPI.HasComponent<OriginalPosition>(entity) ? SystemAPI.GetComponent<OriginalPosition>(entity).Value : transform.ValueRO.Position;
-                    initEcb.AddComponent(entity, new VibrationTracker { OriginalPos = trueOrig, OriginalRot = quaternion.identity, MaxDisplacement = 0f });
+                    color.ValueRW.Value = new float4(1, 1, 1, 1);
                 }
-                initEcb.Playback(state.EntityManager); initEcb.Dispose();
+            }
+            else
+            {
+                Debug.Log("✅ [지진 세팅 모드] B모드 취소.");
             }
         }
 
+        // =========================================================
+        // 2. [마우스 휠] 진도 1~8단계 조절 (2배씩 파워업!)
+        // =========================================================
         if (isBMode && Input.mouseScrollDelta.y != 0)
         {
-            vibeLevel = math.clamp(vibeLevel + (int)math.sign(Input.mouseScrollDelta.y), 1, 8); actualVibePower = math.pow(2f, vibeLevel - 1);
+            int scrollDir = (int)math.sign(Input.mouseScrollDelta.y);
+            vibeLevel += scrollDir;
+
+            // 진도는 1에서 8까지만 막아둠
+            vibeLevel = math.clamp(vibeLevel, 1, 8);
+
+            // 2의 (vibeLevel - 1) 제곱으로 힘 계산 (1, 2, 4, 8, 16, 32, 64, 128)
+            actualVibePower = math.pow(2f, vibeLevel - 1);
+
             Debug.Log($"🌍 [진도 설정] 레벨 {vibeLevel} / 파워: {actualVibePower}배");
         }
 
+        // =========================================================
+        // 3. [G키] 격발! (지진 시작 & B모드 종료)
+        // =========================================================
+        if (isBMode && Input.GetKeyDown(KeyCode.G) && !isVibrating)
+        {
+            isBMode = false;
+            IsBModeActive = false; // G 누르는 순간 B모드 꺼짐! (스포너 봉인 해제)
+
+            isVibrating = true;
+            vibeTimer = MAX_VIBE_TIME; // 5.0초 장전!
+            Debug.Log($"💥 [격발!] 진도 {vibeLevel} (파워 {actualVibePower}) 강진 발생!! 5초간 흔들립니다!");
+
+            var ecb = new EntityCommandBuffer(Allocator.Temp);
+
+            // ⭐ 여기서 PhysicsMass를 같이 불러와서 1층 녀석들을 굳혀버립니다!
+            foreach (var (transform, mass, entity) in SystemAPI.Query<RefRO<LocalTransform>, RefRW<PhysicsMass>>().WithAll<BlockTag>().WithEntityAccess())
+            {
+                // 🚀 소장님 특명: Y좌표가 3.1 이하(1층 바닥)인 블록은 절대 움직이지 않게 땅에 앙카(Anchor) 고정!
+                if (transform.ValueRO.Position.y <= 3.1f)
+                {
+                    mass.ValueRW.InverseMass = 0f;
+                    mass.ValueRW.InverseInertia = float3.zero;
+                }
+
+                ecb.AddComponent(entity, new VibrationTracker
+                {
+                    OriginalPos = transform.ValueRO.Position,
+                    OriginalRot = transform.ValueRO.Rotation,
+                    MaxDisplacement = 0f
+                });
+            }
+            ecb.Playback(state.EntityManager);
+            ecb.Dispose();
+        }
+
+        // =========================================================
+        // 4. 지진 진행 중 (5초간 흔들림 & 최대 변위 측정)
+        // =========================================================
         if (isVibrating)
         {
             vibeTimer -= SystemAPI.Time.DeltaTime;
             var random = Unity.Mathematics.Random.CreateFromIndex((uint)(vibeTimer * 1000f + 1));
 
-            float3 groundAccel = new float3(math.sin(vibeTimer * 10.0f) * actualVibePower, 0, 0);
+            // ⭐ 여기에 color 파라미터를 추가해서 실시간 색상 강제 방어막을 칩니다!
             foreach (var (transform, tracker, velocity, mass, color, entity) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<VibrationTracker>, RefRW<PhysicsVelocity>, RefRO<PhysicsMass>, RefRW<URPMaterialPropertyBaseColor>>().WithAll<BlockTag>().WithEntityAccess())
             {
+                // 최대 거리 측정
                 float currentDist = math.distance(transform.ValueRO.Position, tracker.ValueRO.OriginalPos);
-                if (currentDist > tracker.ValueRW.MaxDisplacement) tracker.ValueRW.MaxDisplacement = currentDist;
+                if (currentDist > tracker.ValueRO.MaxDisplacement)
+                {
+                    tracker.ValueRW.MaxDisplacement = currentDist;
+                }
 
+                // 5초가 아직 안 끝났다면 계속 흔들기
                 if (vibeTimer > 0f)
                 {
-                    // ⭐ [지진 물리 개선] 1층(지면)은 완전히 고정 상태로 두고(속도 강제주입 X),
-                    // 위층 블록에만 "관성력"(질량 무관, 그냥 더하기)을 매 프레임 누적 적용 → 조인트가 자연스럽게 저항/전달
-                    if (transform.ValueRO.Position.y > 3.1f)
+                    if (mass.ValueRO.InverseMass > 0)
                     {
-                        velocity.ValueRW.Linear += groundAccel * SystemAPI.Time.DeltaTime;
+                        float3 shakeForce = random.NextFloat3Direction() * actualVibePower * 3.0f;
+                        shakeForce.y *= 0.3f; // 위아래보단 좌우로 크게 요동치게
+                        velocity.ValueRW.Linear += shakeForce * SystemAPI.Time.DeltaTime;
                     }
+
+                    // ⭐ 방어막: 다른 실시간 측정 스크립트가 색깔을 못 바꾸게 강제로 하얀색 고정!
                     color.ValueRW.Value = new float4(1, 1, 1, 1);
                 }
             }
 
-            state.Dependency.Complete();
-            var breakEcb = new EntityCommandBuffer(Allocator.Temp);
-            var transLookup = SystemAPI.GetComponentLookup<LocalTransform>(true);
-            var matLookup = SystemAPI.GetComponentLookup<BlockMaterial>(true);
-
-            foreach (var (jointPair, joint, jointEntity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>, RefRO<PhysicsJoint>>().WithAll<JointTag>().WithEntityAccess())
-            {
-                Entity eA = jointPair.ValueRO.EntityA; 
-                Entity eB = jointPair.ValueRO.EntityB;
-
-                // ⭐ [에러 수정] 바닥(맨땅)과 용접되어 Entity.Null 상태인 조인트를 검사하려다 뻗는 현상 방지!
-                if (eA == Entity.Null || eB == Entity.Null) continue;
-
-                if (transLookup.HasComponent(eA) && transLookup.HasComponent(eB) &&
-                    matLookup.HasComponent(eA) && matLookup.HasComponent(eB))
-                {
-                    var transA = transLookup[eA]; var transB = transLookup[eB];
-                    var matA = matLookup[eA]; var matB = matLookup[eB];
-
-                    float3 pivotA = math.transform(new RigidTransform(transA.Rotation, transA.Position), joint.ValueRO.BodyAFromJoint.Position);
-                    float3 pivotB = math.transform(new RigidTransform(transB.Rotation, transB.Position), joint.ValueRO.BodyBFromJoint.Position);
-                    
-                    float stretch = math.distance(pivotA, pivotB);
-                    if (stretch > 0.05f) 
-                    {
-                        // ⭐ [설정 통합] 원본 하드코딩값(5000.0f)은 fallback으로 유지
-                        float tensionScale = SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.TensionStressScale : 5000.0f;
-                        float tensileStress = stretch * tensionScale; 
-                        
-                        // ⭐ [재질 강도 영향 반영] 
-                        float tensileDefense = (matA.TensileStiffness + matB.TensileStiffness) * 0.5f * math.max(0.1f, (10.0f - actualVibePower));
-
-                        if (tensileStress > tensileDefense) 
-                        { 
-                            breakEcb.DestroyEntity(jointEntity); 
-                        }
-                    }
-                }
-            }
-            breakEcb.Playback(state.EntityManager); breakEcb.Dispose();
-
+            // =========================================================
+            // 5. 5초 경과 후 종료 (원위치, 운동량 0, 결과 색칠, 엑셀 저장)
+            // =========================================================
             if (vibeTimer <= 0f)
             {
-                isVibrating = false; IsSimulationRunning = false; Debug.Log("🛑 [지진 종료] 도면(ID) 기준 위치로 원상복구 완료!");
+                isVibrating = false;
+                Debug.Log("🛑 [지진 종료] 블록 원위치 복구, 최종 진단 결과 도색 중...");
 
                 var ecb = new EntityCommandBuffer(Allocator.Temp);
                 NativeList<float3> finalPositions = new NativeList<float3>(Allocator.Temp);
                 NativeList<float> finalStresses = new NativeList<float>(Allocator.Temp);
-                NativeList<FixedString32Bytes> finalMaterials = new NativeList<FixedString32Bytes>(Allocator.Temp);
 
-                foreach (var (transform, tracker, velocity, gravity, mass, color, mat, entity) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<VibrationTracker>, RefRW<PhysicsVelocity>, RefRW<PhysicsGravityFactor>, RefRW<PhysicsMass>, RefRW<URPMaterialPropertyBaseColor>, RefRO<BlockMaterial>>().WithAll<BlockTag>().WithEntityAccess())
+                foreach (var (transform, tracker, velocity, color, entity) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<VibrationTracker>, RefRW<PhysicsVelocity>, RefRW<URPMaterialPropertyBaseColor>>().WithAll<BlockTag>().WithEntityAccess())
                 {
-                    // ⭐ 도면의 본래 위치(ID 기반)로 강제 귀환! (공중분해 버그 원천 차단)
+                    // 1. 완벽한 원위치 복구
                     transform.ValueRW.Position = tracker.ValueRO.OriginalPos;
                     transform.ValueRW.Rotation = tracker.ValueRO.OriginalRot;
+
+                    // 2. 운동량(관성) 영구 제거
                     velocity.ValueRW.Linear = float3.zero;
                     velocity.ValueRW.Angular = float3.zero;
-                    gravity.ValueRW.Value = 0.0f;
-                    mass.ValueRW.InverseMass = 0.0f;
-                    mass.ValueRW.InverseInertia = float3.zero;
 
-                    float maxDisp = tracker.ValueRO.MaxDisplacement; 
-                    string mName = mat.ValueRO.MaterialName.ToString();
+                    // ⭐ 3. 5초가 다 끝난 지금 이 순간에만! 최대 흔들림 수치에 따른 최종 도색!
+                    float maxDisp = tracker.ValueRO.MaxDisplacement;
+                    float4 newColor = new float4(1, 1, 1, 1);
 
-                    // ⭐ [색상 롤백] 스트레스 비주얼 모드와 똑같이 충격량 분수(t)로 부드러운 그라데이션 칠하기!
-                    float4 baseCol = new float4(0.7f, 0.7f, 0.7f, 1.0f);
-                    if (mName.Contains("Steel")) baseCol = new float4(0.2f, 0.5f, 1.0f, 1.0f); 
-                    else if (mName.Contains("Wood") || mName.Contains("Timber")) baseCol = new float4(0.6f, 0.4f, 0.2f, 1.0f); 
-                    else if (mName.Contains("Brick")) baseCol = new float4(0.8f, 0.3f, 0.2f, 1.0f);
+                    if (maxDisp >= 2.0f) newColor = new float4(1, 0, 0, 1); // 2.0 이상: 위험 (빨강)
+                    else if (maxDisp >= 0.5f) newColor = new float4(1, 1, 0, 1); // 0.5 이상: 경고 (노랑)
 
-                    float t = math.clamp(maxDisp / 2.0f, 0.0f, 1.0f);
-                    color.ValueRW.Value = math.lerp(baseCol, new float4(1.0f, 0.0f, 0.0f, 1.0f), t);
+                    color.ValueRW.Value = newColor;
 
                     finalPositions.Add(tracker.ValueRO.OriginalPos);
                     finalStresses.Add(maxDisp);
-                    finalMaterials.Add(mat.ValueRO.MaterialName);
 
-                    ecb.RemoveComponent<VibrationTracker>(entity);
+                    ecb.RemoveComponent<VibrationTracker>(entity); // 검사 끝났으니 센서 뗌
                 }
 
-                // ⭐ 버그 수정: 방금 지어서 VibrationTracker가 아직 안 붙은 블록은 위 루프에서 통째로
-                // 누락됨 → CurrentStress.csv에서 그대로 증발했었음. 추적 못 한 블록도 현재 위치/스트레스0
-                // (Safe)으로 최소한 기록은 남겨서 사라지지 않게 안전망을 깐다.
-                foreach (var (transform, mat, entity) in SystemAPI.Query<RefRO<LocalTransform>, RefRO<BlockMaterial>>().WithAll<BlockTag>().WithNone<VibrationTracker>().WithEntityAccess())
-                {
-                    finalPositions.Add(transform.ValueRO.Position);
-                    finalStresses.Add(0f);
-                    finalMaterials.Add(mat.ValueRO.MaterialName);
-                }
+                // 4. 이중 엑셀 저장 실행!
+                SaveVibrationExcel(finalPositions, finalStresses);
 
-                SaveVibrationExcel(finalPositions, finalStresses, finalMaterials);
-
-                finalPositions.Dispose(); finalStresses.Dispose(); finalMaterials.Dispose();
-                ecb.Playback(state.EntityManager); ecb.Dispose();
-
-                // ⭐ [조인트 전면 재구성] 살아남은/끊어진 조인트 다 지우고, 현재(=복구된) 위치 기준으로 그리드 스캔해서 새로 싹 다 묶음
-                RebuildAllJoints(ref state);
+                finalPositions.Dispose();
+                finalStresses.Dispose();
+                ecb.Playback(state.EntityManager);
+                ecb.Dispose();
             }
         }
     }
 
-    // ⭐ 3유닛 그리드 기준으로 인접한 블록들을 전부 다시 조인트로 묶는다 (O(N) 공간 해시, SpawnerSystem의 조인트 생성 로직과 동일한 방식)
-    private void RebuildAllJoints(ref SystemState state)
+    // =========================================================
+    // 💾 엑셀 자동 폴더 생성 및 이중 저장 시스템
+    // =========================================================
+    private void SaveVibrationExcel(NativeList<float3> positions, NativeList<float> stresses)
     {
-        var destroyEcb = new EntityCommandBuffer(Allocator.Temp);
-        foreach (var (pair, jointEntity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
-        {
-            destroyEcb.DestroyEntity(jointEntity);
-        }
-        destroyEcb.Playback(state.EntityManager);
-        destroyEcb.Dispose();
+        string timeStamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
 
-        var gridMap = new NativeHashMap<int3, Entity>(4096, Allocator.Temp);
-        var posMap = new NativeHashMap<Entity, float3>(4096, Allocator.Temp);
-
-        foreach (var (transform, entity) in SystemAPI.Query<RefRO<LocalTransform>>().WithAll<BlockTag>().WithEntityAccess())
+        string vibeDir = Path.Combine(Application.dataPath, "StressBlock", "vibe");
+        if (!Directory.Exists(vibeDir))
         {
-            float3 pos = transform.ValueRO.Position;
-            int3 key = new int3(
-                (int)math.floor(pos.x / 3f + 0.5f),
-                (int)math.floor(pos.y / 3f + 0.5f),
-                (int)math.floor(pos.z / 3f + 0.5f));
-            gridMap.TryAdd(key, entity);
-            posMap.TryAdd(entity, pos);
+            Directory.CreateDirectory(vibeDir);
+            Debug.Log($"📁 [폴더 생성] {vibeDir} 폴더를 새로 만들었습니다!");
         }
 
-        var buildEcb = new EntityCommandBuffer(Allocator.Temp);
-        var keys = gridMap.GetKeyArray(Allocator.Temp);
-        int newJointCount = 0;
-
-        for (int k = 0; k < keys.Length; k++)
-        {
-            int3 key = keys[k];
-            Entity cur = gridMap[key];
-
-            for (int d = 0; d < 3; d++)
-            {
-                if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor) && neighbor != cur)
-                {
-                    CreateMaterialJoint(ref buildEcb, ref state, cur, neighbor, internalDirs[d] * 3.0f);
-                    newJointCount++;
-                }
-            }
-        }
-
-        buildEcb.Playback(state.EntityManager);
-        buildEcb.Dispose();
-        keys.Dispose();
-        gridMap.Dispose();
-        posMap.Dispose();
-
-        Debug.Log($"🔧 [조인트 전면 재구성] 기존 조인트 삭제 후 인접 블록 {newJointCount}쌍 재결합 완료!");
-    }
-
-    private void CreateIndestructibleJoint(ref EntityCommandBuffer ecb, Entity entityA, Entity entityB, float3 offsetToB)
-    {
-        Entity jointEntity = ecb.CreateEntity();
-        ecb.AddSharedComponent(jointEntity, new PhysicsWorldIndex());
-        ecb.AddComponent<JointTag>(jointEntity);
-        ecb.AddComponent(jointEntity, new PhysicsConstrainedBodyPair(entityA, entityB, true));
-        ecb.AddComponent(jointEntity, PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f)));
-    }
-
-    // ⭐ [재질별 스프링 조인트] 완전 강체(Fixed) 대신, 인접한 두 블록의 재질을 평균 내서
-    //    SpringFrequency/SpringDamping을 적용한 "부드러운 고정" 조인트를 만든다.
-    //    RebuildAllJoints 시점엔 두 엔티티 모두 BlockMaterial이 이미 초기화되어 있어야 함
-    //    (스폰 직후 첫 프레임에 바로 호출되는 경로라면 0값 fallback으로 방어).
-    private void CreateMaterialJoint(ref EntityCommandBuffer ecb, ref SystemState state, Entity entityA, Entity entityB, float3 offsetToB)
-    {
-        Entity jointEntity = ecb.CreateEntity();
-        ecb.AddSharedComponent(jointEntity, new PhysicsWorldIndex());
-        ecb.AddComponent<JointTag>(jointEntity);
-        ecb.AddComponent(jointEntity, new PhysicsConstrainedBodyPair(entityA, entityB, true));
-
-        var joint = PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f));
-
-        float freq = 30f, damp = 0.3f; // 재질 정보가 아직 없을 때의 방어용 fallback (기존 강체에 가까운 값)
-        if (state.EntityManager.HasComponent<BlockMaterial>(entityA) && state.EntityManager.HasComponent<BlockMaterial>(entityB))
-        {
-            var matA = state.EntityManager.GetComponentData<BlockMaterial>(entityA);
-            var matB = state.EntityManager.GetComponentData<BlockMaterial>(entityB);
-            if (matA.SpringFrequency > 0f && matB.SpringFrequency > 0f)
-            {
-                freq = (matA.SpringFrequency + matB.SpringFrequency) * 0.5f;
-                damp = (matA.SpringDamping + matB.SpringDamping) * 0.5f;
-            }
-        }
-
-        var constraints = joint.GetConstraints();
-        for (int i = 0; i < constraints.Length; i++)
-        {
-            var c = constraints[i];
-            if (c.Type == ConstraintType.Linear) // 늘어남(인장/압축) 방향만 스프링화. 각도(Angular) 구속은 그대로 강체 유지.
-            {
-                c.SpringFrequency = freq;
-                c.DampingRatio = damp;
-            }
-            constraints[i] = c;
-        }
-        joint.SetConstraints(constraints);
-
-        ecb.AddComponent(jointEntity, joint);
-    }
-
-    private void SaveVibrationExcel(NativeList<float3> positions, NativeList<float> stresses, NativeList<FixedString32Bytes> materials)
-    {
-        string dateStamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-        string vibDir = Path.Combine(Application.dataPath, "StressBlock", "vibration");
-        if (!Directory.Exists(vibDir)) Directory.CreateDirectory(vibDir);
-
-        string historyPath = Path.Combine(vibDir, "Vibration_All_" + dateStamp + ".csv");
+        string historyPath = Path.Combine(vibeDir, $"Vibration_All_{timeStamp}.csv");
         string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
 
-        // ⭐ [속성 보존 추가] 기존 장부를 먼저 읽어와서 기존에 보강재였던 녀석들을 뇌리에 각인!
-        var toolMap = new System.Collections.Generic.Dictionary<string, string>();
-        if (File.Exists(currentPath))
-        {
-            var oldLines = File.ReadAllLines(currentPath);
-            for (int i = 1; i < oldLines.Length; i++)
-            {
-                var c = oldLines[i].Split(',');
-                if (c.Length >= 12) toolMap[c[0]] = c[10];
-            }
-        }
-
-        // ⭐ [v와 동일하게 통일] CurrentStress.csv에는 아직 없는 신규 보강 블록도
-        // Reinforcement_Plan.csv에서 찾아서 태그를 확정한다. (b가 먼저 실행돼도 안전하게)
-        string reinforcePath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
-        if (File.Exists(reinforcePath))
-        {
-            var rLines = File.ReadAllLines(reinforcePath);
-            for (int i = 1; i < rLines.Length; i++)
-            {
-                var c = rLines[i].Split(',');
-                if (c.Length < 12) continue;
-                string k = c[0];
-                // 이미 Reinforcement로 확정된 태그는 다른 값으로 덮어쓰지 않음 (v와 동일한 우선순위 규칙)
-                if (toolMap.TryGetValue(k, out var existingTag) && existingTag == "Reinforcement" && c[10] != "Reinforcement") continue;
-                toolMap[k] = c[10];
-            }
-        }
-
-        // ⭐ [v와 완전 동일화] Last_Building.csv까지 마저 병합 (StressVisualizationSystem과 3파일 소스 통일)
-        string lastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
-        if (File.Exists(lastBuildPath))
-        {
-            var lLines = File.ReadAllLines(lastBuildPath);
-            for (int i = 1; i < lLines.Length; i++)
-            {
-                var c = lLines[i].Split(',');
-                if (c.Length < 12) continue;
-                string k = c[0];
-                if (toolMap.TryGetValue(k, out var existingTag2) && existingTag2 == "Reinforcement" && c[10] != "Reinforcement") continue;
-                toolMap[k] = c[10];
-            }
-        }
-
-        var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
-
-        System.Collections.Generic.List<string> currentLines = new System.Collections.Generic.List<string>();
-        currentLines.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
+        System.Collections.Generic.List<string> lines = new System.Collections.Generic.List<string>();
+        lines.Add("BlockID,PosX,PosY,PosZ,WEIGHT_Stress,RiskLevel,Prescription");
 
         for (int i = 0; i < positions.Length; i++)
         {
-            float3 pos = positions[i]; float stress = stresses[i]; string mat = materials[i].ToString();
-            float ix = math.round(pos.x * 10f); float iz = math.round(pos.z * 10f); float iy = math.round(pos.y * 10f);
-            string strX = (ix < 0 ? "-" : "0") + math.abs(ix).ToString("000"); string strZ = (iz < 0 ? "-" : "0") + math.abs(iz).ToString("000"); string strY = (iy < 0 ? "-" : "0") + math.abs(iy).ToString("000");
-            string id = strX + "_" + strZ + "_" + strY;
+            float3 pos = positions[i];
+            float stress = stresses[i];
 
-            // ⭐ [기록용 로직] 2.0을 초과하면 posXYZ 칸에 "DESTROYED" 기록!
-            string posX = stress >= 2.0f ? "DESTROYED" : pos.x.ToString("F2");
-            string posY = stress >= 2.0f ? "DESTROYED" : pos.y.ToString("F2");
-            string posZ = stress >= 2.0f ? "DESTROYED" : pos.z.ToString("F2");
+            int ix = (int)math.round(pos.x * 10f);
+            int iy = (int)math.round(pos.y * 10f);
+            int iz = (int)math.round(pos.z * 10f);
 
-            string risk = stress >= 2.0f ? "Quake_Destroyed" : (stress >= 0.5f ? "Quake_Danger" : "Safe"); 
-            string pres = stress >= 2.0f ? "Y" : (stress >= 0.5f ? "Y" : "N");
-            string typeStr = pos.y > 1.5f ? "Wall" : "Floor";
-            string toolTag = toolMap.ContainsKey(id) ? toolMap[id] : (bpManager != null ? bpManager.GetToolName(id) : "Existing");
+            string signX = ix < 0 ? "-" : "0";
+            string signZ = iz < 0 ? "-" : "0";
+            string signY = iy < 0 ? "-" : "0";
 
-            string lineData = id + "," + posX + "," + posY + "," + posZ + "," + stress.ToString("F2") + "," + risk + "," + pres + "," + mat + ",0.0,0.0," + toolTag + "," + typeStr;
-            currentLines.Add(lineData);
+            string id = $"{signX}{math.abs(ix):000}_{signZ}{math.abs(iz):000}_{signY}{math.abs(iy):000}";
+
+            string risk = "Safe";
+            string pres = "N";
+            if (stress >= 2.0f) { risk = "Danger"; pres = "Y"; }
+            else if (stress >= 0.5f) { risk = "Warning"; pres = "N"; }
+
+            lines.Add($"{id},{pos.x:F2},{pos.y:F2},{pos.z:F2},{stress:F2},{risk},{pres}");
         }
-        File.WriteAllLines(historyPath, currentLines); File.WriteAllLines(currentPath, currentLines);
+
+        File.WriteAllLines(historyPath, lines);
+        File.WriteAllLines(currentPath, lines);
+
+        Debug.Log($"📄 [엑셀 저장 완료] 지진 내진 테스트 결과가 성공적으로 저장되었습니다!\n1. 히스토리: {historyPath}\n2. 현재 도면: {currentPath}\n(이제 Y키를 눌러 보강 도면을 생성하세요!)");
     }
 }
