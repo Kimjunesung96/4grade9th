@@ -17,13 +17,7 @@ public partial struct SpawnerSystem
         float3 startXZ = new float3(startPos.x, 0, startPos.z);
         float3 endXZ = new float3(endPos.x, 0, endPos.z);
         float radius = math.distance(startXZ, endXZ) / 2.0f;
-        // ⭐ 중심점을 Voxel 격자 정중앙(1.5, 4.5 등)에 완벽하게 스냅 시킵니다!
-        float3 rawCenter = (startXZ + endXZ) / 2.0f;
-        float3 center = new float3(
-            math.floor(rawCenter.x / blockSize) * blockSize + (blockSize / 2f),
-            0,
-            math.floor(rawCenter.z / blockSize) * blockSize + (blockSize / 2f)
-        );
+        float3 center = (startXZ + endXZ) / 2.0f;
 
         int baseRadiusCount = (int)math.floor(radius / blockSize);
         int floors = Mathf.Max(1, Mathf.RoundToInt(guideHeight));

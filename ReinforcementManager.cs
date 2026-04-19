@@ -1,7 +1,6 @@
 ﻿using UnityEngine;
 using System.IO;
 using System.Collections.Generic;
-using System.Linq; // ⭐ 이 줄이 빠져서 생긴 에러들을 해결합니다!
 
 public class ReinforcementManager : MonoBehaviour
 {
@@ -12,108 +11,68 @@ public class ReinforcementManager : MonoBehaviour
     {
         stressCsvPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
         planCsvPath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
-        Debug.Log("👷‍♂️ Y(도면 갱신) 대기 중!");
+        Debug.Log("👷‍♂️ [현장 반장] Y(도면 갱신) 대기 중! 실제 타설은 Spawner가 전담합니다!");
     }
 
-    void Update() { if (Input.GetKeyDown(KeyCode.Y)) { CreatePlanExcel(); } }
+    void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.Y))
+        {
+            CreatePlanExcel();
+        }
+    }
 
     public void CreatePlanExcel()
     {
         if (!File.Exists(stressCsvPath)) return;
-        var lines = File.ReadAllLines(stressCsvPath).ToList();
-        if (lines.Count <= 1) return;
-
+        string[] lines = File.ReadAllLines(stressCsvPath);
         HashSet<string> existingBlocks = new HashSet<string>();
+        List<string> planLines = new List<string> { "BlockID,PosX,PosY,PosZ,Tool" };
 
-        // 12칸 표준 규격으로 헤더 교체
-        List<string> planLines = new List<string> { "BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type" };
-
-        for (int i = 1; i < lines.Count; i++)
+        // 1패스: 기존 블록 전부 Existing으로 등록
+        for (int i = 1; i < lines.Length; i++)
         {
-            string currentLine = lines.ElementAt(i);
-            var cols = currentLine.Split(',').ToList();
+            string[] cols = lines[i].Split(',');
+            if (cols.Length < 7) continue;
 
-            // ⭐ 12칸 데이터를 모두 읽어오도록 안전망 수정
-            if (cols.Count < 12) continue;
-
-            string id = cols.ElementAt(0);
+            string id = cols[0];
             existingBlocks.Add(id);
-
-            float posY = float.Parse(cols.ElementAt(2));
-            string typeStr = posY > 1.5f ? "Wall" : "Floor";
-
-            // ⭐ 하드코딩된 Concrete 제거! CurrentStress.csv의 재질과 강도를 그대로 읽어서 보존
-            string lineData = id + "," +
-                              cols.ElementAt(1) + "," +
-                              cols.ElementAt(2) + "," +
-                              cols.ElementAt(3) + "," +
-                              "0.00" + "," +
-                              "Safe" + "," +
-                              "N" + "," +
-                              cols.ElementAt(7) + "," +  // 재질 이름 유지
-                              cols.ElementAt(8) + "," +  // 인장 강도 유지
-                              cols.ElementAt(9) + "," +  // 압축 강도 유지
-                              "Existing" + "," +
-                              typeStr;
-
-            planLines.Add(lineData);
+            planLines.Add($"{id},{cols[1]},{cols[2]},{cols[3]},Existing");
         }
 
-        for (int i = 1; i < lines.Count; i++)
+        // 2패스: Prescription=Y인 블록 기준으로 아래로 내려가며 보강 블록 생성
+        for (int i = 1; i < lines.Length; i++)
         {
-            string currentLine = lines.ElementAt(i);
-            var cols = currentLine.Split(',').ToList();
-            if (cols.Count < 12) continue;
+            string[] cols = lines[i].Split(',');
+            if (cols.Length < 7) continue;
+            if (cols[6] != "Y") continue; // Prescription이 Y인 것만 보강
 
-            // 처방전(Prescription)이 Y인 블록만 보강
-            if (cols.ElementAt(6) != "Y") continue;
+            string id = cols[0];
+            string[] parts = id.Split('_');
+            if (parts.Length != 3) continue;
 
-            string id = cols.ElementAt(0);
-            var parts = id.Split('_').ToList();
-            if (parts.Count != 3) continue;
+            string colX = parts[0];
+            string colZ = parts[1];
+            int currentY = int.Parse(parts[2]); // BlockID 세번째 = 실제 Y(높이)
 
-            float cleanX = float.Parse(cols.ElementAt(1));
-            float cleanZ = float.Parse(cols.ElementAt(3));
-            float currentY = float.Parse(parts.ElementAt(2));
+            float cleanX = float.Parse(cols[1]); // PosX
+            float cleanY = float.Parse(cols[2]); // PosY (실제 높이값)
+            float cleanZ = float.Parse(cols[3]); // PosZ
 
-            while (currentY >= 45f)
+            while (currentY >= 45)
             {
-                currentY -= 30f;
-                float ix = Mathf.Round((cleanX + 0.001f) * 10f);
-                float iz = Mathf.Round((cleanZ + 0.001f) * 10f);
-                float iy = currentY;
+                currentY -= 30;
+                string targetId = $"{colX}_{colZ}_{currentY:0000}";
+                if (existingBlocks.Contains(targetId)) break;
+                existingBlocks.Add(targetId);
 
-                string strX = (ix < 0f ? "-" : "0") + Mathf.Abs(ix).ToString("000");
-                string strZ = (iz < 0f ? "-" : "0") + Mathf.Abs(iz).ToString("000");
-                string strY = (iy < 0f ? "-" : "0") + Mathf.Abs(iy).ToString("000");
-                string targetId = strX + "_" + strZ + "_" + strY;
-
-                if (!existingBlocks.Contains(targetId))
-                {
-                    float exactY = currentY / 10f;
-                    string typeStr = exactY > 1.5f ? "Wall" : "Floor";
-
-                    // 보강 철근은 무조건 Steel
-                    string newLineData = targetId + "," +
-                                         cleanX.ToString("F2") + "," +
-                                         exactY.ToString("F2") + "," +
-                                         cleanZ.ToString("F2") + "," +
-                                         "0.00" + "," +
-                                         "Safe" + "," +
-                                         "N" + "," +
-                                         "Steel" + "," +
-                                         "0.0" + "," +
-                                         "0.0" + "," +
-                                         "Reinforcement" + "," +
-                                         typeStr;
-
-                    planLines.Add(newLineData);
-                    existingBlocks.Add(targetId);
-                }
+                // 보강 블록의 Y좌표: currentY / 10f (BlockID Y값 → Unity 좌표)
+                float targetY = currentY / 10f;
+                planLines.Add($"{targetId},{cleanX:F2},{targetY:F2},{cleanZ:F2},Reinforcement");
             }
         }
 
         File.WriteAllLines(planCsvPath, planLines);
-        Debug.Log("📄 [ReinforcementManager] 12칸 표준 도면 작성 완료 (기존 재질 완벽 보존)!");
+        Debug.Log("📄 [Y키 작동] 마스터 엑셀 도면 생성 완료! Spawner가 도면을 로드했습니다!");
     }
 }
