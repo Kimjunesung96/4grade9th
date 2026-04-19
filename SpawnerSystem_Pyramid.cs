@@ -27,8 +27,8 @@ public partial struct SpawnerSystem
 
         for (int level = 0; level < maxLevels; level++)
         {
-            // ⭐ 밑에서부터 쌓아 올립니다 (targetY + 레벨)
-            float currentY = targetY + (level * blockSize);
+            // ⭐ 밑에서부터 쌓아 올립니다 - halfSize 오프셋 추가!
+            float currentY = targetY + (level * blockSize) + halfSize;
 
             // ⭐ [핵심] 1.5m가 아니라 3.0m(한 칸)씩 안으로 들여쓰기! (1, 9, 24 비율의 비결)
             float inset = level * blockSize;
