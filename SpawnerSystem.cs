@@ -115,13 +115,12 @@ public partial struct SpawnerSystem : ISystem
                         {
                             string currentID = cols[0];
 
-                            // ⛔ 중복 ID 컷! (72개 겹침 랙 원천 차단)
+                            // ⛔ 중복 ID 컷!
                             if (loadedIDs.Contains(currentID)) continue;
 
                             string[] idParts = currentID.Split('_');
                             if (idParts.Length >= 3)
                             {
-                                // ⭐ 찌그러진 Pos 무시, 무결점 바코드 좌표 추출
                                 float x = float.Parse(idParts[0]) / 10f;
                                 float z = float.Parse(idParts[1]) / 10f;
                                 float y = float.Parse(idParts[2]) / 10f;
@@ -149,14 +148,32 @@ public partial struct SpawnerSystem : ISystem
                         {
                             blueprintOffsets.Add(new float3(pos.x - centerX, pos.y, pos.z - centerZ));
                         }
-                        int duplicateCount = loadedIDs.Count - tempList.Count;
                         UnityEngine.Debug.Log($"🏗️ [스마트 로드 완] {tempList.Count}개 준비 완료! (⛔ 자동 중복 컷 적용)");
                     }
                 }
             }
         }
 
-        if (Input.mouseScrollDelta.y != 0) { builderState.ValueRW.GuideHeight += Input.mouseScrollDelta.y; if (builderState.ValueRW.GuideHeight < 1f) builderState.ValueRW.GuideHeight = 1f; }
+        // ==========================================================
+        // ⭐ 소장님 특명: 지진 테스트(B모드) 중일 때는 스포너 올스톱!!
+        // ==========================================================
+        bool isBMode = VibrationTestSystem.IsBModeActive;
+
+        // B모드가 아닐 때(평상시)만 휠이랑 마우스 클릭이 작동하게 막아버립니다!
+        if (!isBMode)
+        {
+            if (Input.mouseScrollDelta.y != 0) { builderState.ValueRW.GuideHeight += Input.mouseScrollDelta.y; if (builderState.ValueRW.GuideHeight < 1f) builderState.ValueRW.GuideHeight = 1f; }
+
+            if (Input.GetMouseButtonDown(0)) isCenterMoved = false;
+
+            if (Input.GetMouseButtonDown(1))
+            {
+                UnityEngine.Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
+                RaycastInput rayInput = new RaycastInput { Start = ray.origin, End = ray.origin + ray.direction * 500f, Filter = CollisionFilter.Default };
+                if (physicsWorld.CastRay(rayInput, out Unity.Physics.RaycastHit hit)) { customCenterPos = hit.Position; isCenterMoved = true; }
+            }
+        }
+
         if (Input.GetKeyDown(KeyCode.Alpha1)) { builderState.ValueRW.CurrentMode = 1; }
         if (Input.GetKeyDown(KeyCode.Alpha2)) { builderState.ValueRW.CurrentMode = 2; }
         if (Input.GetKeyDown(KeyCode.Alpha3)) { builderState.ValueRW.CurrentMode = 3; }
@@ -169,12 +186,30 @@ public partial struct SpawnerSystem : ISystem
         dragStartPos = builderState.ValueRO.GuideStartPos;
         dragEndPos = builderState.ValueRO.GuideEndPos;
 
-        if (Input.GetMouseButtonDown(0)) isCenterMoved = false;
-        if (Input.GetMouseButtonDown(1))
+        // ====================================================================
+        // 🔄 도면 90도 회전 시스템 (Q: 반시계, E: 시계) - 근본 단축키 적용!
+        // ====================================================================
+        if (isYMode && !isBMode)
         {
-            UnityEngine.Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
-            RaycastInput rayInput = new RaycastInput { Start = ray.origin, End = ray.origin + ray.direction * 500f, Filter = CollisionFilter.Default };
-            if (physicsWorld.CastRay(rayInput, out Unity.Physics.RaycastHit hit)) { customCenterPos = hit.Position; isCenterMoved = true; }
+            if (Input.GetKeyDown(KeyCode.Q))
+            {
+                for (int i = 0; i < blueprintOffsets.Length; i++)
+                {
+                    float3 offset = blueprintOffsets[i];
+                    blueprintOffsets[i] = new float3(-offset.z, offset.y, offset.x);
+                }
+                UnityEngine.Debug.Log("🔄 [도면 회전] 반시계 방향(Q) 90도 턴! (G를 눌러 타설하세요)");
+            }
+
+            if (Input.GetKeyDown(KeyCode.E))
+            {
+                for (int i = 0; i < blueprintOffsets.Length; i++)
+                {
+                    float3 offset = blueprintOffsets[i];
+                    blueprintOffsets[i] = new float3(offset.z, offset.y, -offset.x);
+                }
+                UnityEngine.Debug.Log("🔄 [도면 회전] 시계 방향(E) 90도 턴! (G를 눌러 타설하세요)");
+            }
         }
 
         float3 defaultCenter = new float3((dragStartPos.x + dragEndPos.x) / 2f, 0, (dragStartPos.z + dragEndPos.z) / 2f);
@@ -184,13 +219,11 @@ public partial struct SpawnerSystem : ISystem
         float3 actualStartPos = dragStartPos + centerOffset;
         float3 actualEndPos = dragEndPos + centerOffset;
         float blockSize = 3.0f;
-        float snapStart = 1.5f; // 시작점은 반 칸(1.5) 스냅 허용!
+        float snapStart = 1.5f;
 
-        // 1. 드래그 시작점은 1.5 단위로 자유롭게 안착 (피라미드 비탈면 정중앙 조준 가능)
         actualStartPos.x = (float)System.Math.Round(actualStartPos.x / snapStart) * snapStart;
         actualStartPos.z = (float)System.Math.Round(actualStartPos.z / snapStart) * snapStart;
 
-        // 2. 드래그 끝점은 시작점을 기준으로 '무조건 3.0의 배수'로만 늘어나게 강제 고정! (겹침 폭발 원천 차단)
         float rawEndX = dragEndPos.x + centerOffset.x;
         float rawEndZ = dragEndPos.z + centerOffset.z;
 
@@ -200,7 +233,6 @@ public partial struct SpawnerSystem : ISystem
         actualEndPos.x = actualStartPos.x + ((float)System.Math.Round(diffX / blockSize) * blockSize);
         actualEndPos.z = actualStartPos.z + ((float)System.Math.Round(diffZ / blockSize) * blockSize);
 
-        // 우클릭 중심점도 1.5 스냅 유지
         finalCenter.x = (float)System.Math.Round(finalCenter.x / snapStart) * snapStart;
         finalCenter.z = (float)System.Math.Round(finalCenter.z / snapStart) * snapStart;
         finalCenter.x = (float)System.Math.Round(finalCenter.x / blockSize) * blockSize;
@@ -211,8 +243,11 @@ public partial struct SpawnerSystem : ISystem
         var aiBuilder = UnityEngine.Object.FindFirstObjectByType<AI_Builder>();
         if (aiBuilder != null && aiBuilder.isAiHologramActive) { isGuideActive = false; }
 
-        bool isFKeyPressed = Input.GetKeyDown(KeyCode.F);
-        bool isGKeyPressed = Input.GetKeyDown(KeyCode.G);
+        // ==========================================================
+        // ⭐ 핵심: B모드 켜져있으면 G키랑 F키를 'False(안 누름)'로 강제 조작해버림!
+        // ==========================================================
+        bool isFKeyPressed = !isBMode && Input.GetKeyDown(KeyCode.F);
+        bool isGKeyPressed = !isBMode && Input.GetKeyDown(KeyCode.G);
 
         // ====================================================================
         // 🚀 스마트 일괄 타설 (Y키 -> G키) 전용 초고속 빌더!
@@ -254,37 +289,42 @@ public partial struct SpawnerSystem : ISystem
             }
 
             var keys = gridMap.GetKeyArray(Allocator.Temp);
-            float3[] dirs = new float3[] { math.up(), math.down(), math.left(), math.right(), math.forward(), math.back() };
-            int3[] gridDirs = new int3[] { new int3(0, 1, 0), new int3(0, -1, 0), new int3(-1, 0, 0), new int3(1, 0, 0), new int3(0, 0, 1), new int3(0, 0, -1) };
+
+            // ⭐ 1. 내부 철근망 (중복 방지용 3방향 뻗기 -> 결과적으로 6방향 완성)
+            float3[] internalDirs = new float3[] { math.right(), math.up(), math.forward() };
+            int3[] gridDirs = new int3[] { new int3(1, 0, 0), new int3(0, 1, 0), new int3(0, 0, 1) };
 
             foreach (var key in keys)
             {
                 Entity currentEntity = gridMap[key];
                 float3 currentPos = posMap[currentEntity];
 
-                for (int d = 0; d < 6; d++)
+                for (int d = 0; d < 3; d++)
                 {
                     if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor))
                     {
-                        CreateIndestructibleJoint(ref ecb, currentEntity, neighbor, dirs[d] * blockSize);
+                        CreateIndestructibleJoint(ref ecb, currentEntity, neighbor, internalDirs[d] * blockSize);
                     }
-                    else
+                }
+
+                // ⭐ 2. 외부 용접 (기존 건물과 결합하기 위해 위/아래 앵커 고정)
+                float3[] anchorDirs = new float3[] { math.up(), math.down() };
+                for (int d = 0; d < 2; d++)
+                {
+                    RaycastInput ray = new RaycastInput { Start = currentPos, End = currentPos + anchorDirs[d] * 2.0f, Filter = CollisionFilter.Default };
+                    if (physicsWorld.CastRay(ray, out Unity.Physics.RaycastHit hit))
                     {
-                        RaycastInput ray = new RaycastInput { Start = currentPos, End = currentPos + dirs[d] * 2.0f, Filter = CollisionFilter.Default };
-                        if (physicsWorld.CastRay(ray, out Unity.Physics.RaycastHit hit))
+                        if (hit.Entity != Entity.Null && !posMap.ContainsKey(hit.Entity) && SystemAPI.HasComponent<BlockTag>(hit.Entity))
                         {
-                            if (hit.Entity != Entity.Null && SystemAPI.HasComponent<BlockTag>(hit.Entity))
-                            {
-                                float3 hitPos = SystemAPI.GetComponent<LocalTransform>(hit.Entity).Position;
-                                CreateIndestructibleJoint(ref ecb, hit.Entity, currentEntity, currentPos - hitPos);
-                            }
+                            float3 hitPos = SystemAPI.GetComponent<LocalTransform>(hit.Entity).Position;
+                            CreateIndestructibleJoint(ref ecb, hit.Entity, currentEntity, currentPos - hitPos);
                         }
                     }
                 }
             }
 
             keys.Dispose(); gridMap.Dispose(); posMap.Dispose();
-            UnityEngine.Debug.Log($"🏗️ [스마트 보강 타설 완료] 랙 없이 즉시 배치 및 기존 건물 용접 성공!");
+            UnityEngine.Debug.Log($"🏗️ [스마트 보강 타설 완료] 랙 없이 즉시 배치 및 6방향 철근 뼈대 완성!");
             nextStructureID++;
             if (bpManager != null) bpManager.SaveBlueprint();
             isYMode = false; blueprintOffsets.Clear(); isGuideActive = false;
@@ -309,7 +349,6 @@ public partial struct SpawnerSystem : ISystem
             Entity tempEntity = Entity.Null;
             bool tempHit = false;
 
-            // ⭐ 중앙 1발
             CheckRay(physicsWorld, finalCenter.x, finalCenter.z, blockSize, ref previewY, ref tempEntity, ref tempHit);
 
             float snappedHighestY = (float)System.Math.Round(previewY / blockSize) * blockSize;
@@ -345,7 +384,6 @@ public partial struct SpawnerSystem : ISystem
                 for (int i = 0; i <= steps; i++)
                 {
                     float3 p = mode1Start + dir * (i * (dist1 / math.max(1, steps)));
-                    // ⭐ 5연발 스캐너!
                     CheckRay(physicsWorld, p.x, p.z, blockSize, ref highestY, ref hitEntity, ref hitAnything);
                 }
             }
@@ -358,7 +396,6 @@ public partial struct SpawnerSystem : ISystem
                     for (float z = minZ; z <= maxZ + 0.1f; z += blockSize)
                     {
                         if (currentBuildMode == 2) { if (x > minX + (blockSize * 0.5f) && x < maxX - (blockSize * 0.5f) && z > minZ + (blockSize * 0.5f) && z < maxZ - (blockSize * 0.5f)) continue; }
-                        // ⭐ 5연발 스캐너!
                         CheckRay(physicsWorld, x + halfSize, z + halfSize, blockSize, ref highestY, ref hitEntity, ref hitAnything);
                     }
                 }
@@ -374,7 +411,6 @@ public partial struct SpawnerSystem : ISystem
                     {
                         if (math.sqrt(x * x + z * z) <= baseRadiusCount + 0.5f)
                         {
-                            // ⭐ 5연발 스캐너!
                             CheckRay(physicsWorld, center.x + (x * blockSize), center.z + (z * blockSize), blockSize, ref highestY, ref hitEntity, ref hitAnything);
                         }
                     }
@@ -416,10 +452,7 @@ public partial struct SpawnerSystem : ISystem
     // 🎯 [소장님 특명] 25연발 융단폭격 레이저 스캐너 (서로 다른 모양 블록 완벽 인식)
     private void CheckRay(PhysicsWorld physicsWorld, float x, float z, float blockSize, ref float highestY, ref Entity hitEntity, ref bool hitAnything)
     {
-        // 블록 바깥으로 레이저가 새지 않게 95% 안쪽 범위만 스캔합니다.
         float half = (blockSize / 2f) * 0.95f;
-
-        // 5 x 5 = 총 25발의 레이저 그물을 칩니다! (소장님이 원하신 '면/선 전체 스캔' 효과)
         int gridSize = 5;
         float step = (half * 2f) / (gridSize - 1);
 
@@ -427,7 +460,6 @@ public partial struct SpawnerSystem : ISystem
         {
             for (int j = 0; j < gridSize; j++)
             {
-                // 바둑판 배열로 25개의 좌표를 계산해서 레이저를 떨어뜨립니다.
                 float px = (x - half) + (i * step);
                 float pz = (z - half) + (j * step);
                 float3 p = new float3(px, 100f, pz);
@@ -436,10 +468,7 @@ public partial struct SpawnerSystem : ISystem
                 if (physicsWorld.CastRay(rayInput, out Unity.Physics.RaycastHit hit))
                 {
                     hitAnything = true;
-                    // 블록 높이(3.0)에 맞춰 칼각으로 층수 맞춤
                     float snappedY = math.round(hit.Position.y / 3.0f) * 3.0f;
-
-                    // 25발 중 단 한 발이라도 가장 높은 곳에 부딪힌 놈을 용접 타겟으로 꽉 뭅니다!
                     if (snappedY > highestY)
                     {
                         highestY = snappedY;
@@ -449,6 +478,7 @@ public partial struct SpawnerSystem : ISystem
             }
         }
     }
+
     private void DrawGuideWireframe(float3 start, float3 end, float heightParam, int mode, float blockSize)
     {
         Color color = Color.green;
@@ -494,6 +524,9 @@ public partial struct SpawnerSystem : ISystem
         }
     }
 
+    // ====================================================================
+    // 🛠️ 조인트(철근) 생성 함수
+    // ====================================================================
     private void CreateIndestructibleJoint(ref EntityCommandBuffer ecb, Entity entityA, Entity entityB, float3 offsetToB)
     {
         Entity jointEntity = ecb.CreateEntity();
