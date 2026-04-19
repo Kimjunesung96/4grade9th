@@ -1,71 +1,56 @@
-
 using Unity.Entities;
 using Unity.Transforms;
 using Unity.Mathematics;
 using Unity.Physics;
-using Unity.Burst;
 using UnityEngine;
- 
-// â­ UpdateInGroupì„ FixedStepSimulationSystemGroupìœ¼ë¡œ ì§€ì •í•˜ë©´ ë¬¼ë¦¬ ì—°ì‚° ì£¼ê¸°ì™€ ë™ê¸°í™”ë˜ì–´ ìºë¦­í„°ê°€ ëœëœê±°ë¦¬ëŠ” í˜„ìƒì´ ì‚¬ë¼ì§‘ë‹ˆë‹¤.
-[UpdateInGroup(typeof(FixedStepSimulationSystemGroup))]
-public partial struct PlayerMovementSystem : ISystem
+
+// ISystem(±¸Á¶Ã¼) ´ë½Å SystemBase(Å¬·¡½º)¸¦ »ç¿ëÇÏ¸é
+// Å°º¸µå ÀÔ·Â(Input)ÀÌ³ª Debug.Log °°Àº ±âÁ¸ À¯´ÏÆ¼ ±â´ÉÀ» ÈÎ¾À ¾ÈÁ¤ÀûÀ¸·Î ¾µ ¼ö ÀÖ½À´Ï´Ù.
+public partial class PlayerMovementSystem : SystemBase
 {
-    public void OnCreate(ref SystemState state)
+    protected override void OnUpdate()
     {
-        state.RequireForUpdate<PlayerData>();
-    }
- 
-    public void OnDestroy(ref SystemState state) { }
- 
-    public void OnUpdate(ref SystemState state)
-    {
-        // 1. í‚¤ë³´ë“œ ì…ë ¥ ë°›ê¸° (Input í´ë˜ìŠ¤ëŠ” ìœ ë‹ˆí‹° ë©”ì¸ ìŠ¤ë ˆë“œì—ì„œë§Œ ì ‘ê·¼ ê°€ëŠ¥í•˜ë¯€ë¡œ ë°–ì—ì„œ ì²˜ë¦¬)
+        // 1. Å°º¸µå ÀÔ·Â ¹Ş±â
         float moveX = Input.GetAxisRaw("Horizontal");
         float moveZ = Input.GetAxisRaw("Vertical");
         float3 moveInput = new float3(moveX, 0, moveZ);
         bool isJetpackActive = Input.GetKey(KeyCode.Space);
         float deltaTime = SystemAPI.Time.DeltaTime;
- 
-        // 2. ì‹¤ì œ ì—”í‹°í‹° ìˆœíšŒì™€ ì´ë™ ë¬¼ë¦¬ ì—°ì‚°ì€ C# Job Systemì„ í†µí•´ ë©€í‹°ì½”ì–´ë¡œ ë˜ì§‘ë‹ˆë‹¤ (Burst Compile ì ìš©)
-        new PlayerMoveJob
+
+        bool foundPlayer = false; // ÇÃ·¹ÀÌ¾î¸¦ Ã£¾Ò´ÂÁö È®ÀÎÇÏ´Â ½ºÀ§Ä¡
+
+        // 2. ¹°¸® ¼Óµµ(PhysicsVelocity)¿Í ÇÃ·¹ÀÌ¾î µ¥ÀÌÅÍ(PlayerData)°¡ ÀÖ´Â ³ğÀ» Ã£¾Æ¼­ ¿òÁ÷ÀÔ´Ï´Ù.
+        foreach (var (velocity, mass, player) in
+                 SystemAPI.Query<RefRW<PhysicsVelocity>, RefRW<PhysicsMass>, RefRO<PlayerData>>())
         {
-            MoveInput = moveInput,
-            IsJetpackActive = isJetpackActive,
-            DeltaTime = deltaTime
-        }.ScheduleParallel();
-    }
-}
- 
-// â­ BurstCompileì„ ì ìš©í•˜ì—¬ C++ì— ì¤€í•˜ëŠ” ì†ë„ë¡œ ìµœì í™”ëœ ê¸°ê³„ì–´ë¡œ ë³€í™˜ë©ë‹ˆë‹¤.
-[BurstCompile]
-public partial struct PlayerMoveJob : IJobEntity
-{
-    public float3 MoveInput;
-    public bool IsJetpackActive;
-    public float DeltaTime;
- 
-    public void Execute(ref PhysicsVelocity velocity, ref PhysicsMass mass, in PlayerData player)
-    {
-        // íšŒì „ ì ê¸ˆ (ì˜¤ëšì´ ìœ ì§€)
-        mass.InverseInertia = float3.zero;
-        velocity.Angular = float3.zero;
- 
-        // ê¸°ì¡´ yì¶• ì†ë„(ì¤‘ë ¥/ì œíŠ¸íŒ©)ëŠ” ê·¸ëŒ€ë¡œ ë‘ê³ , xì™€ zì¶•(ìˆ˜í‰) ì´ë™ë§Œ ë®ì–´ì”Œì›ë‹ˆë‹¤.
-        float currentY = velocity.Linear.y;
-        velocity.Linear = new float3(MoveInput.x * player.MoveSpeed, currentY, MoveInput.z * player.MoveSpeed);
- 
-        // ì œíŠ¸íŒ© ìƒìŠ¹ (ìŠ¤í˜ì´ìŠ¤ë°”)
-        if (IsJetpackActive)
-        {
-            velocity.Linear.y += player.JetpackForce * DeltaTime;
+            foundPlayer = true; // ¿À! Ã£¾Ò´Ù!
+
+            // È¸Àü Àá±İ (¿À¶ÒÀÌ À¯Áö)
+            mass.ValueRW.InverseInertia = float3.zero;
+            velocity.ValueRW.Angular = float3.zero;
+
+            // ±âÁ¸ yÃà ¼Óµµ(Áß·Â/Á¦Æ®ÆÑ)´Â ±×´ë·Î µÎ°í, x¿Í zÃà(¼öÆò) ÀÌµ¿¸¸ µ¤¾î¾º¿ó´Ï´Ù.
+            float currentY = velocity.ValueRO.Linear.y;
+            velocity.ValueRW.Linear = new float3(moveInput.x * player.ValueRO.MoveSpeed, currentY, moveInput.z * player.ValueRO.MoveSpeed);
+
+            // Á¦Æ®ÆÑ »ó½Â (½ºÆäÀÌ½º¹Ù)
+            if (isJetpackActive)
+            {
+                velocity.ValueRW.Linear.y += player.ValueRO.JetpackForce * deltaTime;
+            }
+
+            // Ãß¶ô ¼Óµµ Á¦ÇÑ
+            if (velocity.ValueRW.Linear.y < player.ValueRO.MaxFallSpeed)
+            {
+                velocity.ValueRW.Linear.y = player.ValueRO.MaxFallSpeed;
+            }
         }
- 
-        // ì¶”ë½ ì†ë„ ì œí•œ
-        if (velocity.Linear.y < player.MaxFallSpeed)
+
+        // 3. µğ¹ö±×: ¸¸¾à ¾À¿¡ Ä³¸¯ÅÍ°¡ ¾ø´Ù¸é ÄÜ¼ÖÃ¢¿¡ »¡°£ºÒÀ» ¶ç¿öÁİ´Ï´Ù.
+        if (!foundPlayer)
         {
-            velocity.Linear.y = player.MaxFallSpeed;
+            // ÀÌ °æ°í°¡ ¶á´Ù¸é, À¯´ÏÆ¼°¡ Ä¸½¶À» ¿£Æ¼Æ¼·Î Á¦´ë·Î º¯È¯(Baking)ÇÏÁö ¸øÇÑ °Ì´Ï´Ù!
+            // Debug.LogWarning("ÇÃ·¹ÀÌ¾î ¿£Æ¼Æ¼¸¦ Ã£Áö ¸øÇß½À´Ï´Ù! ¼­ºê ¾ÀÀ» ²°´Ù ÄÑº¸¼¼¿ä.");
         }
     }
 }
-// -----------------
- 

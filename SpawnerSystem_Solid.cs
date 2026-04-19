@@ -139,7 +139,6 @@ public partial struct SpawnerSystem
                     ecb.AddComponent<BlockTag>(instance);
                     ecb.AddComponent<BlockStress>(instance);
                     ecb.AddComponent(instance, new StructureID { Value = structureID });
-                    ecb.AddComponent(instance, new OriginalPosition { Value = pos }); // ⭐ 추가!
                     ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(1, 1, 1, 1) });
                 }
 

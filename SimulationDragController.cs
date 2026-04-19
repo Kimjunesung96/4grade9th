@@ -23,33 +23,9 @@ public class SimulationDragController : MonoBehaviour
 
     void Update()
     {
-        if (Camera.main == null) return;
-        
-        // ⭐ 1. DOTS 월드가 생성되지 않았다면 무시 (에러 방지)
-        if (Unity.Entities.World.DefaultGameObjectInjectionWorld == null) return;
-
-        var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
-        var physicsQuery = em.CreateEntityQuery(typeof(Unity.Physics.PhysicsWorldSingleton));
-        if (!physicsQuery.HasSingleton<Unity.Physics.PhysicsWorldSingleton>()) return;
-        
-        // ⭐ 2. 유니티 기본 물리가 아닌 DOTS 물리 월드 가져오기
-        var physicsWorld = physicsQuery.GetSingleton<Unity.Physics.PhysicsWorldSingleton>().PhysicsWorld;
-
-        UnityEngine.Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
-        Unity.Physics.RaycastInput rayInput = new Unity.Physics.RaycastInput 
-        { 
-            Start = ray.origin, 
-            End = ray.origin + ray.direction * 1000f, 
-            Filter = Unity.Physics.CollisionFilter.Default 
-        };
-
-        // ⭐ 3. DOTS 전용 광선 쏘기! 이제 빌드에서도 바닥을 완벽히 인식합니다.
-        bool hitSomething = physicsWorld.CastRay(rayInput, out Unity.Physics.RaycastHit hit);
-
-        if (!hitSomething) return;
-        
-        // hit.point 대신 hit.Position을 사용합니다.
-        float3 hitPoint = hit.Position; 
+        Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
+        if (!Physics.Raycast(ray, out RaycastHit hit, 1000f, groundLayer)) return;
+        float3 hitPoint = hit.point;
 
         if (Input.GetMouseButtonDown(0)) { definedStart = SnapToGrid(hitPoint); definedEnd = definedStart; isSimulationActive = true; simulationPivot.gameObject.SetActive(true); SyncWithDOTS(); }
         if (Input.GetMouseButton(0) && isSimulationActive) { definedEnd = SnapToGrid(hitPoint); SyncWithDOTS(); }
@@ -60,24 +36,13 @@ public class SimulationDragController : MonoBehaviour
 
     void SyncWithDOTS()
     {
-        // 🚀 [추가된 코드] DOTS 월드가 아직 안 만들어졌으면(Null) 동기화를 건너뜁니다!
-        if (Unity.Entities.World.DefaultGameObjectInjectionWorld == null)
-        {
-            Debug.Log("[DragDebug] DefaultGameObjectInjectionWorld가 NULL입니다!");
-            return;
-        }
-
-        var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
+        var em = World.DefaultGameObjectInjectionWorld.EntityManager;
         var query = em.CreateEntityQuery(typeof(BuilderStateData));
         if (query.HasSingleton<BuilderStateData>())
         {
             var data = query.GetSingleton<BuilderStateData>();
             data.GuideStartPos = definedStart; data.GuideEndPos = definedEnd;
             query.SetSingleton(data);
-        }
-        else
-        {
-            Debug.Log("[DragDebug] BuilderStateData 싱글턴을 찾을 수 없습니다!");
         }
     }
 
