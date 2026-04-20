@@ -246,8 +246,12 @@ public partial struct SpawnerSystem : ISystem
         // ==========================================================
         // ⭐ 핵심: B모드 켜져있으면 G키랑 F키를 'False(안 누름)'로 강제 조작해버림!
         // ==========================================================
-        bool isFKeyPressed = !isBMode && Input.GetKeyDown(KeyCode.F);
-        bool isGKeyPressed = !isBMode && Input.GetKeyDown(KeyCode.G);
+        // ==========================================================
+        // ⭐ 핵심: B모드(지진)나 N모드(충격파)가 켜져있으면 건설용 G, F키 봉인!
+        // ==========================================================
+        bool isNMode = ShockwaveTestSystem.IsNModeActive;
+        bool isFKeyPressed = !isBMode && !isNMode && Input.GetKeyDown(KeyCode.F);
+        bool isGKeyPressed = !isBMode && !isNMode && Input.GetKeyDown(KeyCode.G);
 
         // ====================================================================
         // 🚀 스마트 일괄 타설 (Y키 -> G키) 전용 초고속 빌더!
