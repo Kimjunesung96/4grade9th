@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Architect Presentation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 블루프린트(청사진) 테마 배경 */
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #0f172a;
+            color: #f8fafc;
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif;
+        }
+        
+        .bg-blueprint {
+            background-image: 
+                linear-gradient(rgba(56, 189, 248, 0.07) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(56, 189, 248, 0.07) 1px, transparent 1px);
+            background-size: 40px 40px;
+            background-position: center center;
+        }
+
+        /* 슬라이드 컨테이너 고정 비율 */
+        #presentation-container {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .slide-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .slide {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 4rem;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(20px) scale(0.95);
+            transition: opacity 0.5s ease, transform 0.5s ease;
+        }
+
+        .slide.active {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateY(0) scale(1);
+        }
+
+        /* 발표 대본 영역 */
+        #speaker-notes {
+            position: absolute;
+            bottom: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80%;
+            max-width: 900px;
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid #38bdf8;
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            display: none;
+            z-index: 50; 
+            backdrop-filter: blur(4px);
+        }
+
+        #speaker-notes.visible {
+            display: block;
+            animation: slideUp 0.3s ease-out;
+        }
+
+        @keyframes slideUp {
+            from { opacity: 0; transform: translate(-50%, 20px); }
+            to { opacity: 1; transform: translate(-50%, 0); }
+        }
+
+        /* 하단 컨트롤 바 */
+        #controls {
+            height: 60px;
+            background: rgba(15, 23, 42, 0.9);
+            border-top: 1px solid rgba(56, 189, 248, 0.3);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 2rem;
+            z-index: 100;
+        }
+
+        .highlight { color: #38bdf8; font-weight: bold; }
+        .danger { color: #f87171; font-weight: bold; }
+        .success { color: #4ade80; font-weight: bold; }
+        code { font-family: monospace; }
+    </style>
+</head>
+<body class="bg-blueprint">
+
+    <div id="presentation-container">
+        
+        <div class="slide-container">
+            <div class="slide active">
+                <div class="text-center max-w-4xl w-full">
+                    <div class="inline-block p-4 mb-6 rounded-2xl bg-slate-800/80 border border-sky-500/30 shadow-lg shadow-sky-900/20">
+                        <svg class="w-16 h-16 text-sky-400 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
+                    </div>
+                    <h1 class="text-5xl font-extrabold mb-4 leading-tight tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-blue-500">
+                        나만의 집짓기 시뮬레이터
+                    </h1>
+                    <p class="text-2xl text-slate-400 mb-8 font-light">AI Architect Simulator</p>
+                    
+                    <div class="bg-slate-800/50 p-6 rounded-xl border border-slate-700 max-w-2xl mx-auto backdrop-blur-sm">
+                        <p class="text-lg text-slate-300 mb-2"><span class="text-sky-400 font-semibold">개발자:</span> 김준성 (Full-Stack Engineer)</p>
+                        <p class="text-md text-slate-400">Unity 기반 정밀 물리 연산과 알고리즘을 융합한<br>차세대 건축물 사전 검증 솔루션</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="slide">
+                <div class="max-w-5xl w-full">
+                    <h2 class="text-4xl font-bold mb-10 text-sky-400 border-b border-sky-900 pb-4">프로젝트 기획 배경 <span class="text-slate-500 text-2xl font-normal ml-2">Problem & Solution</span></h2>
+                    
+                    <div class="grid grid-cols-2 gap-8">
+                        <div class="bg-slate-800/60 p-8 rounded-xl border border-red-900/30">
+                            <h3 class="text-2xl font-bold text-red-400 mb-4 flex items-center">
+                                <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                                기존의 한계 (Problem)
+                            </h3>
+                            <ul class="space-y-4 text-lg text-slate-300">
+                                <li class="flex items-start"><span class="mr-2 mt-1 opacity-50">▪</span> <span>전문 설계 CAD 툴은 <b>진입 장벽</b>이 너무 높음</span></li>
+                                <li class="flex items-start"><span class="mr-2 mt-1 opacity-50">▪</span> <span>건설 샌드박스 게임은 <b>객관적인 수치 데이터</b>를 제공하지 않음</span></li>
+                            </ul>
+                        </div>
+
+                        <div class="bg-slate-800/60 p-8 rounded-xl border border-sky-500/30 relative overflow-hidden">
+                            <div class="absolute top-0 right-0 p-4 opacity-10">
+                                <svg class="w-24 h-24 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
+                            </div>
+                            <h3 class="text-2xl font-bold text-sky-400 mb-4">프로젝트 목표 (Solution)</h3>
+                            <p class="text-xl text-white font-medium mb-6 italic">"무너지기 전에 미리 알고, 대비할 수는 없을까?"</p>
+                            <ul class="space-y-3 text-lg text-slate-300">
+                                <li class="flex items-center"><span class="success mr-3">1.</span> 직관적이고 쉬운 건설 환경 구축</li>
+                                <li class="flex items-center"><span class="success mr-3">2.</span> 실시간 물리 스트레스 정밀 진단</li>
+                                <li class="flex items-center"><span class="success mr-3">3.</span> 데이터 기반 재료 추천 및 보강 솔루션 제공</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="slide">
+                <div class="max-w-5xl w-full">
+                    <h2 class="text-4xl font-bold text-sky-400 mb-8">핵심 기술: 대용량 데이터 파이프라인</h2>
+                    <div class="grid grid-cols-2 gap-8">
+                        <div class="bg-slate-800 p-6 rounded-xl border border-sky-500/30">
+                            <h3 class="text-sky-300 font-bold mb-2">보강 도면 생성 로직 (ReinforcementManager.cs)</h3>
+                            <pre class="text-[10px] text-green-400 bg-slate-950 p-4 rounded overflow-auto">
+// 위험 블록 하단으로 파고들며 보강 타설
+while (currentY >= 45) {
+    currentY -= 30;
+    // 1. 하단 구조물 충돌 방지(HashSet 확인)
+    if (existingBlocks.Contains(targetId)) break;
+    existingBlocks.Add(targetId);
+    // 2. 도면 리스트 등록
+    planLines.Add($"{targetId},{cleanX},{targetY},{cleanZ},Reinforcement");
+}</pre>
+                        </div>
+                        <div class="flex flex-col justify-center">
+                            <p class="text-slate-300 mb-4">다중 스레드 병렬 처리를 통해 수만 개의 블록 연산을 효율화했습니다. ReinforcementManager의 2패스 알고리즘을 통해 실제 물리 보강 타설 좌표를 CSV로 자동 추출합니다.</p>
+                            <div class="bg-slate-800/50 p-4 rounded-xl border-l-4 border-green-400">
+                                <h3 class="text-xl font-bold text-white mb-1">도면 ➜ 엑셀(CSV) 다이렉트 변환</h3>
+                                <p class="text-slate-400">사용자가 넣은 설계도(이미지)를 즉시 스캔하여, 3D 물리 연산이 가능한 엑셀(CSV) 데이터로 자동 변환하는 통합 제어 파이프라인 구축</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="slide">
+                <div class="max-w-5xl w-full">
+                    <h2 class="text-4xl font-bold text-red-400 mb-8">R&D: 보강 알고리즘과의 사투 <span class="text-slate-500 text-2xl font-normal ml-2">Problem → Solution</span></h2>
+                    <div class="grid grid-cols-2 gap-8">
+                        <div class="bg-slate-800/60 p-8 rounded-xl border border-red-900/30 flex flex-col gap-4">
+                            <h3 class="text-xl font-bold text-red-400 flex items-center">
+                                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                                문제 상황
+                            </h3>
+                            <ul class="space-y-3 text-slate-300">
+                                <li class="flex items-start"><span class="text-red-400 mr-2 mt-1">▪</span>보강 로직을 AI에게 맡겼으나 정교한 설계도 생성 실패</li>
+                                <li class="flex items-start"><span class="text-red-400 mr-2 mt-1">▪</span>수만 개 블록 좌표 추출 요청 시 토큰 한계로 출력 중단</li>
+                                <li class="flex items-start"><span class="text-red-400 mr-2 mt-1">▪</span>2주간의 시도 끝에 외부 AI 의존 방식 전면 포기</li>
+                            </ul>
+                        </div>
+                        <div class="bg-slate-800/60 p-8 rounded-xl border border-sky-500/30 flex flex-col gap-4">
+                            <h3 class="text-xl font-bold text-sky-400 flex items-center">
+                                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                직접 설계한 해결책
+                            </h3>
+                            <ul class="space-y-3 text-slate-300">
+                                <li class="flex items-start"><span class="text-sky-400 mr-2 mt-1">▪</span>위험 하중 분포를 시스템이 스스로 구분하는 로직 설계</li>
+                                <li class="flex items-start"><span class="text-sky-400 mr-2 mt-1">▪</span>허공에서 바닥을 향해 기둥을 뻗어 내리는 <span class="text-sky-300 font-bold">기초 기둥 보강 알고리즘</span> 고안</li>
+                                <li class="flex items-start"><span class="text-sky-400 mr-2 mt-1">▪</span>코드 구현은 AI 보조, <span class="text-sky-300 font-bold">핵심 논리는 직접 설계</span>하여 완성</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="slide">
+                <div class="max-w-5xl w-full text-center">
+                    <h2 class="text-4xl font-bold mb-12 text-sky-400 border-b border-sky-900 pb-4">타 프로그램과의 차별성 (초격차)</h2>
+                    
+                    <div class="grid grid-cols-3 gap-6">
+                        <div class="bg-slate-800/50 p-8 rounded-xl border border-slate-700 flex flex-col items-center">
+                            <div class="text-red-400 text-lg mb-4 line-through opacity-60">시각적 파괴</div>
+                            <svg class="w-8 h-8 text-slate-500 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path></svg>
+                            <div class="text-sky-400 text-xl font-bold">객관적 수치 진단</div>
+                            <p class="text-slate-400 text-sm mt-4">단순히 무너지는 것을 보지 않고, 붕괴 전 <span class="highlight">Danger CSV 데이터</span>를 추출하여 원인을 파악</p>
+                        </div>
+
+                        <div class="bg-slate-800/50 p-8 rounded-xl border border-slate-700 flex flex-col items-center">
+                            <div class="text-red-400 text-lg mb-4 line-through opacity-60">수동적 건축</div>
+                            <svg class="w-8 h-8 text-slate-500 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path></svg>
+                            <div class="text-sky-400 text-xl font-bold">능동적 알고리즘 솔루션</div>
+                            <p class="text-slate-400 text-sm mt-4">오류 검출에 그치지 않고, 시스템이 직접 계산하여 안전한 <span class="highlight">보강 설계도</span>를 스스로 제시</p>
+                        </div>
+
+                        <div class="bg-slate-800/50 p-8 rounded-xl border border-slate-700 flex flex-col items-center">
+                            <div class="text-red-400 text-lg mb-4 line-through opacity-60">복잡한 수작업 맵핑</div>
+                            <svg class="w-8 h-8 text-slate-500 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path></svg>
+                            <div class="text-sky-400 text-xl font-bold">설계도 다이렉트 스캔</div>
+                            <p class="text-slate-400 text-sm mt-4">이미지만 넣으면 <span class="highlight">엑셀 데이터로 자동 스캔 및 변환</span>되어 원클릭 건설 환경 제공</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="slide">
+                <div class="max-w-5xl w-full">
+                    <h2 class="text-4xl font-bold mb-10 text-sky-400 border-b border-sky-900 pb-4">향후 발전 계획 <span class="text-slate-500 text-2xl font-normal ml-2">Future Vision</span></h2>
+                    
+                    <div class="grid grid-cols-2 gap-6">
+                        <div class="flex items-start bg-slate-800/40 p-6 rounded-lg border border-sky-500/50 transition-colors shadow-[0_0_15px_rgba(56,189,248,0.2)]">
+                            <div class="text-3xl mr-4 mt-1">🧱</div>
+                            <div>
+                                <h3 class="text-xl font-bold text-white mb-2">실제 건축 자재 맞춤형 추천</h3>
+                                <p class="text-slate-400 text-sm">물리 시뮬레이션을 통해 추출된 스트레스 하중 수치와 실제 철근, 콘크리트 등의 재료 DB를 매칭하여 현장에 맞는 최적 자재를 추천.</p>
+                            </div>
+                        </div>
+
+                        <div class="flex items-start bg-slate-800/40 p-6 rounded-lg border border-slate-700/50 hover:border-sky-500/50 transition-colors">
+                            <div class="text-3xl mr-4 mt-1">🌪️</div>
+                            <div>
+                                <h3 class="text-xl font-bold text-white mb-2">복합 자연재해 환경</h3>
+                                <p class="text-slate-400 text-sm">현재의 지진 테스트를 넘어, 풍동(바람), 폭우 등 다중 환경 변수 물리 시뮬레이션 도입.</p>
+                            </div>
+                        </div>
+
+                        <div class="flex items-start bg-slate-800/40 p-6 rounded-lg border border-slate-700/50 hover:border-sky-500/50 transition-colors">
+                            <div class="text-3xl mr-4 mt-1">📸</div>
+                            <div>
+                                <h3 class="text-xl font-bold text-white mb-2">사진 기반 Vision 도면화</h3>
+                                <p class="text-slate-400 text-sm">사용자가 현실 건물 사진을 업로드하면 Vision 알고리즘이 분석하여 1차 3D 스케치로 자동 변환.</p>
+                            </div>
+                        </div>
+
+                        <div class="flex items-start bg-slate-800/40 p-6 rounded-lg border border-slate-700/50 hover:border-sky-500/50 transition-colors">
+                            <div class="text-3xl mr-4 mt-1">☁️</div>
+                            <div>
+                                <h3 class="text-xl font-bold text-white mb-2">클라우드 공유 커뮤니티</h3>
+                                <p class="text-slate-400 text-sm">엑셀(CSV) 변환 기능의 내보내기/불러오기 기능을 웹 서버와 연동해 글로벌 도면 공유 플랫폼화.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="slide">
+                <div class="max-w-5xl w-full">
+                    <h2 class="text-4xl font-bold mb-10 text-sky-400 border-b border-sky-900 pb-4">프로젝트 로드맵 <span class="text-slate-500 text-2xl font-normal ml-2">Gantt Chart</span></h2>
+                    
+                    <div class="space-y-4">
+                        <div class="flex items-center">
+                            <div class="w-32 text-right pr-4 text-slate-300 font-bold">Phase 1</div>
+                            <div class="flex-1 bg-slate-800 rounded-full h-8 relative overflow-hidden border border-slate-700">
+                                <div class="bg-green-500/80 h-full absolute left-0 top-0" style="width: 100%;"></div>
+                                <div class="absolute inset-0 flex items-center px-4 text-sm font-bold text-white z-10 whitespace-nowrap">건설 시스템 / 그리드 스냅 / 복사 기능 (완료)</div>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-center">
+                            <div class="w-32 text-right pr-4 text-slate-300 font-bold">Phase 2</div>
+                            <div class="flex-1 bg-slate-800 rounded-full h-8 relative overflow-hidden border border-slate-700">
+                                <div class="bg-green-500/80 h-full absolute left-0 top-0" style="width: 100%;"></div>
+                                <div class="absolute inset-0 flex items-center px-4 text-sm font-bold text-white z-10 whitespace-nowrap">물리 응력 연산 / 지진 시뮬레이터 / CSV 파이프라인 (완료)</div>
+                            </div>
+                        </div>
+
+                        <div class="flex items-center">
+                            <div class="w-32 text-right pr-4 text-sky-400 font-bold">Phase 3</div>
+                            <div class="flex-1 bg-slate-800 rounded-full h-8 relative overflow-hidden border border-sky-500">
+                                <div class="bg-sky-500 h-full absolute left-0 top-0" style="width: 100%;"></div>
+                                <div class="absolute inset-0 flex items-center px-4 text-sm font-bold text-white z-10 whitespace-nowrap">설계도(이미지) 엑셀 자동 변환 알고리즘 / 물리 데이터 기반 홀로그램 보강 (안정화 중)</div>
+                            </div>
+                        </div>
+
+                        <div class="flex items-center mt-6">
+                            <div class="w-32 text-right pr-4 text-orange-400 font-bold">Phase 4</div>
+                            <div class="flex-1 bg-slate-800 rounded-full h-8 relative overflow-hidden border border-orange-500 shadow-[0_0_10px_rgba(249,115,22,0.3)]">
+                                <div class="bg-orange-500/80 h-full absolute left-0 top-0" style="width: 40%;">
+                                    <div class="absolute right-0 top-0 h-full w-4 bg-gradient-to-r from-transparent to-white/50 animate-pulse"></div>
+                                </div>
+                                <div class="absolute inset-0 flex items-center px-4 text-sm font-bold text-white z-10 whitespace-nowrap">물리 데이터 기반 실제 건축 재료(자재) DB 연동 및 맞춤 추천 (진행 예정)</div>
+                            </div>
+                        </div>
+
+                        <div class="flex items-center opacity-60">
+                            <div class="w-32 text-right pr-4 text-slate-400 font-bold">Phase 5</div>
+                            <div class="flex-1 bg-slate-800 rounded-full h-8 relative overflow-hidden border border-slate-700">
+                                <div class="bg-slate-600/50 h-full absolute left-0 top-0" style="width: 15%;"></div>
+                                <div class="absolute inset-0 flex items-center px-4 text-sm font-bold text-slate-300 z-10 whitespace-nowrap">Vision AI 도면화 및 클라우드 공유 플랫폼 (예정)</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="slide">
+                <div class="max-w-5xl w-full text-center">
+                    <h2 class="text-4xl font-bold mb-12 text-sky-400 border-b border-sky-900 pb-4">개발 및 팀 구성</h2>
+                    
+                    <div class="inline-block bg-slate-800/80 p-10 rounded-2xl border border-sky-500/40 shadow-2xl shadow-sky-900/20 text-left max-w-3xl w-full relative overflow-hidden">
+                        
+                        <div class="absolute -right-20 -top-20 opacity-5">
+                            <svg class="w-64 h-64 text-sky-400" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+                        </div>
+
+                        <div class="flex items-center mb-8 border-b border-slate-700 pb-6">
+                            <div class="w-20 h-20 bg-gradient-to-br from-sky-400 to-blue-600 rounded-full flex items-center justify-center text-3xl font-bold text-white shadow-lg mr-6">
+                                JS
+                            </div>
+                            <div>
+                                <h3 class="text-3xl font-bold text-white">김준성</h3>
+                                <p class="text-sky-400 text-lg">Solo Full-Stack Developer</p>
+                            </div>
+                        </div>
+
+                        <div class="space-y-4">
+                            <div class="flex items-start">
+                                <div class="bg-slate-900 text-sky-400 text-xs font-bold px-2 py-1 rounded mt-1 mr-4 w-24 text-center border border-sky-900">DATA / LOGIC</div>
+                                <p class="text-slate-300">설계도 이미지 스캐닝 알고리즘 및 엑셀(CSV) 변환 파이프라인 설계</p>
+                            </div>
+                            <div class="flex items-start">
+                                <div class="bg-slate-900 text-sky-400 text-xs font-bold px-2 py-1 rounded mt-1 mr-4 w-24 text-center border border-sky-900">PHYSICS</div>
+                                <p class="text-slate-300">Unity 기반 다중 스레드 병렬 처리, 구조물 물리 응력 연산 최적화</p>
+                            </div>
+                            <div class="flex items-start">
+                                <div class="bg-slate-900 text-sky-400 text-xs font-bold px-2 py-1 rounded mt-1 mr-4 w-24 text-center border border-sky-900">CLIENT</div>
+                                <p class="text-slate-300">3D 그리드 건설 시스템, 엑셀 맵핑, 클라이언트 필터링 로직 구현</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <div id="speaker-notes">
+            <div class="flex justify-between items-center mb-2 border-b border-slate-700 pb-2">
+                <span class="text-sky-400 font-bold text-sm">🗣️ 발표 대본 (Speaker Notes)</span>
+                <button onclick="toggleNotes()" class="text-slate-400 hover:text-white text-sm">닫기 ✕</button>
+            </div>
+            <p id="notes-text" class="text-slate-200 text-lg leading-relaxed"></p>
+        </div>
+
+        <div id="controls">
+            <div class="flex items-center space-x-4">
+                <span id="slide-counter" class="text-slate-400 font-mono">1 / 8</span>
+                <button onclick="toggleNotes()" class="px-3 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-sm text-slate-300 transition-colors">
+                    대본 보기 (N)
+                </button>
+            </div>
+            <div class="flex space-x-2">
+                <button onclick="prevSlide()" class="p-2 bg-slate-800 hover:bg-sky-900 text-white rounded border border-slate-600 hover:border-sky-400 transition-all flex items-center">
+                    <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg> 이전
+                </button>
+                <button onclick="nextSlide()" class="p-2 bg-slate-800 hover:bg-sky-900 text-white rounded border border-slate-600 hover:border-sky-400 transition-all flex items-center">
+                    다음 <svg class="w-5 h-5 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const speakerNotes = [
+            "안녕하세요, '나만의 집짓기 시뮬레이터'를 기획하고 개발한 김준성입니다. 내가 직접 지은 건물이 실제로 얼마나 버틸 수 있는지 테스트해볼 수 있는 시뮬레이터입니다. 지금부터 소개하겠습니다.",
+            "이 프로젝트를 시작한 계기는 두 가지 불만에서 시작했습니다. 전문 CAD 툴은 기능은 강력한데 일반인이 쓰기엔 진입 장벽이 너무 높고, 마인크래프트 같은 건설 게임은 재밌긴 한데 물리 법칙이 없어서 '이게 실제로 버틸까?' 같은 건 전혀 알 수 없죠. 건물을 짓는 것 자체는 쉬운데 안전성은 모르고, 안전성은 알 수 있는데 짓기가 너무 어렵고. 그래서 이 두 가지를 합쳐서, 누구나 쉽게 짓고 그 건물의 안전성도 바로 확인할 수 있는 툴을 직접 만들어봤습니다.",
+            "건축 방식은 두 가지입니다. 첫 번째는 마우스 드래그로 직접 블록을 쌓는 방식입니다. 선택한 영역에 따라 벽, 원형, 피라미드 같은 여러 형태로 즉시 지을 수 있습니다. 두 번째는 자동 건축입니다. 도면 이미지를 시스템에 넣으면 CSV 데이터로 변환되고, 단축키 하나로 수천 개 블록이 한 번에 배치됩니다. 손으로 하나하나 쌓으면 몇 시간 걸릴 작업을 몇 초 만에 끝낼 수 있습니다. 작은 집부터 대형 건물까지 스케일 제한 없이 지을 수 있다는 게 이 방식의 핵심입니다.",
+            "개발하면서 가장 힘든 부분이 자동 보강 기능이었습니다. 처음엔 AI한테 보강 로직을 맡겼는데, 정교한 설계도를 못 뽑아내고 수만 개 블록 좌표를 한 번에 달라고 하면 토큰 한계로 출력도 자꾸 끊겼습니다. 2주를 날린 셈이죠. 그래서 방향을 바꿔서 직접 설계했습니다. 핵심 아이디어는 이렇습니다. 스트레스 데이터에서 위험 판정을 받은 블록의 컬럼을 찾고, 그 컬럼 아래로 내려가면서 비어있는 자리에 보강 기둥을 하나씩 채워넣는 방식입니다. 코드 구현은 AI 도움을 받았지만, 이 알고리즘의 논리 자체는 제가 직접 설계했습니다.",
+            "다른 시뮬레이터와 가장 다른 점은 '능동적'이라는 겁니다. 보통 물리 시뮬레이터는 건물을 흔들거나 무너뜨리는 걸 보여주는 데서 끝납니다. 저희는 거기서 한 발 더 나갑니다. V키나 B키를 누르면 5초간 중력 또는 지진 하중을 가해서 각 블록이 받는 응력을 측정하고, 그 결과를 빨간색 히트맵으로 시각화합니다. 그리고 위험 판정을 받은 블록들을 기반으로 시스템이 보강 설계도를 자동으로 생성해줍니다. 지금은 수직 기둥 방식만 구현됐지만, 나중엔 트러스나 빔 같은 방식으로도 확장할 계획입니다.",
+            "향후 계획은 크게 세 가지입니다. 첫 번째는 실제 건축 자재 DB 연동입니다. 지금은 모든 블록이 동일한 재질인데, 측정된 응력 수치에 맞는 철근이나 콘크리트 같은 자재를 추천해주는 방식으로 확장할 예정입니다. 두 번째는 복합 재해 환경 추가입니다. 현재 지진 테스트에서 강풍, 폭우 같은 다양한 환경 변수를 더할 계획입니다. 세 번째는 클라우드 공유 플랫폼입니다. 내가 지은 건물을 CSV 파일로 내보내고, 다른 사람들과 공유하고 불러올 수 있는 커뮤니티 기능을 붙이는 게 최종 목표입니다.",
+            "로드맵입니다. Phase 1은 건설 시스템과 그리드 스냅, Phase 2는 물리 응력 연산과 지진 시뮬레이터, Phase 3은 보강 알고리즘과 CSV 파이프라인으로 이 세 단계는 완료됐고 지금은 안정화 단계입니다. 다음 단계인 Phase 4는 실제 자재 데이터 연동이고, Phase 5는 Vision AI 도면화와 클라우드 공유 플랫폼입니다.",
+            "도면 파이프라인 설계부터 물리 엔진, 보강 알고리즘, 시각화까지 혼자 진행한 프로젝트입니다. AI에 의존했다가 막혔을 때 직접 로직을 설계해서 풀어낸 게 가장 기억에 남습니다. 이상으로 발표를 마치겠습니다. 감사합니다."
+        ];
+
+        let currentSlide = 0;
+        const slides = document.querySelectorAll('.slide');
+        const counter = document.getElementById('slide-counter');
+        const notesPanel = document.getElementById('speaker-notes');
+        const notesText = document.getElementById('notes-text');
+
+        function updateSlide() {
+            slides.forEach((slide, index) => {
+                if (index === currentSlide) {
+                    slide.classList.add('active');
+                } else {
+                    slide.classList.remove('active');
+                }
+            });
+            counter.innerText = `${currentSlide + 1} / ${slides.length}`;
+            notesText.innerText = speakerNotes[currentSlide];
+        }
+
+        function nextSlide() {
+            if (currentSlide < slides.length - 1) {
+                currentSlide++;
+                updateSlide();
+            }
+        }
+
+        function prevSlide() {
+            if (currentSlide > 0) {
+                currentSlide--;
+                updateSlide();
+            }
+        }
+
+        function toggleNotes() {
+            notesPanel.classList.toggle('visible');
+        }
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ') {
+                nextSlide();
+            } else if (e.key === 'ArrowLeft') {
+                prevSlide();
+            } else if (e.key === 'n' || e.key === 'N') {
+                toggleNotes();
+            }
+        });
+
+        updateSlide();
+    </script>
+</body>
+</html>
