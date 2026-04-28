@@ -5,27 +5,29 @@ using UnityEngine;
 using Unity.Physics;
 using Unity.Collections;
 using Unity.Rendering;
+using Unity.Burst;
 
 public struct GhostBlockTag : IComponentData { }
 
 [UpdateInGroup(typeof(SimulationSystemGroup))]
 public partial struct SpawnerSystem : ISystem
 {
+    public static System.Collections.Generic.List<float3> ExternalBlueprintData = new System.Collections.Generic.List<float3>();
+
+    public static bool isOMode = false;
+    public static bool isLMode = false;
+
     private float3 dragStartPos;
     private float3 dragEndPos;
     private int currentBuildMode;
     private float guideHeight;
     private bool isGuideActive;
     private int nextStructureID;
-
     private bool isCenterMoved;
     private float3 customCenterPos;
-
     private NativeList<BlobAssetReference<Unity.Physics.Collider>> _createdColliders;
-
     private bool isYMode;
     private NativeList<float3> blueprintOffsets;
-
     private int loadDelayTimer;
 
     private string GetToolName(int mode)
@@ -43,27 +45,17 @@ public partial struct SpawnerSystem : ISystem
 
     public void OnCreate(ref SystemState state)
     {
-        currentBuildMode = 1;
-        guideHeight = 1f;
-        isGuideActive = false;
-        nextStructureID = 1;
-        isCenterMoved = false;
-        customCenterPos = float3.zero;
+        currentBuildMode = 1; guideHeight = 1f; isGuideActive = false; nextStructureID = 1;
+        isCenterMoved = false; customCenterPos = float3.zero;
         _createdColliders = new NativeList<BlobAssetReference<Unity.Physics.Collider>>(Allocator.Persistent);
-
-        isYMode = false;
-        blueprintOffsets = new NativeList<float3>(Allocator.Persistent);
-
+        isYMode = false; blueprintOffsets = new NativeList<float3>(Allocator.Persistent);
         loadDelayTimer = 0;
+        isOMode = false; isLMode = false;
     }
 
     public void OnDestroy(ref SystemState state)
     {
-        if (_createdColliders.IsCreated)
-        {
-            foreach (var col in _createdColliders) { if (col.IsCreated) col.Dispose(); }
-            _createdColliders.Dispose();
-        }
+        if (_createdColliders.IsCreated) { foreach (var col in _createdColliders) { if (col.IsCreated) col.Dispose(); } _createdColliders.Dispose(); }
         if (blueprintOffsets.IsCreated) blueprintOffsets.Dispose();
     }
 
@@ -81,7 +73,6 @@ public partial struct SpawnerSystem : ISystem
 
         PhysicsWorld physicsWorld = physicsSingleton.PhysicsWorld;
 
-        // [R키]: 현장 대청소 (하지만 Y도면은 유지!)
         if (Input.GetKeyDown(KeyCode.R))
         {
             if (LogManager.Instance != null) { LogManager.Instance.OnPressRKey(); }
@@ -89,96 +80,28 @@ public partial struct SpawnerSystem : ISystem
             UnityEngine.Debug.Log("🪓 [현장 철거] R키 작동! 건물은 철거되지만 Y도면은 유지됩니다. G키로 재타설 가능합니다!");
         }
 
-        // [Y키]: 보강 도면 스마트 로드
-        if (Input.GetKeyDown(KeyCode.Y)) { loadDelayTimer = 5; }
-
-        if (loadDelayTimer > 0)
-        {
-            loadDelayTimer--;
-            if (loadDelayTimer == 0)
-            {
-                string planCsvPath = System.IO.Path.Combine(UnityEngine.Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
-
-                if (System.IO.File.Exists(planCsvPath))
-                {
-                    string[] lines = System.IO.File.ReadAllLines(planCsvPath);
-                    float minX = 99999f, minZ = 99999f, maxX = -99999f, maxZ = -99999f;
-                    System.Collections.Generic.List<float3> tempList = new System.Collections.Generic.List<float3>();
-
-                    // ⭐ 중복 블록 입구컷 명부!
-                    System.Collections.Generic.HashSet<string> loadedIDs = new System.Collections.Generic.HashSet<string>();
-
-                    for (int i = 1; i < lines.Length; i++)
-                    {
-                        string[] cols = lines[i].Split(',');
-                        if (cols.Length >= 5 && (cols[4] == "Reinforcement" || cols[4] == "Existing"))
-                        {
-                            string currentID = cols[0];
-
-                            // ⛔ 중복 ID 컷!
-                            if (loadedIDs.Contains(currentID)) continue;
-
-                            string[] idParts = currentID.Split('_');
-                            if (idParts.Length >= 3)
-                            {
-                                float x = float.Parse(idParts[0]) / 10f;
-                                float z = float.Parse(idParts[1]) / 10f;
-                                float y = float.Parse(idParts[2]) / 10f;
-
-                                tempList.Add(new float3(x, y, z));
-                                loadedIDs.Add(currentID);
-
-                                if (x < minX) minX = x; if (x > maxX) maxX = x;
-                                if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
-                            }
-                        }
-                    }
-
-                    if (tempList.Count > 0)
-                    {
-                        isYMode = true;
-                        blueprintOffsets.Clear();
-                        tempList.Sort((a, b) => a.y.CompareTo(b.y));
-
-                        float centerX = (minX + maxX) / 2f; float centerZ = (minZ + maxZ) / 2f;
-                        centerX = (float)System.Math.Round(centerX / 3.0f) * 3.0f;
-                        centerZ = (float)System.Math.Round(centerZ / 3.0f) * 3.0f;
-
-                        foreach (var pos in tempList)
-                        {
-                            blueprintOffsets.Add(new float3(pos.x - centerX, pos.y, pos.z - centerZ));
-                        }
-                        UnityEngine.Debug.Log($"🏗️ [스마트 로드 완] {tempList.Count}개 준비 완료! (⛔ 자동 중복 컷 적용)");
-                    }
-                }
-            }
-        }
-
-        // ==========================================================
-        // ⭐ 소장님 특명: 지진 테스트(B모드) 중일 때는 스포너 올스톱!!
-        // ==========================================================
         bool isBMode = VibrationTestSystem.IsBModeActive;
+        bool isNMode = ShockwaveTestSystem.IsNModeActive;
 
-        // B모드가 아닐 때(평상시)만 휠이랑 마우스 클릭이 작동하게 막아버립니다!
-        if (!isBMode)
+        bool isAnySpecialMode = isOMode || isLMode || isYMode;
+
+        if (!isBMode && !isNMode && !isAnySpecialMode)
         {
             if (Input.mouseScrollDelta.y != 0) { builderState.ValueRW.GuideHeight += Input.mouseScrollDelta.y; if (builderState.ValueRW.GuideHeight < 1f) builderState.ValueRW.GuideHeight = 1f; }
-
             if (Input.GetMouseButtonDown(0)) isCenterMoved = false;
-
             if (Input.GetMouseButtonDown(1))
             {
                 UnityEngine.Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
                 RaycastInput rayInput = new RaycastInput { Start = ray.origin, End = ray.origin + ray.direction * 500f, Filter = CollisionFilter.Default };
                 if (physicsWorld.CastRay(rayInput, out Unity.Physics.RaycastHit hit)) { customCenterPos = hit.Position; isCenterMoved = true; }
             }
+            if (Input.GetKeyDown(KeyCode.Alpha1)) builderState.ValueRW.CurrentMode = 1;
+            if (Input.GetKeyDown(KeyCode.Alpha2)) builderState.ValueRW.CurrentMode = 2;
+            if (Input.GetKeyDown(KeyCode.Alpha3)) builderState.ValueRW.CurrentMode = 3;
+            if (Input.GetKeyDown(KeyCode.Alpha4)) builderState.ValueRW.CurrentMode = 4;
+            if (Input.GetKeyDown(KeyCode.Alpha5)) builderState.ValueRW.CurrentMode = 5;
         }
 
-        if (Input.GetKeyDown(KeyCode.Alpha1)) { builderState.ValueRW.CurrentMode = 1; }
-        if (Input.GetKeyDown(KeyCode.Alpha2)) { builderState.ValueRW.CurrentMode = 2; }
-        if (Input.GetKeyDown(KeyCode.Alpha3)) { builderState.ValueRW.CurrentMode = 3; }
-        if (Input.GetKeyDown(KeyCode.Alpha4)) { builderState.ValueRW.CurrentMode = 4; }
-        if (Input.GetKeyDown(KeyCode.Alpha5)) { builderState.ValueRW.CurrentMode = 5; }
         if (Input.GetKeyDown(KeyCode.Return)) { if (LogManager.Instance != null) { LogManager.Instance.SaveToMaster(); UnityEngine.Debug.Log("⭐⭐⭐ 마스터 도면 박제 완료!!"); } }
 
         currentBuildMode = builderState.ValueRO.CurrentMode;
@@ -186,9 +109,154 @@ public partial struct SpawnerSystem : ISystem
         dragStartPos = builderState.ValueRO.GuideStartPos;
         dragEndPos = builderState.ValueRO.GuideEndPos;
 
-        // ====================================================================
-        // 🔄 도면 90도 회전 시스템 (Q: 반시계, E: 시계) - 근본 단축키 적용!
-        // ====================================================================
+        if ((isOMode || isLMode) && Input.GetKeyDown(KeyCode.G))
+        {
+            if (ExternalBlueprintData.Count > 0)
+            {
+                var ecb = SystemAPI.GetSingleton<BeginSimulationEntityCommandBufferSystem.Singleton>()
+                              .CreateCommandBuffer(state.WorldUnmanaged);
+
+                float3 baseCenter = new float3(
+                    math.round(customCenterPos.x / 3.0f) * 3.0f, 0,
+                    math.round(customCenterPos.z / 3.0f) * 3.0f
+                );
+
+                // ✅ 추가됨: Y모드와 동일하게 gridMap + posMap 준비
+                var gridMap = new NativeHashMap<int3, Entity>(ExternalBlueprintData.Count, Allocator.Temp);
+                var posMap = new NativeHashMap<Entity, float3>(ExternalBlueprintData.Count, Allocator.Temp);
+
+                foreach (var posOffset in ExternalBlueprintData)
+                {
+                    float3 finalPos = baseCenter + posOffset;
+                    var instance = ecb.Instantiate(spawnerData.Prefab);
+
+                    ecb.SetComponent(instance, LocalTransform.FromPositionRotationScale(
+                        finalPos, quaternion.identity, 2.95f));
+                    ecb.AddComponent<BlockTag>(instance);
+                    ecb.AddComponent<BlockStress>(instance);
+                    ecb.AddComponent(instance, new StructureID { Value = nextStructureID });
+                    ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(1, 1, 1, 1) });
+
+                    // 1층(y≤2)은 바닥에 완전히 고정
+                    if (finalPos.y <= 2.0f)
+                    {
+                        PhysicsMass m = SystemAPI.GetComponent<PhysicsMass>(spawnerData.Prefab);
+                        m.InverseMass = 0; m.InverseInertia = float3.zero;
+                        ecb.SetComponent(instance, m);
+                    }
+
+                    // ✅ 추가됨: 블록들의 위치를 맵에 저장
+                    int3 key = new int3(
+                        (int)math.floor(finalPos.x / 3f + 0.5f),
+                        (int)math.floor(finalPos.y / 3f + 0.5f),
+                        (int)math.floor(finalPos.z / 3f + 0.5f));
+
+                    gridMap.TryAdd(key, instance);
+                    posMap.TryAdd(instance, finalPos);
+                }
+
+                // ✅ 핵심 수정: 6방향 내부 조인트 연결 로직 (Y모드에서 가져옴)
+                var keys = gridMap.GetKeyArray(Allocator.Temp);
+                int3[] gridDirs = { new int3(1, 0, 0), new int3(0, 1, 0), new int3(0, 0, 1) };
+                float3[] internalDirs = { math.right(), math.up(), math.forward() };
+
+                foreach (var key in keys)
+                {
+                    Entity cur = gridMap[key];
+                    float3 curPos = posMap[cur];
+
+                    // 1. 같은 블루프린트 내의 이웃 블록들과 조인트 연결
+                    for (int d = 0; d < 3; d++)
+                    {
+                        if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor))
+                            CreateIndestructibleJoint(ref ecb, cur, neighbor, internalDirs[d] * 3.0f);
+                    }
+
+                    // 2. 이미 월드에 배치된 기존 블록(앵커)들과의 조인트 연결
+                    foreach (var anchorDir in new float3[] { math.up(), math.down() })
+                    {
+                        RaycastInput ray = new RaycastInput
+                        {
+                            Start = curPos,
+                            End = curPos + anchorDir * 2.0f,
+                            Filter = CollisionFilter.Default
+                        };
+
+                        if (physicsWorld.CastRay(ray, out Unity.Physics.RaycastHit hit))
+                        {
+                            if (hit.Entity != Entity.Null && !posMap.ContainsKey(hit.Entity)
+                                && SystemAPI.HasComponent<BlockTag>(hit.Entity))
+                            {
+                                float3 hitPos = SystemAPI.GetComponent<LocalTransform>(hit.Entity).Position;
+                                CreateIndestructibleJoint(ref ecb, hit.Entity, cur, curPos - hitPos);
+                            }
+                        }
+                    }
+                }
+
+                // 메모리 해제
+                keys.Dispose();
+                gridMap.Dispose();
+                posMap.Dispose();
+            }
+
+            ExternalBlueprintData.Clear();
+            isOMode = false;
+            isLMode = false;
+            nextStructureID++;
+            return;
+        }
+
+        if (Input.GetKeyDown(KeyCode.Y)) { loadDelayTimer = 5; }
+        if (loadDelayTimer > 0)
+        {
+            loadDelayTimer--;
+            if (loadDelayTimer == 0)
+            {
+                string planCsvPath = System.IO.Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
+                if (System.IO.File.Exists(planCsvPath))
+                {
+                    string[] lines = System.IO.File.ReadAllLines(planCsvPath);
+                    float minX = 99999f, minZ = 99999f, maxX = -99999f, maxZ = -99999f;
+                    System.Collections.Generic.List<float3> tempList = new System.Collections.Generic.List<float3>();
+                    System.Collections.Generic.HashSet<string> loadedIDs = new System.Collections.Generic.HashSet<string>();
+                    for (int i = 1; i < lines.Length; i++)
+                    {
+                        string[] cols = lines[i].Split(',');
+                        if (cols.Length >= 5 && (cols[4] == "Reinforcement" || cols[4] == "Existing"))
+                        {
+                            string currentID = cols[0];
+                            if (loadedIDs.Contains(currentID)) continue;
+                            string[] idParts = currentID.Split('_');
+                            if (idParts.Length >= 3)
+                            {
+                                float px = float.Parse(idParts[0]) / 10f;
+                                float pz = float.Parse(idParts[1]) / 10f;
+                                float py = float.Parse(idParts[2]) / 10f;
+
+                                // ⭐ 폭발 억제! Y축 1.5f 피벗 오차 완벽 반영
+                                float x = math.round(px / 3.0f) * 3.0f;
+                                float z = math.round(pz / 3.0f) * 3.0f;
+                                float y = math.round((py - 1.5f) / 3.0f) * 3.0f + 1.5f;
+
+                                tempList.Add(new float3(x, y, z)); loadedIDs.Add(currentID);
+                                if (x < minX) minX = x; if (x > maxX) maxX = x;
+                                if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+                            }
+                        }
+                    }
+                    if (tempList.Count > 0)
+                    {
+                        isYMode = true; blueprintOffsets.Clear(); tempList.Sort((a, b) => a.y.CompareTo(b.y));
+                        float centerX = math.round(((minX + maxX) / 2f) / 3.0f) * 3.0f;
+                        float centerZ = math.round(((minZ + maxZ) / 2f) / 3.0f) * 3.0f;
+                        foreach (var pos in tempList) { blueprintOffsets.Add(new float3(pos.x - centerX, pos.y, pos.z - centerZ)); }
+                        UnityEngine.Debug.Log($"🏗️ [스마트 로드 완] {tempList.Count}개 준비 완료! (⛔ 자동 중복 컷 적용)");
+                    }
+                }
+            }
+        }
+
         if (isYMode && !isBMode)
         {
             if (Input.GetKeyDown(KeyCode.Q))
@@ -243,19 +311,9 @@ public partial struct SpawnerSystem : ISystem
         var aiBuilder = UnityEngine.Object.FindFirstObjectByType<AI_Builder>();
         if (aiBuilder != null && aiBuilder.isAiHologramActive) { isGuideActive = false; }
 
-        // ==========================================================
-        // ⭐ 핵심: B모드 켜져있으면 G키랑 F키를 'False(안 누름)'로 강제 조작해버림!
-        // ==========================================================
-        // ==========================================================
-        // ⭐ 핵심: B모드(지진)나 N모드(충격파)가 켜져있으면 건설용 G, F키 봉인!
-        // ==========================================================
-        bool isNMode = ShockwaveTestSystem.IsNModeActive;
         bool isFKeyPressed = !isBMode && !isNMode && Input.GetKeyDown(KeyCode.F);
         bool isGKeyPressed = !isBMode && !isNMode && Input.GetKeyDown(KeyCode.G);
 
-        // ====================================================================
-        // 🚀 스마트 일괄 타설 (Y키 -> G키) 전용 초고속 빌더!
-        // ====================================================================
         if (isYMode && isGKeyPressed)
         {
             float3 baseCenter = new float3((float)System.Math.Round(customCenterPos.x / blockSize) * blockSize, 0, (float)System.Math.Round(customCenterPos.z / blockSize) * blockSize);
@@ -294,7 +352,6 @@ public partial struct SpawnerSystem : ISystem
 
             var keys = gridMap.GetKeyArray(Allocator.Temp);
 
-            // ⭐ 1. 내부 철근망 (중복 방지용 3방향 뻗기 -> 결과적으로 6방향 완성)
             float3[] internalDirs = new float3[] { math.right(), math.up(), math.forward() };
             int3[] gridDirs = new int3[] { new int3(1, 0, 0), new int3(0, 1, 0), new int3(0, 0, 1) };
 
@@ -311,7 +368,6 @@ public partial struct SpawnerSystem : ISystem
                     }
                 }
 
-                // ⭐ 2. 외부 용접 (기존 건물과 결합하기 위해 위/아래 앵커 고정)
                 float3[] anchorDirs = new float3[] { math.up(), math.down() };
                 for (int d = 0; d < 2; d++)
                 {
@@ -344,9 +400,6 @@ public partial struct SpawnerSystem : ISystem
             isGuideActive = true; isGKeyPressed = true; isFKeyPressed = false;
         }
 
-        // ====================================================================
-        // 🚀 일반 드래그 건축 및 렌더링 (5연발 스캐너 적용)
-        // ====================================================================
         if (isGuideActive)
         {
             float previewY = actualStartPos.y;
@@ -452,8 +505,6 @@ public partial struct SpawnerSystem : ISystem
         if (!isGhost) nextStructureID++;
     }
 
-    // 🎯 [소장님 특명] 5연발 정밀 레이저 스캐너 (도넛 구멍 추락 방지 완벽 대응!)
-    // 🎯 [소장님 특명] 25연발 융단폭격 레이저 스캐너 (서로 다른 모양 블록 완벽 인식)
     private void CheckRay(PhysicsWorld physicsWorld, float x, float z, float blockSize, ref float highestY, ref Entity hitEntity, ref bool hitAnything)
     {
         float half = (blockSize / 2f) * 0.95f;
@@ -528,9 +579,6 @@ public partial struct SpawnerSystem : ISystem
         }
     }
 
-    // ====================================================================
-    // 🛠️ 조인트(철근) 생성 함수
-    // ====================================================================
     private void CreateIndestructibleJoint(ref EntityCommandBuffer ecb, Entity entityA, Entity entityB, float3 offsetToB)
     {
         Entity jointEntity = ecb.CreateEntity();
