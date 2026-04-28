@@ -115,12 +115,12 @@ public class BlueprintManager : MonoBehaviour
 
     public string VectorToID(Vector3 pos)
     {
-        int snappedX = Mathf.RoundToInt((pos.x - 1.5f) / 3.0f) * 30 + 15;
-        int snappedY = Mathf.RoundToInt((pos.y - 1.5f) / 3.0f) * 30 + 15;
-        int snappedZ = Mathf.RoundToInt((pos.z - 1.5f) / 3.0f) * 30 + 15;
-        snappedY = Mathf.Max(15, snappedY);
+        // ⭐ 십장님 훈수 반영: /10f, *30 같은 구시대 유물 삭제!
+        int x = Mathf.RoundToInt(pos.x / 3.0f) * 3;
+        int y = Mathf.RoundToInt(pos.y / 3.0f) * 3;
+        int z = Mathf.RoundToInt(pos.z / 3.0f) * 3;
 
-        return $"{snappedX:0000}_{snappedZ:0000}_{snappedY:0000}";
+        return $"{x}_{z}_{y}";
     }
 
     public void SplitID(string fullId, out string colId, out int y)
