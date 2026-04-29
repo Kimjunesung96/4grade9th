@@ -77,10 +77,10 @@ public partial struct StressVisualizationSystem : ISystem
             {
                 color.ValueRW.Value = new float4(1f, 1f, 1f, 1f); gravity.ValueRW.Value = 1f; velocity.ValueRW.Linear.y -= 0.01f; stress.ValueRW.SmoothedStress = 0f;
 
-                // ⭐ V키 엇갈림 완벽 복원: 다시 3.0 절대 스냅으로 복귀!
-                float snappedX = math.round(transform.ValueRO.Position.x / 3.0f) * 3.0f;
+                // ⭐ V키 엇갈림 완벽 복원: 다시 3.0 절대 스냅으로 복귀! (1.5 오차 보정 반영)
+                float snappedX = math.round((transform.ValueRO.Position.x - 1.5f) / 3.0f) * 3.0f + 1.5f;
                 float snappedY = math.round((transform.ValueRO.Position.y - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                float snappedZ = math.round(transform.ValueRO.Position.z / 3.0f) * 3.0f;
+                float snappedZ = math.round((transform.ValueRO.Position.z - 1.5f) / 3.0f) * 3.0f + 1.5f;
                 float3 perfectPos = new float3(snappedX, snappedY, snappedZ);
 
                 if (!SystemAPI.HasComponent<OriginalPosition>(entity)) { ecb.AddComponent(entity, new OriginalPosition { Value = perfectPos }); }

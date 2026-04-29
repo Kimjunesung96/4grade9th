@@ -23,7 +23,7 @@ public class BlueprintManager : MonoBehaviour
 
     private string FilePath => Path.Combine(Application.dataPath, "../BuildingLogs/temp", blueprintFileName);
 
-    private Dictionary<string, HashSet<int>> blueprintCabinet = new Dictionary<string, HashSet<int>>();
+    private Dictionary<string, HashSet<float>> blueprintCabinet = new Dictionary<string, HashSet<float>>();
     private ArchitectBlueprint currentBlueprint = new ArchitectBlueprint();
 
     void Awake()
@@ -45,49 +45,44 @@ public class BlueprintManager : MonoBehaviour
             {
                 AddBlockToCabinet(block.id);
             }
-            Debug.Log($"📂 [BlueprintManager] 도면 로드 완료! 총 {currentBlueprint.blocks.Count}개의 블록 정리됨.");
-        }
-        else
-        {
-            Debug.LogWarning($"⚠️ [BlueprintManager] 도면이 없습니다. 빈 현장에서 시작: {FilePath}");
+            Debug.Log($"📂 [BlueprintManager] 도면 로드 완료! 총 {currentBlueprint.blocks.Count}개의 블록 정리...");
         }
     }
 
     private void AddBlockToCabinet(string fullId)
     {
-        int firstUnder = fullId.IndexOf('_');
-        if (firstUnder == -1) return;
-        int secondUnder = fullId.IndexOf('_', firstUnder + 1);
-        if (secondUnder == -1) return;
+        // fullId 예: 0015_0015_0015
+        float firstUnder = fullId.IndexOf('_');
+        float secondUnder = fullId.IndexOf('_', (int)firstUnder + 1);
+        if (firstUnder == -1f || secondUnder == -1f) return;
 
-        string colId = fullId.Substring(0, secondUnder);
-        int yPos = int.Parse(fullId.Substring(secondUnder + 1));
+        string colId = fullId.Substring(0, (int)secondUnder); // 0015_0015
+        float yPos = float.Parse(fullId.Substring((int)secondUnder + 1));
 
         if (!blueprintCabinet.ContainsKey(colId))
         {
-            blueprintCabinet[colId] = new HashSet<int>();
+            blueprintCabinet[colId] = new HashSet<float>();
         }
         blueprintCabinet[colId].Add(yPos);
     }
 
-    public bool IsBlockExist(string colId, int yPos)
+    public bool IsBlockExist(string colId, float yPos)
     {
-        if (blueprintCabinet.ContainsKey(colId))
+        if (blueprintCabinet.TryGetValue(colId, out var ySet))
         {
-            return blueprintCabinet[colId].Contains(yPos);
+            return ySet.Contains(yPos);
         }
         return false;
     }
 
-    public bool IsBlockExist(string fullId)
+    public bool IsBlockExistFullID(string fullId)
     {
-        int firstUnder = fullId.IndexOf('_');
-        if (firstUnder == -1) return false;
-        int secondUnder = fullId.IndexOf('_', firstUnder + 1);
-        if (secondUnder == -1) return false;
+        float firstUnder = fullId.IndexOf('_');
+        float secondUnder = fullId.IndexOf('_', (int)firstUnder + 1);
+        if (secondUnder == -1f) return false;
 
-        string colId = fullId.Substring(0, secondUnder);
-        int yPos = int.Parse(fullId.Substring(secondUnder + 1));
+        string colId = fullId.Substring(0, (int)secondUnder);
+        float yPos = float.Parse(fullId.Substring((int)secondUnder + 1));
         return IsBlockExist(colId, yPos);
     }
 
@@ -115,19 +110,15 @@ public class BlueprintManager : MonoBehaviour
 
     public string VectorToID(Vector3 pos)
     {
-        // ⭐ 십장님 훈수 반영: /10f, *30 같은 구시대 유물 삭제!
-        int x = Mathf.RoundToInt(pos.x / 3.0f) * 3;
-        int y = Mathf.RoundToInt(pos.y / 3.0f) * 3;
-        int z = Mathf.RoundToInt(pos.z / 3.0f) * 3;
+        // ⭐ 십장님 훈수 반영: ID 생성 규칙 스포너/스트레스 측정기들과 완벽 통일
+        float ix = Mathf.Round(pos.x * 10f);
+        float iy = Mathf.Round(pos.y * 10f);
+        float iz = Mathf.Round(pos.z * 10f);
 
-        return $"{x}_{z}_{y}";
-    }
+        string strX = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}";
+        string strZ = $"{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}";
+        string strY = $"{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
 
-    public void SplitID(string fullId, out string colId, out int y)
-    {
-        int firstUnder = fullId.IndexOf('_');
-        int secondUnder = fullId.IndexOf('_', firstUnder + 1);
-        colId = fullId.Substring(0, secondUnder);
-        y = int.Parse(fullId.Substring(secondUnder + 1));
+        return $"{strX}_{strZ}_{strY}";
     }
 }

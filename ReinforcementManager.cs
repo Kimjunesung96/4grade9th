@@ -46,29 +46,31 @@ public class ReinforcementManager : MonoBehaviour
 
             float cleanX = float.Parse(cols[1]);
             float cleanZ = float.Parse(cols[3]);
-            int currentY = int.Parse(parts[2]);
+            float currentY = float.Parse(parts[2]);
 
-            while (currentY >= 45)
+            while (currentY >= 45f)
             {
-                currentY -= 30;
+                currentY -= 30f;
                 float ix = Mathf.Round(cleanX * 10f);
                 float iz = Mathf.Round(cleanZ * 10f);
                 float iy = currentY;
 
                 // ⭐ ID 생성 규칙 통일
-                string strX = $"{(ix < 0 ? "-" : "0")}{Mathf.Abs(ix):000}";
-                string strZ = $"{(iz < 0 ? "-" : "0")}{Mathf.Abs(iz):000}";
-                string strY = $"{(iy < 0 ? "-" : "0")}{Mathf.Abs(iy):000}";
+                string strX = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}";
+                string strZ = $"{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}";
+                string strY = $"{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
 
                 string targetId = $"{strX}_{strZ}_{strY}";
-                if (existingBlocks.Contains(targetId)) break;
-
-                existingBlocks.Add(targetId);
-                float targetY = currentY / 10f;
-                planLines.Add($"{targetId},{cleanX:F2},{targetY:F2},{cleanZ:F2},Reinforcement");
+                if (!existingBlocks.Contains(targetId))
+                {
+                    float exactY = currentY / 10f;
+                    planLines.Add($"{targetId},{cleanX:F2},{exactY:F2},{cleanZ:F2},Reinforcement");
+                    existingBlocks.Add(targetId);
+                }
             }
         }
+
         File.WriteAllLines(planCsvPath, planLines);
-        Debug.Log("📄 마스터 엑셀 도면 생성 완료!");
+        Debug.Log($"📄 [ReinforcementManager] 도면 작성 완료! {planLines.Count - 1}개의 블록이 등록되었습니다.");
     }
 }
