@@ -6,6 +6,8 @@ using Unity.Physics;
 using Unity.Collections;
 using Unity.Rendering;
 using Unity.Burst;
+using System.IO;
+using System.Text;
 
 public struct GhostBlockTag : IComponentData { }
 
@@ -15,22 +17,32 @@ public partial struct SpawnerSystem : ISystem
     public static System.Collections.Generic.List<float3> ExternalBlueprintData = new System.Collections.Generic.List<float3>();
     public static bool isOMode = false;
     public static bool isLMode = false;
+    public static bool isUMode = false;
+
+    public static bool isManualModeEnabled = true;
+    public static bool isAimMoveEnabled = true;
+    public static bool isHeightScrollEnabled = true;
+    public static bool isPreviewFEnabled = true;
+    public static bool isBuildGEnabled = true;
+    public static bool isClearREnabled = true;
+
+    public static float backupIDToQuery = -1f;
+
     private float3 dragStartPos;
     private float3 dragEndPos;
-    private float currentBuildMode; // int에서 float으로 변경
+    private float currentBuildMode;
     private float guideHeight;
     private bool isGuideActive;
-    private float nextStructureID; // int에서 float으로 변경
+    private float nextStructureID;
     private bool isCenterMoved;
     private float3 customCenterPos;
     private NativeList<BlobAssetReference<Unity.Physics.Collider>> _createdColliders;
     private bool isYMode;
     private NativeList<float3> blueprintOffsets;
-    private float loadDelayTimer; // int에서 float으로 변경
+    private float loadDelayTimer;
 
     private string GetToolName(float mode)
     {
-        // float 비교를 위해 오차 범위 적용 (필요 시)
         if (math.abs(mode - 1f) < 0.01f) return "1_Solid_Wall";
         else if (math.abs(mode - 2f) < 0.01f) return "2_Empty_Frame";
         else if (math.abs(mode - 3f) < 0.01f) return "3_Circular_Pattern";
@@ -45,7 +57,7 @@ public partial struct SpawnerSystem : ISystem
         isCenterMoved = false; customCenterPos = float3.zero;
         _createdColliders = new NativeList<BlobAssetReference<Unity.Physics.Collider>>(Allocator.Persistent);
         isYMode = false; blueprintOffsets = new NativeList<float3>(Allocator.Persistent);
-        loadDelayTimer = 0f; isOMode = false; isLMode = false;
+        loadDelayTimer = 0f; isOMode = false; isLMode = false; isUMode = false; backupIDToQuery = -1f;
     }
 
     public void OnDestroy(ref SystemState state)
@@ -61,6 +73,7 @@ public partial struct SpawnerSystem : ISystem
         var builderState = SystemAPI.GetSingletonRW<BuilderStateData>();
         if (!SystemAPI.TryGetSingleton<PhysicsWorldSingleton>(out var physicsSingleton)) return;
 
+        // ⭐ 잃어버렸던 재료(프리팹) 조달 로직 복구
         SpawnerData spawnerData = default;
         bool hasSpawner = false;
         foreach (var data in SystemAPI.Query<RefRO<SpawnerData>>()) { spawnerData = data.ValueRO; hasSpawner = true; break; }
@@ -68,56 +81,185 @@ public partial struct SpawnerSystem : ISystem
 
         PhysicsWorld physicsWorld = physicsSingleton.PhysicsWorld;
 
-        if (Input.GetKeyDown(KeyCode.R)) { if (LogManager.Instance != null) LogManager.Instance.OnPressRKey(); isCenterMoved = false; UnityEngine.Debug.Log("🪓 [현장 철거] R키 작동! 건물은 철거되지만 Y도면은 유지됩니다."); }
+        // ⭐ 수동 타설 백업 로직 (ID 규격 복구 완료)
+        if (backupIDToQuery > -1f)
+        {
+            StringBuilder csv = new StringBuilder();
+            csv.AppendLine("ID,X,Y,Z,Type");
+            bool found = false;
+            foreach (var (transform, id) in SystemAPI.Query<RefRO<LocalTransform>, RefRO<StructureID>>().WithAll<BlockTag>())
+            {
+                if (math.abs(id.ValueRO.Value - backupIDToQuery) < 0.01f)
+                {
+                    float px = transform.ValueRO.Position.x;
+                    float py = transform.ValueRO.Position.y;
+                    float pz = transform.ValueRO.Position.z;
+                    string typeStr = py > 1.5f ? "Wall" : "Floor";
+
+                    // BlueprintManager 규격 (X*10_Z*10_Y*10)
+                    string realId = $"{(int)math.round(px * 10f)}_{(int)math.round(pz * 10f)}_{(int)math.round(py * 10f)}";
+                    csv.AppendLine($"{realId},{px},{py},{pz},{typeStr}");
+                    found = true;
+                }
+            }
+            if (found)
+            {
+                string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+                if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
+                File.WriteAllText(path, csv.ToString());
+                UnityEngine.Debug.Log($"💾 U모드를 위한 수동 건축물(ID:{backupIDToQuery}) 자동 백업 완료!");
+            }
+            backupIDToQuery = -1f;
+        }
+
+        if (isClearREnabled && Input.GetKeyDown(KeyCode.R)) { if (LogManager.Instance != null) LogManager.Instance.OnPressRKey(); isCenterMoved = false; UnityEngine.Debug.Log("🪓 [현장 철거] R키 작동! 건물은 철거되지만 도면은 유지됩니다."); }
 
         bool isBMode = VibrationTestSystem.IsBModeActive; bool isNMode = ShockwaveTestSystem.IsNModeActive;
-        bool isAnySpecialMode = isOMode || isLMode || isYMode;
+        bool isAnySpecialMode = isOMode || isLMode || isYMode || isUMode;
+
+        if (isAimMoveEnabled && !isBMode && !isNMode)
+        {
+            if (Input.GetMouseButtonDown(1))
+            {
+                UnityEngine.Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
+                RaycastInput rayInput = new RaycastInput { Start = ray.origin, End = ray.origin + ray.direction * 500f, Filter = CollisionFilter.Default };
+                if (physicsWorld.CastRay(rayInput, out Unity.Physics.RaycastHit hit))
+                {
+                    customCenterPos = hit.Position;
+                    isCenterMoved = true;
+                }
+            }
+        }
 
         if (!isBMode && !isNMode && !isAnySpecialMode)
         {
-            if (Input.mouseScrollDelta.y != 0f) { builderState.ValueRW.GuideHeight += Input.mouseScrollDelta.y; if (builderState.ValueRW.GuideHeight < 1f) builderState.ValueRW.GuideHeight = 1f; }
+            if (isHeightScrollEnabled && Input.mouseScrollDelta.y != 0f) { builderState.ValueRW.GuideHeight += Input.mouseScrollDelta.y; if (builderState.ValueRW.GuideHeight < 1f) builderState.ValueRW.GuideHeight = 1f; }
             if (Input.GetMouseButtonDown(0)) isCenterMoved = false;
-            if (Input.GetMouseButtonDown(1)) { UnityEngine.Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition); RaycastInput rayInput = new RaycastInput { Start = ray.origin, End = ray.origin + ray.direction * 500f, Filter = CollisionFilter.Default }; if (physicsWorld.CastRay(rayInput, out Unity.Physics.RaycastHit hit)) { customCenterPos = hit.Position; isCenterMoved = true; } }
-            if (Input.GetKeyDown(KeyCode.Alpha1)) builderState.ValueRW.CurrentMode = 1; if (Input.GetKeyDown(KeyCode.Alpha2)) builderState.ValueRW.CurrentMode = 2; if (Input.GetKeyDown(KeyCode.Alpha3)) builderState.ValueRW.CurrentMode = 3; if (Input.GetKeyDown(KeyCode.Alpha4)) builderState.ValueRW.CurrentMode = 4; if (Input.GetKeyDown(KeyCode.Alpha5)) builderState.ValueRW.CurrentMode = 5;
+
+            if (isManualModeEnabled)
+            {
+                if (Input.GetKeyDown(KeyCode.Alpha1)) builderState.ValueRW.CurrentMode = 1;
+                if (Input.GetKeyDown(KeyCode.Alpha2)) builderState.ValueRW.CurrentMode = 2;
+                if (Input.GetKeyDown(KeyCode.Alpha3)) builderState.ValueRW.CurrentMode = 3;
+                if (Input.GetKeyDown(KeyCode.Alpha4)) builderState.ValueRW.CurrentMode = 4;
+                if (Input.GetKeyDown(KeyCode.Alpha5)) builderState.ValueRW.CurrentMode = 5;
+            }
         }
 
         if (Input.GetKeyDown(KeyCode.Return)) { if (LogManager.Instance != null) LogManager.Instance.SaveToMaster(); }
 
         currentBuildMode = (float)builderState.ValueRO.CurrentMode; guideHeight = builderState.ValueRO.GuideHeight; dragStartPos = builderState.ValueRO.GuideStartPos; dragEndPos = builderState.ValueRO.GuideEndPos;
 
-        if ((isOMode || isLMode) && Input.GetKeyDown(KeyCode.G))
+        bool isFKeyPressed = isPreviewFEnabled && !isBMode && !isNMode && Input.GetKeyDown(KeyCode.F);
+        bool isGKeyPressed = isBuildGEnabled && !isBMode && !isNMode && Input.GetKeyDown(KeyCode.G);
+
+        bool isAnyBlueprintMode = isOMode || isLMode || isUMode;
+        bool triggerSpecialGhost = (isAnyBlueprintMode || isYMode) && (isFKeyPressed || (isAimMoveEnabled && Input.GetMouseButtonDown(1)));
+        bool triggerSpecialReal = (isAnyBlueprintMode || isYMode) && isGKeyPressed;
+
+        if (triggerSpecialGhost || triggerSpecialReal)
         {
-            if (ExternalBlueprintData.Count > 0)
+            float countF = isYMode ? (float)blueprintOffsets.Length : (float)ExternalBlueprintData.Count;
+            if (countF > 0f)
             {
                 var ecb = SystemAPI.GetSingleton<BeginSimulationEntityCommandBufferSystem.Singleton>().CreateCommandBuffer(state.WorldUnmanaged);
-                float3 baseCenter = new float3(math.round((customCenterPos.x - 1.5f) / 3.0f) * 3.0f + 1.5f, 0f, math.round((customCenterPos.z - 1.5f) / 3.0f) * 3.0f + 1.5f);
-                var gridMap = new NativeHashMap<int3, Entity>(ExternalBlueprintData.Count, Allocator.Temp);
-                var posMap = new NativeHashMap<Entity, float3>(ExternalBlueprintData.Count, Allocator.Temp);
+                foreach (var (ghostTag, entity) in SystemAPI.Query<RefRO<GhostBlockTag>>().WithEntityAccess()) { ecb.DestroyEntity(entity); }
 
-                foreach (var posOffset in ExternalBlueprintData)
+                float3 baseCenter = new float3(math.round((customCenterPos.x - 1.5f) / 3.0f) * 3.0f + 1.5f, 0f, math.round((customCenterPos.z - 1.5f) / 3.0f) * 3.0f + 1.5f);
+                var gridMap = new NativeHashMap<int3, Entity>((int)countF, Allocator.Temp);
+                var posMap = new NativeHashMap<Entity, float3>((int)countF, Allocator.Temp);
+
+                StringBuilder csv = null;
+                if (triggerSpecialReal)
                 {
+                    csv = new StringBuilder();
+                    csv.AppendLine("ID,X,Y,Z,Type");
+                }
+
+                for (float i = 0f; i < countF; i += 1f)
+                {
+                    float3 posOffset = isYMode ? blueprintOffsets[(int)i] : ExternalBlueprintData[(int)i];
                     float3 finalPos = baseCenter + posOffset;
+
                     var instance = ecb.Instantiate(spawnerData.Prefab);
                     ecb.SetComponent(instance, LocalTransform.FromPositionRotationScale(finalPos, quaternion.identity, 2.95f));
-                    ecb.AddComponent<BlockTag>(instance); ecb.AddComponent<BlockStress>(instance); ecb.AddComponent(instance, new StructureID { Value = (int)nextStructureID }); ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(1f, 1f, 1f, 1f) });
-                    if (finalPos.y <= 2.0f) { PhysicsMass m = SystemAPI.GetComponent<PhysicsMass>(spawnerData.Prefab); m.InverseMass = 0f; m.InverseInertia = float3.zero; ecb.SetComponent(instance, m); }
-                    int3 key = new int3((int)math.floor(finalPos.x / 3f + 0.5f), (int)math.floor(finalPos.y / 3f + 0.5f), (int)math.floor(finalPos.z / 3f + 0.5f));
-                    gridMap.TryAdd(key, instance); posMap.TryAdd(instance, finalPos);
+
+                    if (triggerSpecialGhost)
+                    {
+                        ecb.AddComponent<GhostBlockTag>(instance);
+                        ecb.RemoveComponent<PhysicsCollider>(instance);
+                        ecb.RemoveComponent<PhysicsVelocity>(instance);
+                        ecb.RemoveComponent<PhysicsMass>(instance);
+                        ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(0f, 1f, 1f, 0.5f) });
+                    }
+                    else
+                    {
+                        ecb.AddComponent<BlockTag>(instance);
+                        ecb.AddComponent<BlockStress>(instance);
+                        ecb.AddComponent(instance, new StructureID { Value = (int)nextStructureID });
+                        ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(1f, 1f, 1f, 1f) });
+
+                        if (finalPos.y <= 2.0f) { PhysicsMass m = SystemAPI.GetComponent<PhysicsMass>(spawnerData.Prefab); m.InverseMass = 0f; m.InverseInertia = float3.zero; ecb.SetComponent(instance, m); }
+
+                        int3 key = new int3((int)math.floor(finalPos.x / 3f + 0.5f), (int)math.floor(finalPos.y / 3f + 0.5f), (int)math.floor(finalPos.z / 3f + 0.5f));
+                        gridMap.TryAdd(key, instance);
+                        posMap.TryAdd(instance, finalPos);
+
+                        if (isYMode)
+                        {
+                            var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
+                            if (bpManager != null) { string id = bpManager.VectorToID(new UnityEngine.Vector3(finalPos.x, finalPos.y, finalPos.z)); bpManager.AddReinforcementBlock(id, "Reinforcement", new UnityEngine.Vector3(finalPos.x, finalPos.y, finalPos.z)); }
+                        }
+
+                        // ⭐ 자동 타설 백업 (ID 규격 복구 완료)
+                        if (csv != null)
+                        {
+                            string typeStr = finalPos.y > 1.5f ? "Wall" : "Floor";
+                            string realId = $"{(int)math.round(finalPos.x * 10f)}_{(int)math.round(finalPos.z * 10f)}_{(int)math.round(finalPos.y * 10f)}";
+                            csv.AppendLine($"{realId},{finalPos.x},{finalPos.y},{finalPos.z},{typeStr}");
+                        }
+                    }
                 }
 
-                var keys = gridMap.GetKeyArray(Allocator.Temp);
-                int3[] gridDirs = { new int3(1, 0, 0), new int3(0, 1, 0), new int3(0, 0, 1) };
-                float3[] internalDirs = { math.right(), math.up(), math.forward() };
-
-                foreach (var key in keys)
+                if (triggerSpecialReal)
                 {
-                    Entity cur = gridMap[key]; float3 curPos = posMap[cur];
-                    for (int d = 0; d < 3; d++) { if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor)) CreateIndestructibleJoint(ref ecb, cur, neighbor, internalDirs[d] * 3.0f); }
-                    foreach (var anchorDir in new float3[] { math.up(), math.down() }) { RaycastInput ray = new RaycastInput { Start = curPos, End = curPos + anchorDir * 2.0f, Filter = CollisionFilter.Default }; if (physicsWorld.CastRay(ray, out Unity.Physics.RaycastHit hit)) { if (hit.Entity != Entity.Null && !posMap.ContainsKey(hit.Entity) && SystemAPI.HasComponent<BlockTag>(hit.Entity)) { float3 hitPos = SystemAPI.GetComponent<LocalTransform>(hit.Entity).Position; CreateIndestructibleJoint(ref ecb, hit.Entity, cur, curPos - hitPos); } } }
+                    var keys = gridMap.GetKeyArray(Allocator.Temp);
+                    int3[] gridDirs = { new int3(1, 0, 0), new int3(0, 1, 0), new int3(0, 0, 1) };
+                    float3[] internalDirs = { math.right(), math.up(), math.forward() };
+
+                    foreach (var key in keys)
+                    {
+                        Entity cur = gridMap[key]; float3 curPos = posMap[cur];
+                        for (int d = 0; d < 3; d++) { if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor)) CreateIndestructibleJoint(ref ecb, cur, neighbor, internalDirs[d] * 3.0f); }
+                        foreach (var anchorDir in new float3[] { math.up(), math.down() }) { RaycastInput ray = new RaycastInput { Start = curPos, End = curPos + anchorDir * 2.0f, Filter = CollisionFilter.Default }; if (physicsWorld.CastRay(ray, out Unity.Physics.RaycastHit hit)) { if (hit.Entity != Entity.Null && !posMap.ContainsKey(hit.Entity) && SystemAPI.HasComponent<BlockTag>(hit.Entity)) { float3 hitPos = SystemAPI.GetComponent<LocalTransform>(hit.Entity).Position; CreateIndestructibleJoint(ref ecb, hit.Entity, cur, curPos - hitPos); } } }
+                    }
+                    keys.Dispose();
+
+                    if (isYMode)
+                    {
+                        var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
+                        if (bpManager != null) bpManager.SaveBlueprint();
+                        blueprintOffsets.Clear();
+                        isYMode = false;
+                    }
+                    else
+                    {
+                        ExternalBlueprintData.Clear();
+                        isOMode = false;
+                        isLMode = false;
+                        isUMode = false;
+                    }
+
+                    string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+                    if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
+                    File.WriteAllText(path, csv.ToString());
+
+                    nextStructureID += 1f;
+                    UnityEngine.Debug.Log("🏗️ 타설 완료 및 Last_Building.csv 백업 완료!");
                 }
-                keys.Dispose(); gridMap.Dispose(); posMap.Dispose();
+                gridMap.Dispose(); posMap.Dispose();
+                return;
             }
-            ExternalBlueprintData.Clear(); isOMode = false; isLMode = false; nextStructureID += 1f; return;
         }
 
         if (Input.GetKeyDown(KeyCode.Y)) { loadDelayTimer = 5f; }
@@ -126,29 +268,27 @@ public partial struct SpawnerSystem : ISystem
             loadDelayTimer -= 1f;
             if (loadDelayTimer <= 0f)
             {
-                string planCsvPath = System.IO.Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
-                if (System.IO.File.Exists(planCsvPath))
+                string planCsvPath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
+                if (File.Exists(planCsvPath))
                 {
-                    string[] lines = System.IO.File.ReadAllLines(planCsvPath);
+                    string[] lines = File.ReadAllLines(planCsvPath);
                     float minX = 99999f, minZ = 99999f, maxX = -99999f, maxZ = -99999f;
                     System.Collections.Generic.List<float3> tempList = new System.Collections.Generic.List<float3>();
                     System.Collections.Generic.HashSet<string> loadedIDs = new System.Collections.Generic.HashSet<string>();
 
-                    // i를 int로 유지 (배열 인덱싱)
-                    for (int i = 1; i < lines.Length; i++)
+                    for (float i = 1f; i < (float)lines.Length; i += 1f)
                     {
-                        string[] cols = lines[i].Split(',');
+                        string[] cols = lines[(int)i].Split(',');
 
-                        if (cols.Length >= 5 && (cols[4] == "Reinforcement" || cols[4] == "Existing"))
+                        if (cols.Length >= 5f && (cols[4] == "Reinforcement" || cols[4] == "Existing"))
                         {
                             string[] idParts = cols[0].Split('_');
-                            if (idParts.Length >= 3)
+                            if (idParts.Length >= 3f)
                             {
                                 float px = float.Parse(idParts[0]) / 10f;
                                 float pz = float.Parse(idParts[1]) / 10f;
                                 float py = float.Parse(idParts[2]) / 10f;
 
-                                // ⭐ 1.5 스냅으로 완벽 복구 (반올림 오차 해결)
                                 float x = math.round((px - 1.5f) / 3.0f) * 3.0f + 1.5f;
                                 float z = math.round((pz - 1.5f) / 3.0f) * 3.0f + 1.5f;
                                 float y = math.round((py - 1.5f) / 3.0f) * 3.0f + 1.5f;
@@ -171,7 +311,7 @@ public partial struct SpawnerSystem : ISystem
                         isCenterMoved = true;
 
                         foreach (var pos in tempList) { blueprintOffsets.Add(new float3(pos.x - centerX, pos.y, pos.z - centerZ)); }
-                        UnityEngine.Debug.Log($"🏗️ [스마트 로드 완] {tempList.Count}개 보강 철근 장전! (🎯 자동 에임 고정 완료)");
+                        UnityEngine.Debug.Log($"🏗️ [스마트 로드 완] {tempList.Count}개 보강 철근 장전! 우클릭 에임 이동 및 F키 프리뷰가 지원됩니다.");
                     }
                 }
             }
@@ -179,15 +319,31 @@ public partial struct SpawnerSystem : ISystem
 
         if (isYMode && !isBMode)
         {
-            if (Input.GetKeyDown(KeyCode.Q)) { for (int i = 0; i < blueprintOffsets.Length; i++) { float3 offset = blueprintOffsets[i]; blueprintOffsets[i] = new float3(-offset.z, offset.y, offset.x); } }
-            if (Input.GetKeyDown(KeyCode.E)) { for (int i = 0; i < blueprintOffsets.Length; i++) { float3 offset = blueprintOffsets[i]; blueprintOffsets[i] = new float3(offset.z, offset.y, -offset.x); } }
+            if (Input.GetKeyDown(KeyCode.Q))
+            {
+                for (float i = 0f; i < (float)blueprintOffsets.Length; i += 1f)
+                {
+                    float3 offset = blueprintOffsets[(int)i];
+                    blueprintOffsets[(int)i] = new float3(-offset.z, offset.y, offset.x);
+                }
+                UnityEngine.Debug.Log("🔄 Y도면이 왼쪽[Q]으로 90도 회전했습니다!");
+            }
+            if (Input.GetKeyDown(KeyCode.E))
+            {
+                for (float i = 0f; i < (float)blueprintOffsets.Length; i += 1f)
+                {
+                    float3 offset = blueprintOffsets[(int)i];
+                    blueprintOffsets[(int)i] = new float3(offset.z, offset.y, -offset.x);
+                }
+                UnityEngine.Debug.Log("🔄 Y도면이 오른쪽[E]으로 90도 회전했습니다!");
+            }
         }
 
         float3 defaultCenter = new float3((dragStartPos.x + dragEndPos.x) / 2f, 0f, (dragStartPos.z + dragEndPos.z) / 2f);
         float3 finalCenter = isCenterMoved ? new float3(customCenterPos.x, 0f, customCenterPos.z) : defaultCenter;
         float3 centerOffset = finalCenter - defaultCenter;
         float3 actualStartPos = dragStartPos + centerOffset; float3 actualEndPos = dragEndPos + centerOffset;
-        float blockSize = 3.0f; float snapStart = 1.5f;
+        float blockSize = 3.0f;
 
         actualStartPos.x = (float)System.Math.Round((actualStartPos.x - 1.5f) / blockSize) * blockSize + 1.5f;
         actualStartPos.z = (float)System.Math.Round((actualStartPos.z - 1.5f) / blockSize) * blockSize + 1.5f;
@@ -201,51 +357,6 @@ public partial struct SpawnerSystem : ISystem
         isGuideActive = (math.lengthsq(actualStartPos) > 0.001f || math.lengthsq(actualEndPos) > 0.001f) && actualStartPos.x > -10000f;
         var aiBuilder = UnityEngine.Object.FindFirstObjectByType<AI_Builder>();
         if (aiBuilder != null && aiBuilder.isAiHologramActive) { isGuideActive = false; }
-
-        bool isFKeyPressed = !isBMode && !isNMode && Input.GetKeyDown(KeyCode.F);
-        bool isGKeyPressed = !isBMode && !isNMode && Input.GetKeyDown(KeyCode.G);
-
-        if (isYMode && isGKeyPressed)
-        {
-            float3 baseCenter = new float3((float)System.Math.Round((customCenterPos.x - 1.5f) / 3.0f) * 3.0f + 1.5f, 0f, (float)System.Math.Round((customCenterPos.z - 1.5f) / 3.0f) * 3.0f + 1.5f);
-            var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
-            var ecb = SystemAPI.GetSingleton<BeginSimulationEntityCommandBufferSystem.Singleton>().CreateCommandBuffer(state.WorldUnmanaged);
-            Unity.Collections.NativeHashMap<int3, Entity> gridMap = new Unity.Collections.NativeHashMap<int3, Entity>(blueprintOffsets.Length, Allocator.Temp);
-            Unity.Collections.NativeHashMap<Entity, float3> posMap = new Unity.Collections.NativeHashMap<Entity, float3>(blueprintOffsets.Length, Allocator.Temp);
-
-            foreach (var offset in blueprintOffsets)
-            {
-                float3 pos = new float3(baseCenter.x + offset.x, offset.y, baseCenter.z + offset.z);
-                var instance = ecb.Instantiate(spawnerData.Prefab);
-                ecb.SetComponent(instance, LocalTransform.FromPositionRotationScale(pos, quaternion.identity, blockSize - 0.05f));
-                ecb.AddComponent<BlockTag>(instance); ecb.AddComponent<BlockStress>(instance); ecb.AddComponent(instance, new StructureID { Value = (int)nextStructureID }); ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(1f, 1f, 1f, 1f) });
-                if (pos.y <= 2.0f) { PhysicsMass prefabMass = SystemAPI.GetComponent<PhysicsMass>(spawnerData.Prefab); prefabMass.InverseMass = 0f; prefabMass.InverseInertia = float3.zero; ecb.SetComponent(instance, prefabMass); }
-
-                int3 key = new int3((int)math.floor(pos.x / 3f + 0.5f), (int)math.floor(pos.y / 3f + 0.5f), (int)math.floor(pos.z / 3f + 0.5f));
-                gridMap.TryAdd(key, instance); posMap.TryAdd(instance, pos);
-                if (bpManager != null) { string id = bpManager.VectorToID(new UnityEngine.Vector3(pos.x, pos.y, pos.z)); bpManager.AddReinforcementBlock(id, "Reinforcement", new UnityEngine.Vector3(pos.x, pos.y, pos.z)); }
-            }
-
-            var keys = gridMap.GetKeyArray(Allocator.Temp);
-            float3[] internalDirs = new float3[] { math.right(), math.up(), math.forward() };
-            int3[] gridDirs = new int3[] { new int3(1, 0, 0), new int3(0, 1, 0), new int3(0, 0, 1) };
-
-            foreach (var key in keys)
-            {
-                Entity currentEntity = gridMap[key]; float3 currentPos = posMap[currentEntity];
-                for (int d = 0; d < 3; d++) { if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor)) { CreateIndestructibleJoint(ref ecb, currentEntity, neighbor, internalDirs[d] * blockSize); } }
-                float3[] anchorDirs = new float3[] { math.up(), math.down() };
-                for (int d = 0; d < 2; d++) { RaycastInput ray = new RaycastInput { Start = currentPos, End = currentPos + anchorDirs[d] * 2.0f, Filter = CollisionFilter.Default }; if (physicsWorld.CastRay(ray, out Unity.Physics.RaycastHit hit)) { if (hit.Entity != Entity.Null && !posMap.ContainsKey(hit.Entity) && SystemAPI.HasComponent<BlockTag>(hit.Entity)) { float3 hitPos = SystemAPI.GetComponent<LocalTransform>(hit.Entity).Position; CreateIndestructibleJoint(ref ecb, hit.Entity, currentEntity, currentPos - hitPos); } } }
-            }
-            keys.Dispose(); gridMap.Dispose(); posMap.Dispose(); nextStructureID += 1f;
-            if (bpManager != null) bpManager.SaveBlueprint();
-            isYMode = false; blueprintOffsets.Clear(); isGuideActive = false; return;
-        }
-
-        if (AI_Builder.buildQueue != null && AI_Builder.buildQueue.Count > 0)
-        {
-            var cmd = AI_Builder.buildQueue.Dequeue(); actualStartPos = cmd.startPos; actualEndPos = cmd.endPos; currentBuildMode = (float)cmd.mode; guideHeight = cmd.height; actualStartPos.y = cmd.exactY; actualEndPos.y = cmd.exactY; isGuideActive = true; isGKeyPressed = true; isFKeyPressed = false;
-        }
 
         if (isGuideActive)
         {
@@ -267,7 +378,7 @@ public partial struct SpawnerSystem : ISystem
             float3 startXZ = new float3(actualStartPos.x, 0f, actualStartPos.z); float3 endXZ = new float3(actualEndPos.x, 0f, actualEndPos.z);
             float distance = math.distance(startXZ, endXZ); float halfSize = blockSize / 2f;
 
-            if (math.abs(currentBuildMode - 1f) < 0.01f) { float3 mode1Start = startXZ + new float3(halfSize, 0f, halfSize); float3 mode1End = endXZ + new float3(halfSize, 0f, halfSize); float dist1 = math.distance(mode1Start, mode1End); float3 dir = dist1 < 0.1f ? new float3(1f, 0f, 0f) : math.normalize(mode1End - mode1Start); float steps = math.max(1f, math.round(dist1 / blockSize)); for (int i = 0; i <= (int)steps; i++) { float3 p = mode1Start + dir * (i * (dist1 / math.max(1f, steps))); CheckRay(physicsWorld, p.x, p.z, blockSize, ref highestY, ref hitEntity, ref hitAnything); } }
+            if (math.abs(currentBuildMode - 1f) < 0.01f) { float3 mode1Start = startXZ + new float3(halfSize, 0f, halfSize); float3 mode1End = endXZ + new float3(halfSize, 0f, halfSize); float dist1 = math.distance(mode1Start, mode1End); float3 dir = dist1 < 0.1f ? new float3(1f, 0f, 0f) : math.normalize(mode1End - mode1Start); float steps = math.max(1f, math.round(dist1 / blockSize)); for (float i = 0f; i <= steps; i += 1f) { float3 p = mode1Start + dir * (i * (dist1 / math.max(1f, steps))); CheckRay(physicsWorld, p.x, p.z, blockSize, ref highestY, ref hitEntity, ref hitAnything); } }
             else if (math.abs(currentBuildMode - 2f) < 0.01f || math.abs(currentBuildMode - 4f) < 0.01f) { float minX = math.min(startXZ.x, endXZ.x); float maxX = math.max(startXZ.x, endXZ.x); float minZ = math.min(startXZ.z, endXZ.z); float maxZ = math.max(startXZ.z, endXZ.z); for (float x = minX; x <= maxX + 0.1f; x += blockSize) { for (float z = minZ; z <= maxZ + 0.1f; z += blockSize) { if (math.abs(currentBuildMode - 2f) < 0.01f) { if (x > minX + (blockSize * 0.5f) && x < maxX - (blockSize * 0.5f) && z > minZ + (blockSize * 0.5f) && z < maxZ - (blockSize * 0.5f)) continue; } CheckRay(physicsWorld, x + halfSize, z + halfSize, blockSize, ref highestY, ref hitEntity, ref hitAnything); } } }
             else if (math.abs(currentBuildMode - 3f) < 0.01f || math.abs(currentBuildMode - 5f) < 0.01f) { float radius = distance / 2.0f; float3 center = (startXZ + endXZ) / 2.0f; float baseRadiusCount = math.floor(radius / blockSize); for (float x = -baseRadiusCount; x <= baseRadiusCount; x += 1f) { for (float z = -baseRadiusCount; z <= baseRadiusCount; z += 1f) { if (math.sqrt(x * x + z * z) <= baseRadiusCount + 0.5f) { CheckRay(physicsWorld, center.x + (x * blockSize), center.z + (z * blockSize), blockSize, ref highestY, ref hitEntity, ref hitAnything); } } } }
 
@@ -276,7 +387,12 @@ public partial struct SpawnerSystem : ISystem
                 float finalBuildY = math.round((math.max(highestY, actualStartPos.y) - 1.5f) / 3.0f) * 3.0f + 1.5f;
                 if (LogManager.Instance != null) { string toolName = GetToolName(currentBuildMode); string centerStr = $"[{(actualStartPos.x + actualEndPos.x) / 2f:F1}, {finalBuildY:F1}, {(actualStartPos.z + actualEndPos.z) / 2f:F1}]"; LogManager.Instance.AddLog(toolName, (int)math.round(guideHeight), isGhost ? "Key_F" : "Key_G", isGhost ? "Preview" : "Build", centerStr, 0f, 0f); }
                 ExecuteBuild(ref state, spawnerData, actualStartPos, actualEndPos, finalBuildY, hitEntity, isGhost);
-                if (!isGhost) isGuideActive = false;
+
+                if (!isGhost)
+                {
+                    backupIDToQuery = nextStructureID;
+                    isGuideActive = false;
+                }
             }
         }
     }
