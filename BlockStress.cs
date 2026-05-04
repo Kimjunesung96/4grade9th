@@ -1,8 +1,23 @@
-using Unity.Entities;
+ï»¿using Unity.Entities;
+using Unity.Collections;
 
-// ºí·ÏÀÌ ¹Ş´Â ¹°¸®Àû ºÎÇÏ(½ºÆ®·¹½º)¸¦ ÀúÀåÇÒ ÄÄÆ÷³ÍÆ®
+// ê¸°ì¡´: ë¬¼ë¦¬ ìŠ¤íŠ¸ë ˆìŠ¤ ìˆ˜ì¹˜ ì €ì¥
 public struct BlockStress : IComponentData
 {
-    public float TargetStress;   // ¹°¸® ¿£ÁøÀÌ °è»êÇÑ ÀÌ¹ø ÇÁ·¹ÀÓÀÇ ÁøÂ¥ ºÎÇÏ (³Î¶Ù±â ÇÔ)
-    public float SmoothedStress; // ¼­¼­È÷ º¯ÇÏ´Â ½Ã°¢ È¿°ú¿ë ºÎÇÏ (ºÎµå·¯¿ò)
+    public float TargetStress;
+    public float SmoothedStress;
+}
+
+// â­ ì‹ ê·œ: ì‹­ì¥ë‹˜ íŠ¹ëª…! ì¬ë£Œë³„ ì²´ë ¥ê³¼ 3ëŒ€ ë°©ì–´ë ¥ ì¶”ê°€!
+public struct BlockHealth : IComponentData
+{
+    public float MaxHP;
+    public float CurrentHP;
+    public float Defense; // ì••ì¶•/ì¸ì¥/ì „ë‹¨ ì¢…í•© ë°©ì–´ë ¥ (ì´ê±¸ ëª» ë„˜ìœ¼ë©´ ì•ˆ ë¶€ì„œì§!)
+}
+
+// â­ ì‹ ê·œ: ì—‘ì…€ì—ì„œ ë°›ì•„ì˜¨ ì¬ì§ˆ ì´ë¦„í‘œ (ì˜ˆ: "Concrete_Wall")
+public struct BlockMaterial : IComponentData
+{
+    public FixedString32Bytes MaterialName;
 }
