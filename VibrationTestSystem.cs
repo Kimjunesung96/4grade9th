@@ -167,8 +167,10 @@ public partial struct VibrationTestSystem : ISystem
                 var ecb = new EntityCommandBuffer(Allocator.Temp);
                 NativeList<float3> finalPositions = new NativeList<float3>(Allocator.Temp);
                 NativeList<float> finalStresses = new NativeList<float>(Allocator.Temp);
+                NativeList<float> finalDefenses = new NativeList<float>(Allocator.Temp); // ⭐ 방어력 수집 통 추가!
 
-                foreach (var (transform, tracker, velocity, color, entity) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<VibrationTracker>, RefRW<PhysicsVelocity>, RefRW<URPMaterialPropertyBaseColor>>().WithAll<BlockTag>().WithEntityAccess())
+                // ⭐ Query에 BlockHealth 추가!
+                foreach (var (transform, tracker, velocity, color, health, entity) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<VibrationTracker>, RefRW<PhysicsVelocity>, RefRW<URPMaterialPropertyBaseColor>, RefRO<BlockHealth>>().WithAll<BlockTag>().WithEntityAccess())
                 {
                     // 1. 완벽한 원위치 복구
                     transform.ValueRW.Position = tracker.ValueRO.OriginalPos;
@@ -178,26 +180,32 @@ public partial struct VibrationTestSystem : ISystem
                     velocity.ValueRW.Linear = float3.zero;
                     velocity.ValueRW.Angular = float3.zero;
 
-                    // ⭐ 3. 5초가 다 끝난 지금 이 순간에만! 최대 흔들림 수치에 따른 최종 도색!
+                    // 3. 진짜 방어력(Defense) 대비 흔들림(MaxDisp) 계산!
                     float maxDisp = tracker.ValueRO.MaxDisplacement;
+                    float blockDefense = health.ValueRO.Defense;
+                    float riskRatio = maxDisp / blockDefense;
+
                     float4 newColor = new float4(1, 1, 1, 1);
 
-                    if (maxDisp >= 2.0f) newColor = new float4(1, 0, 0, 1); // 2.0 이상: 위험 (빨강)
-                    else if (maxDisp >= 0.5f) newColor = new float4(1, 1, 0, 1); // 0.5 이상: 경고 (노랑)
+                    // 방어력의 80%를 넘으면 빨강(Danger), 50%를 넘으면 노랑(Warning)
+                    if (riskRatio >= 0.8f) newColor = new float4(1, 0, 0, 1);
+                    else if (riskRatio >= 0.5f) newColor = new float4(1, 1, 0, 1);
 
                     color.ValueRW.Value = newColor;
 
                     finalPositions.Add(tracker.ValueRO.OriginalPos);
                     finalStresses.Add(maxDisp);
+                    finalDefenses.Add(blockDefense); // ⭐ 방어력도 같이 넘겨서 엑셀에 적게 만듦!
 
                     ecb.RemoveComponent<VibrationTracker>(entity); // 검사 끝났으니 센서 뗌
                 }
 
-                // 4. 이중 엑셀 저장 실행!
-                SaveVibrationExcel(finalPositions, finalStresses);
+                // 4. 이중 엑셀 저장 실행! (방어력 데이터까지 같이 보냄)
+                SaveVibrationExcel(finalPositions, finalStresses, finalDefenses);
 
                 finalPositions.Dispose();
                 finalStresses.Dispose();
+                finalDefenses.Dispose();
                 ecb.Playback(state.EntityManager);
                 ecb.Dispose();
             }
@@ -207,7 +215,7 @@ public partial struct VibrationTestSystem : ISystem
     // =========================================================
     // 💾 엑셀 자동 폴더 생성 및 이중 저장 시스템
     // =========================================================
-    private void SaveVibrationExcel(NativeList<float3> positions, NativeList<float> stresses)
+    private void SaveVibrationExcel(NativeList<float3> positions, NativeList<float> stresses, NativeList<float> defenses)
     {
         string timeStamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
 
@@ -222,27 +230,33 @@ public partial struct VibrationTestSystem : ISystem
         string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
 
         System.Collections.Generic.List<string> lines = new System.Collections.Generic.List<string>();
-        lines.Add("BlockID,PosX,PosY,PosZ,WEIGHT_Stress,RiskLevel,Prescription");
+        lines.Add("BlockID,PosX,PosY,PosZ,SHAKE_Stress,RiskLevel,Prescription");
 
         for (int i = 0; i < positions.Length; i++)
         {
             float3 pos = positions[i];
             float stress = stresses[i];
+            float defense = defenses[i];
+            float riskRatio = stress / defense; // ⭐ 비율 계산!
 
-            int ix = (int)math.round(pos.x * 10f);
-            int iy = (int)math.round(pos.y * 10f);
-            int iz = (int)math.round(pos.z * 10f);
+            // ⭐ 1원칙: 스냅은 무조건 ID로! (StressVis와 완벽하게 동일한 포맷 유지)
+            // ⭐ 2원칙: 모든 수치는 Float!
+            float ix = math.round(pos.x * 10f);
+            float iz = math.round(pos.z * 10f);
+            float iy = math.round(pos.y * 10f);
 
-            string signX = ix < 0 ? "-" : "0";
-            string signZ = iz < 0 ? "-" : "0";
-            string signY = iy < 0 ? "-" : "0";
+            string strX = $"{(ix < 0f ? "-" : "0")}{math.abs(ix):000}";
+            string strZ = $"{(iz < 0f ? "-" : "0")}{math.abs(iz):000}";
+            string strY = $"{(iy < 0f ? "-" : "0")}{math.abs(iy):000}";
 
-            string id = $"{signX}{math.abs(ix):000}_{signZ}{math.abs(iz):000}_{signY}{math.abs(iy):000}";
+            string id = $"{strX}_{strZ}_{strY}";
 
-            string risk = "Safe";
+            string risk = "SAFE";
             string pres = "N";
-            if (stress >= 2.0f) { risk = "Danger"; pres = "Y"; }
-            else if (stress >= 0.5f) { risk = "Warning"; pres = "N"; }
+
+            // 80% 넘으면 붕괴위험, 50% 넘으면 주의
+            if (riskRatio >= 0.8f) { risk = "DANGER"; pres = "Y"; }
+            else if (riskRatio >= 0.5f) { risk = "WARNING"; pres = "U"; }
 
             lines.Add($"{id},{pos.x:F2},{pos.y:F2},{pos.z:F2},{stress:F2},{risk},{pres}");
         }
