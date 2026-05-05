@@ -78,35 +78,66 @@ public partial struct ShockwaveTestSystem : ISystem
             }
             if (shockTimer <= 0f)
             {
-                isShocking = false; var ecb = new EntityCommandBuffer(Allocator.Temp); NativeList<float3> finalPos = new NativeList<float3>(Allocator.Temp); NativeList<float> finalStresses = new NativeList<float>(Allocator.Temp);
-                foreach (var (tr, tracker, vel, color, ent) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<ShockTracker>, RefRW<PhysicsVelocity>, RefRW<URPMaterialPropertyBaseColor>>().WithAll<BlockTag>().WithEntityAccess())
+                isShocking = false; var ecb = new EntityCommandBuffer(Allocator.Temp);
+                NativeList<float3> finalPos = new NativeList<float3>(Allocator.Temp);
+                NativeList<float> finalStresses = new NativeList<float>(Allocator.Temp);
+                NativeList<float> finalDefenses = new NativeList<float>(Allocator.Temp); // ⭐ 추가!
+
+                // ⭐ Query에 BlockHealth 추가!
+                foreach (var (tr, tracker, vel, color, health, ent) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<ShockTracker>, RefRW<PhysicsVelocity>, RefRW<URPMaterialPropertyBaseColor>, RefRO<BlockHealth>>().WithAll<BlockTag>().WithEntityAccess())
                 {
                     tr.ValueRW.Position = tracker.ValueRO.OriginalPos; tr.ValueRW.Rotation = tracker.ValueRO.OriginalRot; vel.ValueRW.Linear = float3.zero; vel.ValueRW.Angular = float3.zero;
-                    float maxDisp = tracker.ValueRO.MaxDisplacement; float4 newCol = new float4(1, 1, 1, 1);
-                    if (maxDisp >= 5.0f) newCol = new float4(0.2f, 0.2f, 0.2f, 1); else if (maxDisp >= 2.0f) newCol = new float4(1, 0, 0, 1); else if (maxDisp >= 0.5f) newCol = new float4(1, 1, 0, 1);
-                    color.ValueRW.Value = newCol; finalPos.Add(tracker.ValueRO.OriginalPos); finalStresses.Add(maxDisp); ecb.RemoveComponent<ShockTracker>(ent);
+
+                    float maxDisp = tracker.ValueRO.MaxDisplacement;
+                    float blockDefense = health.ValueRO.Defense;
+                    float riskRatio = maxDisp / blockDefense;
+
+                    float4 newCol = new float4(1, 1, 1, 1);
+                    if (riskRatio >= 0.8f) newCol = new float4(1, 0, 0, 1);
+                    else if (riskRatio >= 0.5f) newCol = new float4(1, 1, 0, 1);
+
+                    color.ValueRW.Value = newCol;
+                    finalPos.Add(tracker.ValueRO.OriginalPos);
+                    finalStresses.Add(maxDisp);
+                    finalDefenses.Add(blockDefense); // ⭐ 같이 보냄!
+
+                    ecb.RemoveComponent<ShockTracker>(ent);
                 }
-                SaveShockwaveExcel(finalPos, finalStresses); finalPos.Dispose(); finalStresses.Dispose(); ecb.Playback(state.EntityManager); ecb.Dispose();
+                SaveShockwaveExcel(finalPos, finalStresses, finalDefenses);
+                finalPos.Dispose(); finalStresses.Dispose(); finalDefenses.Dispose();
+                ecb.Playback(state.EntityManager); ecb.Dispose();
             }
         }
     }
 
-    private void SaveShockwaveExcel(NativeList<float3> positions, NativeList<float> stresses)
+    private void SaveShockwaveExcel(NativeList<float3> positions, NativeList<float> stresses, NativeList<float> defenses)
     {
         string timeStamp = DateTime.Now.ToString("yyyyMMdd_HHmmss"); string shockDir = Path.Combine(Application.dataPath, "StressBlock", "shockwave"); if (!Directory.Exists(shockDir)) Directory.CreateDirectory(shockDir);
         string historyPath = Path.Combine(shockDir, $"Shockwave_All_{timeStamp}.csv"); string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
-        System.Collections.Generic.List<string> lines = new System.Collections.Generic.List<string>(); lines.Add("BlockID,PosX,PosY,PosZ,WEIGHT_Stress,RiskLevel,Prescription");
+        System.Collections.Generic.List<string> lines = new System.Collections.Generic.List<string>(); lines.Add("BlockID,PosX,PosY,PosZ,SHOCK_Stress,RiskLevel,Prescription");
 
         for (int i = 0; i < positions.Length; i++)
         {
-            float3 pos = positions[i]; float stress = stresses[i];
+            float3 pos = positions[i];
+            float stress = stresses[i];
+            float defense = defenses[i];
+            float riskRatio = stress / defense;
 
-            // ⭐ 모든 수학 장난 제거: 오직 10배수 정답만 남김!
-            float ix = math.round(pos.x * 10f); float iz = math.round(pos.z * 10f); float iy = math.round(pos.y * 10f);
-            string strX = $"{(ix < 0 ? "-" : "0")}{math.abs(ix):000}"; string strZ = $"{(iz < 0 ? "-" : "0")}{math.abs(iz):000}"; string strY = $"{(iy < 0 ? "-" : "0")}{math.abs(iy):000}";
+            // ⭐ 1원칙, 2원칙 완벽 적용!
+            float ix = math.round(pos.x * 10f);
+            float iz = math.round(pos.z * 10f);
+            float iy = math.round(pos.y * 10f);
+
+            string strX = $"{(ix < 0f ? "-" : "0")}{math.abs(ix):000}";
+            string strZ = $"{(iz < 0f ? "-" : "0")}{math.abs(iz):000}";
+            string strY = $"{(iy < 0f ? "-" : "0")}{math.abs(iy):000}";
 
             string id = $"{strX}_{strZ}_{strY}";
-            string risk = stress >= 2.0f ? "Danger" : (stress >= 0.5f ? "Warning" : "Safe"); string pres = stress >= 2.0f ? "Y" : "N";
+
+            string risk = "SAFE"; string pres = "N";
+            if (riskRatio >= 0.8f) { risk = "DANGER"; pres = "Y"; }
+            else if (riskRatio >= 0.5f) { risk = "WARNING"; pres = "U"; }
+
             lines.Add($"{id},{pos.x:F2},{pos.y:F2},{pos.z:F2},{stress:F2},{risk},{pres}");
         }
         File.WriteAllLines(historyPath, lines); File.WriteAllLines(currentPath, lines);
