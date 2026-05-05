@@ -120,7 +120,7 @@ public partial struct StressVisualizationSystem : ISystem
         if (needsColorUpdate)
         {
             state.Dependency.Complete();
-            string reportType = isWeightScanMode ? "WEIGHT" : "SHAKE"; string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            float yieldLimit = isWeightScanMode ? 5.0f : 8.0f; string reportType = isWeightScanMode ? "WEIGHT" : "SHAKE"; string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
             string mainDir = Path.Combine(Application.dataPath, "StressBlock"); string allDir = Path.Combine(mainDir, "All"); string dangerDir = Path.Combine(mainDir, "danger");
             if (!Directory.Exists(mainDir)) Directory.CreateDirectory(mainDir); if (!Directory.Exists(allDir)) Directory.CreateDirectory(allDir); if (!Directory.Exists(dangerDir)) Directory.CreateDirectory(dangerDir);
             string currentStressPath = Path.Combine(mainDir, "CurrentStress.csv"); string allFilePath = Path.Combine(allDir, $"{reportType}_All_{timestamp}.csv"); string stressFilePath = Path.Combine(dangerDir, $"{reportType}_StressOnly_{timestamp}.csv");
@@ -130,30 +130,21 @@ public partial struct StressVisualizationSystem : ISystem
                 string header = $"BlockID,PosX,PosY,PosZ,{reportType}_Stress,RiskLevel,Prescription";
                 allWriter.WriteLine(header); stressWriter.WriteLine(header); currentWriter.WriteLine(header);
 
-                // ⭐ Query에 BlockHealth를 추가하여 블록의 진짜 방어력을 같이 가져옵니다!
-                foreach (var (stress, color, originalPos, health) in SystemAPI.Query<RefRO<BlockStress>, RefRW<URPMaterialPropertyBaseColor>, RefRO<OriginalPosition>, RefRO<BlockHealth>>().WithAll<BlockTag>())
+                foreach (var (stress, color, originalPos) in SystemAPI.Query<RefRO<BlockStress>, RefRW<URPMaterialPropertyBaseColor>, RefRO<OriginalPosition>>())
                 {
                     float3 perfectPos = originalPos.ValueRO.Value;
-                    float currentStress = stress.ValueRO.SmoothedStress;
-
-                    // ⭐ 하드코딩된 값 대신 엑셀에서 가져온 해당 블록의 진짜 방어력(Defense) 사용!
-                    float blockDefense = health.ValueRO.Defense;
-
-                    // 방어력 대비 현재 스트레스의 비율을 계산 (0.0 ~ 1.0)
-                    float t = math.clamp(currentStress / blockDefense, 0f, 1f);
-
+                    float currentStress = stress.ValueRO.SmoothedStress; float t = math.clamp(currentStress / yieldLimit, 0f, 1f);
                     if (isWeightScanMode) color.ValueRW.Value = new float4(1f, 1f - t, 1f - t, 1f); else color.ValueRW.Value = new float4(1f, 1f - t, 1f, 1f);
                     string risk = t >= 0.8f ? "DANGER" : (t >= 0.5f ? "WARNING" : "SAFE"); string prescription = risk == "DANGER" ? "Y" : (risk == "WARNING" ? "U" : "");
 
-                    // ⭐ 1원칙: 스냅은 무조건 ID로 잡는다! (X_Z_Y 포맷 절대 유지)
-                    // ⭐ 2원칙: 모든 엑셀 데이터는 Float(f)로 계산 및 기입!
+                    // ⭐ 모든 수학 장난 제거: 오직 10배수 정답만 남김!
                     float ix = math.round(perfectPos.x * 10f);
                     float iz = math.round(perfectPos.z * 10f);
                     float iy = math.round(perfectPos.y * 10f);
 
-                    string strX = $"{(ix < 0f ? "-" : "0")}{math.abs(ix):000}";
-                    string strZ = $"{(iz < 0f ? "-" : "0")}{math.abs(iz):000}";
-                    string strY = $"{(iy < 0f ? "-" : "0")}{math.abs(iy):000}";
+                    string strX = $"{(ix < 0 ? "-" : "0")}{math.abs(ix):000}";
+                    string strZ = $"{(iz < 0 ? "-" : "0")}{math.abs(iz):000}";
+                    string strY = $"{(iy < 0 ? "-" : "0")}{math.abs(iy):000}";
 
                     string blockID = $"{strX}_{strZ}_{strY}";
                     string lineData = $"{blockID},{perfectPos.x:F2},{perfectPos.y:F2},{perfectPos.z:F2},{currentStress:F2},{risk},{prescription}";
