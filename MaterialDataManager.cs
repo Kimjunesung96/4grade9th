@@ -15,7 +15,6 @@ public class MaterialDataManager : MonoBehaviour
         public Color Color;
     }
 
-    // 엑셀에서 읽어온 단가표를 기억하는 딕셔너리
     public Dictionary<string, MaterialSpec> MaterialDict = new Dictionary<string, MaterialSpec>();
 
     void Awake()
@@ -30,15 +29,12 @@ public class MaterialDataManager : MonoBehaviour
     {
         string path = Path.Combine(Application.dataPath, "StressBlock", "Material_Specs.csv");
 
-        // 엑셀 단가표가 없으면 현장 디폴트 값으로 하나 찍어냅니다.
         if (!File.Exists(path))
         {
             string[] defaultSpecs = {
                 "MaterialName,Density,Defense,BaseHP,R,G,B",
-                // ⭐ Default: 질량 10(밀도 0.37), 방어력 4, 체력 999999(무한)
                 "Default,0.37,4,999999,1.0,1.0,1.0",
                 "Concrete,2.4,400,1000,0.7,0.7,0.7",
-                // ⭐ 신규 자재: 철근 콘크리트 추가! (조금 더 짙은 회색)
                 "Reinforced_Concrete,2.5,500,1500,0.5,0.5,0.5",
                 "Steel,7.8,600,2000,0.3,0.3,0.4",
                 "Wood,0.6,80,300,0.6,0.4,0.2",
