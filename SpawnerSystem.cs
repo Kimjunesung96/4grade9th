@@ -38,7 +38,8 @@ public partial struct SpawnerSystem : ISystem
     private float3 customCenterPos;
     private NativeList<BlobAssetReference<Unity.Physics.Collider>> _createdColliders;
     private bool isYMode;
-    private NativeList<float3> blueprintOffsets;
+
+    private NativeList<float4> blueprintOffsets;
     private float loadDelayTimer;
 
     private string GetToolName(float mode)
@@ -56,7 +57,8 @@ public partial struct SpawnerSystem : ISystem
         currentBuildMode = 1f; guideHeight = 1f; isGuideActive = false; nextStructureID = 1f;
         isCenterMoved = false; customCenterPos = float3.zero;
         _createdColliders = new NativeList<BlobAssetReference<Unity.Physics.Collider>>(Allocator.Persistent);
-        isYMode = false; blueprintOffsets = new NativeList<float3>(Allocator.Persistent);
+        isYMode = false;
+        blueprintOffsets = new NativeList<float4>(Allocator.Persistent);
         loadDelayTimer = 0f; isOMode = false; isLMode = false; isUMode = false; backupIDToQuery = -1f;
     }
 
@@ -80,34 +82,37 @@ public partial struct SpawnerSystem : ISystem
 
         PhysicsWorld physicsWorld = physicsSingleton.PhysicsWorld;
 
-        // ⭐ 수동 타설 백업 로직
+        // =====================================================================
+        // ⭐ 수동 타설 백업 로직 (십장님 호통 반영: 고양이 전체를 복사하라!)
+        // =====================================================================
         if (backupIDToQuery > -1f)
         {
             StringBuilder csv = new StringBuilder();
             csv.AppendLine("ID,X,Y,Z,Type");
             bool found = false;
-            foreach (var (transform, id) in SystemAPI.Query<RefRO<LocalTransform>, RefRO<StructureID>>().WithAll<BlockTag>())
-            {
-                if (math.abs(id.ValueRO.Value - backupIDToQuery) < 0.01f)
-                {
-                    float px = transform.ValueRO.Position.x;
-                    float py = transform.ValueRO.Position.y;
-                    float pz = transform.ValueRO.Position.z;
-                    string typeStr = py > 1.5f ? "Wall" : "Floor";
 
-                    string realId = $"{(int)math.round(px * 10f)}_{(int)math.round(pz * 10f)}_{(int)math.round(py * 10f)}";
-                    csv.AppendLine($"{realId},{px},{py},{pz},{typeStr}");
-                    found = true;
-                }
+            // ❌ 기존의 멍청했던 '마지막 번호(StructureID)만 찾기' 조건문 삭제!
+            // ✅ 현장에 지어진 '모든 블록(고양이 몸통, 머리, 귀 전부)'을 한 번에 싹 다 긁어모아 저장합니다.
+            foreach (var transform in SystemAPI.Query<RefRO<LocalTransform>>().WithAll<BlockTag>())
+            {
+                float px = transform.ValueRO.Position.x;
+                float py = transform.ValueRO.Position.y;
+                float pz = transform.ValueRO.Position.z;
+                string typeStr = py > 1.5f ? "Wall" : "Floor";
+
+                string realId = $"{(int)math.round(px * 10f)}_{(int)math.round(pz * 10f)}_{(int)math.round(py * 10f)}";
+                csv.AppendLine($"{realId},{px},{py},{pz},{typeStr}");
+                found = true;
             }
+
             if (found)
             {
                 string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
                 if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
                 File.WriteAllText(path, csv.ToString());
-                UnityEngine.Debug.Log($"💾 U모드를 위한 수동 건축물(ID:{backupIDToQuery}) 자동 백업 완료!");
+                UnityEngine.Debug.Log($"💾 [U모드 스냅샷] 고양이 귀만이 아닌, 현장의 전체 건축물 통째로 백업 완료!");
             }
-            backupIDToQuery = -1f;
+            backupIDToQuery = -1f; // 백업 완료 후 스위치 초기화
         }
 
         if (isClearREnabled && Input.GetKeyDown(KeyCode.R)) { if (LogManager.Instance != null) LogManager.Instance.OnPressRKey(); isCenterMoved = false; UnityEngine.Debug.Log("🪓 [현장 철거] R키 작동! 건물은 철거되지만 도면은 유지됩니다."); }
@@ -155,9 +160,6 @@ public partial struct SpawnerSystem : ISystem
         bool triggerSpecialGhost = (isAnyBlueprintMode || isYMode) && (isFKeyPressed || (isAimMoveEnabled && Input.GetMouseButtonDown(1)));
         bool triggerSpecialReal = (isAnyBlueprintMode || isYMode) && isGKeyPressed;
 
-        // =========================================================================
-        // ⭐ 특수 타설 로직 (Y키 보강, O/U 복층 도면 등)
-        // =========================================================================
         if (triggerSpecialGhost || triggerSpecialReal)
         {
             float countF = isYMode ? (float)blueprintOffsets.Length : (float)ExternalBlueprintData.Count;
@@ -170,11 +172,22 @@ public partial struct SpawnerSystem : ISystem
                 var gridMap = new NativeHashMap<int3, Entity>((int)countF, Allocator.Temp);
                 var posMap = new NativeHashMap<Entity, float3>((int)countF, Allocator.Temp);
 
-                // ❌ 잘못된 수동 건물 덮어쓰기 방지용 CSV StringBuilder 삭제됨!
-
-                for (float i = 0f; i < countF; i += 1f)
+                for (int i = 0; i < (int)countF; i++)
                 {
-                    float3 posOffset = isYMode ? blueprintOffsets[(int)i] : ExternalBlueprintData[(int)i];
+                    float3 posOffset;
+                    bool isReinforceBlock = false;
+
+                    if (isYMode)
+                    {
+                        float4 data = blueprintOffsets[i];
+                        posOffset = new float3(data.x, data.y, data.z);
+                        isReinforceBlock = data.w > 0.5f;
+                    }
+                    else
+                    {
+                        posOffset = ExternalBlueprintData[i];
+                    }
+
                     float3 finalPos = baseCenter + posOffset;
 
                     var instance = ecb.Instantiate(spawnerData.Prefab);
@@ -186,14 +199,28 @@ public partial struct SpawnerSystem : ISystem
                         ecb.RemoveComponent<PhysicsCollider>(instance);
                         ecb.RemoveComponent<PhysicsVelocity>(instance);
                         ecb.RemoveComponent<PhysicsMass>(instance);
-                        ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(0f, 1f, 1f, 0.5f) });
+
+                        float4 ghostColor = isReinforceBlock ? new float4(0.2f, 0.4f, 1.0f, 0.8f) : new float4(0.7f, 0.7f, 0.7f, 0.4f);
+                        ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = ghostColor });
                     }
                     else
                     {
                         ecb.AddComponent<BlockTag>(instance);
                         ecb.AddComponent<BlockStress>(instance);
                         ecb.AddComponent(instance, new StructureID { Value = (int)nextStructureID });
-                        ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(1f, 1f, 1f, 1f) });
+
+                        if (isReinforceBlock)
+                        {
+                            ecb.AddComponent(instance, new BlockMaterial { MaterialName = "Steel" });
+                            ecb.AddComponent(instance, new BlockHealth { MaxHP = 2000f, CurrentHP = 2000f, Defense = 600f });
+                            ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(0.2f, 0.5f, 1.0f, 1f) });
+                        }
+                        else
+                        {
+                            ecb.AddComponent(instance, new BlockMaterial { MaterialName = "Concrete" });
+                            ecb.AddComponent(instance, new BlockHealth { MaxHP = 1000f, CurrentHP = 1000f, Defense = 400f });
+                            ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(0.7f, 0.7f, 0.7f, 1f) });
+                        }
 
                         if (finalPos.y <= 2.0f) { PhysicsMass m = SystemAPI.GetComponent<PhysicsMass>(spawnerData.Prefab); m.InverseMass = 0f; m.InverseInertia = float3.zero; ecb.SetComponent(instance, m); }
 
@@ -229,7 +256,7 @@ public partial struct SpawnerSystem : ISystem
                         if (bpManager != null) bpManager.SaveBlueprint();
                         blueprintOffsets.Clear();
                         isYMode = false;
-                        UnityEngine.Debug.Log("🏗️ [보강 공사] Y도면 보강 철근 타설 완료!"); // ⭐ 로그 분리
+                        UnityEngine.Debug.Log("🏗️ [보강 공사] 튼튼하게 기존 건물과 보강 철근이 융합되었습니다!");
                     }
                     else
                     {
@@ -237,10 +264,8 @@ public partial struct SpawnerSystem : ISystem
                         isOMode = false;
                         isLMode = false;
                         isUMode = false;
-                        UnityEngine.Debug.Log("🏗️ [도면 공사] O/U 복층 도면 타설 완료!"); // ⭐ 로그 분리
+                        UnityEngine.Debug.Log("🏗️ [도면 공사] O/U 복층 도면 타설 완료!");
                     }
-
-                    // ❌ 억지로 Last_Building.csv를 덮어쓰던 File.WriteAllText 로직 영구 철거됨!
 
                     nextStructureID += 1f;
                 }
@@ -260,7 +285,8 @@ public partial struct SpawnerSystem : ISystem
                 {
                     string[] lines = File.ReadAllLines(planCsvPath);
                     float minX = 99999f, minZ = 99999f, maxX = -99999f, maxZ = -99999f;
-                    System.Collections.Generic.List<float3> tempList = new System.Collections.Generic.List<float3>();
+
+                    System.Collections.Generic.List<float4> tempList = new System.Collections.Generic.List<float4>();
                     System.Collections.Generic.HashSet<string> loadedIDs = new System.Collections.Generic.HashSet<string>();
 
                     for (float i = 1f; i < (float)lines.Length; i += 1f)
@@ -283,7 +309,10 @@ public partial struct SpawnerSystem : ISystem
                                 string uniqueKey = $"{x}_{y}_{z}";
                                 if (loadedIDs.Contains(uniqueKey)) continue;
 
-                                tempList.Add(new float3(x, y, z)); loadedIDs.Add(uniqueKey);
+                                float isReinforce = cols[4] == "Reinforcement" ? 1f : 0f;
+                                tempList.Add(new float4(x, y, z, isReinforce));
+                                loadedIDs.Add(uniqueKey);
+
                                 if (x < minX) minX = x; if (x > maxX) maxX = x; if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
                             }
                         }
@@ -297,8 +326,8 @@ public partial struct SpawnerSystem : ISystem
                         customCenterPos = new float3(centerX, 0f, centerZ);
                         isCenterMoved = true;
 
-                        foreach (var pos in tempList) { blueprintOffsets.Add(new float3(pos.x - centerX, pos.y, pos.z - centerZ)); }
-                        UnityEngine.Debug.Log($"🏗️ [스마트 로드 완] {tempList.Count}개 보강 철근 장전! 우클릭 에임 이동 및 F키 프리뷰가 지원됩니다.");
+                        foreach (var pos in tempList) { blueprintOffsets.Add(new float4(pos.x - centerX, pos.y, pos.z - centerZ, pos.w)); }
+                        UnityEngine.Debug.Log($"🏗️ [스마트 로드 완] {tempList.Count}개의 구조물이 도면에 장전되었습니다! F키로 확인해 보세요.");
                     }
                 }
             }
@@ -308,19 +337,19 @@ public partial struct SpawnerSystem : ISystem
         {
             if (Input.GetKeyDown(KeyCode.Q))
             {
-                for (float i = 0f; i < (float)blueprintOffsets.Length; i += 1f)
+                for (int i = 0; i < blueprintOffsets.Length; i++)
                 {
-                    float3 offset = blueprintOffsets[(int)i];
-                    blueprintOffsets[(int)i] = new float3(-offset.z, offset.y, offset.x);
+                    float4 offset = blueprintOffsets[i];
+                    blueprintOffsets[i] = new float4(-offset.z, offset.y, offset.x, offset.w);
                 }
                 UnityEngine.Debug.Log("🔄 Y도면이 왼쪽[Q]으로 90도 회전했습니다!");
             }
             if (Input.GetKeyDown(KeyCode.E))
             {
-                for (float i = 0f; i < (float)blueprintOffsets.Length; i += 1f)
+                for (int i = 0; i < blueprintOffsets.Length; i++)
                 {
-                    float3 offset = blueprintOffsets[(int)i];
-                    blueprintOffsets[(int)i] = new float3(offset.z, offset.y, -offset.x);
+                    float4 offset = blueprintOffsets[i];
+                    blueprintOffsets[i] = new float4(offset.z, offset.y, -offset.x, offset.w);
                 }
                 UnityEngine.Debug.Log("🔄 Y도면이 오른쪽[E]으로 90도 회전했습니다!");
             }
@@ -377,7 +406,7 @@ public partial struct SpawnerSystem : ISystem
 
                 if (!isGhost)
                 {
-                    backupIDToQuery = nextStructureID;
+                    backupIDToQuery = 1f; // 이제 이 변수는 그냥 '트리거' 역할만 합니다. 1이든 10이든 상관없습니다.
                     isGuideActive = false;
                 }
             }
