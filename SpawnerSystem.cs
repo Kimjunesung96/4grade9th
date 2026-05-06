@@ -73,7 +73,6 @@ public partial struct SpawnerSystem : ISystem
         var builderState = SystemAPI.GetSingletonRW<BuilderStateData>();
         if (!SystemAPI.TryGetSingleton<PhysicsWorldSingleton>(out var physicsSingleton)) return;
 
-        // ⭐ 잃어버렸던 재료(프리팹) 조달 로직 복구
         SpawnerData spawnerData = default;
         bool hasSpawner = false;
         foreach (var data in SystemAPI.Query<RefRO<SpawnerData>>()) { spawnerData = data.ValueRO; hasSpawner = true; break; }
@@ -81,7 +80,7 @@ public partial struct SpawnerSystem : ISystem
 
         PhysicsWorld physicsWorld = physicsSingleton.PhysicsWorld;
 
-        // ⭐ 수동 타설 백업 로직 (ID 규격 복구 완료)
+        // ⭐ 수동 타설 백업 로직
         if (backupIDToQuery > -1f)
         {
             StringBuilder csv = new StringBuilder();
@@ -96,7 +95,6 @@ public partial struct SpawnerSystem : ISystem
                     float pz = transform.ValueRO.Position.z;
                     string typeStr = py > 1.5f ? "Wall" : "Floor";
 
-                    // BlueprintManager 규격 (X*10_Z*10_Y*10)
                     string realId = $"{(int)math.round(px * 10f)}_{(int)math.round(pz * 10f)}_{(int)math.round(py * 10f)}";
                     csv.AppendLine($"{realId},{px},{py},{pz},{typeStr}");
                     found = true;
@@ -157,6 +155,9 @@ public partial struct SpawnerSystem : ISystem
         bool triggerSpecialGhost = (isAnyBlueprintMode || isYMode) && (isFKeyPressed || (isAimMoveEnabled && Input.GetMouseButtonDown(1)));
         bool triggerSpecialReal = (isAnyBlueprintMode || isYMode) && isGKeyPressed;
 
+        // =========================================================================
+        // ⭐ 특수 타설 로직 (Y키 보강, O/U 복층 도면 등)
+        // =========================================================================
         if (triggerSpecialGhost || triggerSpecialReal)
         {
             float countF = isYMode ? (float)blueprintOffsets.Length : (float)ExternalBlueprintData.Count;
@@ -169,12 +170,7 @@ public partial struct SpawnerSystem : ISystem
                 var gridMap = new NativeHashMap<int3, Entity>((int)countF, Allocator.Temp);
                 var posMap = new NativeHashMap<Entity, float3>((int)countF, Allocator.Temp);
 
-                StringBuilder csv = null;
-                if (triggerSpecialReal)
-                {
-                    csv = new StringBuilder();
-                    csv.AppendLine("ID,X,Y,Z,Type");
-                }
+                // ❌ 잘못된 수동 건물 덮어쓰기 방지용 CSV StringBuilder 삭제됨!
 
                 for (float i = 0f; i < countF; i += 1f)
                 {
@@ -210,14 +206,6 @@ public partial struct SpawnerSystem : ISystem
                             var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
                             if (bpManager != null) { string id = bpManager.VectorToID(new UnityEngine.Vector3(finalPos.x, finalPos.y, finalPos.z)); bpManager.AddReinforcementBlock(id, "Reinforcement", new UnityEngine.Vector3(finalPos.x, finalPos.y, finalPos.z)); }
                         }
-
-                        // ⭐ 자동 타설 백업 (ID 규격 복구 완료)
-                        if (csv != null)
-                        {
-                            string typeStr = finalPos.y > 1.5f ? "Wall" : "Floor";
-                            string realId = $"{(int)math.round(finalPos.x * 10f)}_{(int)math.round(finalPos.z * 10f)}_{(int)math.round(finalPos.y * 10f)}";
-                            csv.AppendLine($"{realId},{finalPos.x},{finalPos.y},{finalPos.z},{typeStr}");
-                        }
                     }
                 }
 
@@ -241,6 +229,7 @@ public partial struct SpawnerSystem : ISystem
                         if (bpManager != null) bpManager.SaveBlueprint();
                         blueprintOffsets.Clear();
                         isYMode = false;
+                        UnityEngine.Debug.Log("🏗️ [보강 공사] Y도면 보강 철근 타설 완료!"); // ⭐ 로그 분리
                     }
                     else
                     {
@@ -248,14 +237,12 @@ public partial struct SpawnerSystem : ISystem
                         isOMode = false;
                         isLMode = false;
                         isUMode = false;
+                        UnityEngine.Debug.Log("🏗️ [도면 공사] O/U 복층 도면 타설 완료!"); // ⭐ 로그 분리
                     }
 
-                    string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
-                    if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
-                    File.WriteAllText(path, csv.ToString());
+                    // ❌ 억지로 Last_Building.csv를 덮어쓰던 File.WriteAllText 로직 영구 철거됨!
 
                     nextStructureID += 1f;
-                    UnityEngine.Debug.Log("🏗️ 타설 완료 및 Last_Building.csv 백업 완료!");
                 }
                 gridMap.Dispose(); posMap.Dispose();
                 return;
