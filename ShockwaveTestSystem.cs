@@ -78,64 +78,59 @@ public partial struct ShockwaveTestSystem : ISystem
             }
             if (shockTimer <= 0f)
             {
-                isShocking = false; var ecb = new EntityCommandBuffer(Allocator.Temp); NativeList<float3> finalPos = new NativeList<float3>(Allocator.Temp); NativeList<float> finalStresses = new NativeList<float>(Allocator.Temp);
-                foreach (var (tr, tracker, vel, color, ent) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<ShockTracker>, RefRW<PhysicsVelocity>, RefRW<URPMaterialPropertyBaseColor>>().WithAll<BlockTag>().WithEntityAccess())
+                isShocking = false; var ecb = new EntityCommandBuffer(Allocator.Temp);
+                NativeList<float3> finalPos = new NativeList<float3>(Allocator.Temp); NativeList<float> finalStresses = new NativeList<float>(Allocator.Temp);
+                NativeList<FixedString32Bytes> finalMaterials = new NativeList<FixedString32Bytes>(Allocator.Temp); // ⭐ 재질 리스트
+
+                // ⭐ 재질(BlockMaterial) 같이 스캔
+                foreach (var (tr, tracker, vel, color, mat, ent) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<ShockTracker>, RefRW<PhysicsVelocity>, RefRW<URPMaterialPropertyBaseColor>, RefRO<BlockMaterial>>().WithAll<BlockTag>().WithEntityAccess())
                 {
                     tr.ValueRW.Position = tracker.ValueRO.OriginalPos; tr.ValueRW.Rotation = tracker.ValueRO.OriginalRot; vel.ValueRW.Linear = float3.zero; vel.ValueRW.Angular = float3.zero;
                     float maxDisp = tracker.ValueRO.MaxDisplacement; float4 newCol = new float4(1, 1, 1, 1);
                     if (maxDisp >= 5.0f) newCol = new float4(0.2f, 0.2f, 0.2f, 1); else if (maxDisp >= 2.0f) newCol = new float4(1, 0, 0, 1); else if (maxDisp >= 0.5f) newCol = new float4(1, 1, 0, 1);
-                    color.ValueRW.Value = newCol; finalPos.Add(tracker.ValueRO.OriginalPos); finalStresses.Add(maxDisp); ecb.RemoveComponent<ShockTracker>(ent);
+                    color.ValueRW.Value = newCol;
+
+                    finalPos.Add(tracker.ValueRO.OriginalPos); finalStresses.Add(maxDisp);
+                    finalMaterials.Add(mat.ValueRO.MaterialName); // ⭐ 저장
+
+                    ecb.RemoveComponent<ShockTracker>(ent);
                 }
-                SaveShockwaveExcel(finalPos, finalStresses); finalPos.Dispose(); finalStresses.Dispose(); ecb.Playback(state.EntityManager); ecb.Dispose();
+                SaveShockwaveExcel(finalPos, finalStresses, finalMaterials);
+                finalPos.Dispose(); finalStresses.Dispose(); finalMaterials.Dispose();
+                ecb.Playback(state.EntityManager); ecb.Dispose();
             }
         }
     }
 
-    private void SaveShockwaveExcel(NativeList<float3> positions, NativeList<float> stresses)
+    private void SaveShockwaveExcel(NativeList<float3> positions, NativeList<float> stresses, NativeList<FixedString32Bytes> materials)
     {
-        string dateStamp = DateTime.Now.ToString("yyyyMMdd");
+        string dateStamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
         string shockDir = Path.Combine(Application.dataPath, "StressBlock", "shockwave");
         if (!Directory.Exists(shockDir)) Directory.CreateDirectory(shockDir);
 
-        string historyPath = Path.Combine(shockDir, $"Shockwave_Log_{dateStamp}.csv");
+        string historyPath = Path.Combine(shockDir, $"Shockwave_All_{dateStamp}.csv");
         string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
 
-        System.Collections.Generic.Dictionary<string, string> currentData = new System.Collections.Generic.Dictionary<string, string>();
-        if (File.Exists(currentPath))
-        {
-            string[] existingLines = File.ReadAllLines(currentPath);
-            for (int i = 1; i < existingLines.Length; i++)
-            {
-                string[] cols = existingLines[i].Split(',');
-                if (cols.Length > 0) currentData[cols[0]] = existingLines[i];
-            }
-        }
-
-        System.Collections.Generic.List<string> historyLines = new System.Collections.Generic.List<string>();
-        if (!File.Exists(historyPath)) historyLines.Add("BlockID,PosX,PosY,PosZ,SHOCK_Stress,RiskLevel,Prescription");
+        System.Collections.Generic.List<string> currentLines = new System.Collections.Generic.List<string>();
+        currentLines.Add("BlockID,PosX,PosY,PosZ,SHOCK_Stress,RiskLevel,Prescription,Material"); // ⭐ 헤더 변경
 
         for (int i = 0; i < positions.Length; i++)
         {
-            float3 pos = positions[i]; float stress = stresses[i];
+            float3 pos = positions[i]; float stress = stresses[i]; string mat = materials[i].ToString();
 
             float ix = math.round(pos.x * 10f); float iz = math.round(pos.z * 10f); float iy = math.round(pos.y * 10f);
             string strX = $"{(ix < 0 ? "-" : "0")}{math.abs(ix):000}"; string strZ = $"{(iz < 0 ? "-" : "0")}{math.abs(iz):000}"; string strY = $"{(iy < 0 ? "-" : "0")}{math.abs(iy):000}";
 
             string id = $"{strX}_{strZ}_{strY}";
             string risk = stress >= 2.0f ? "Danger" : (stress >= 0.5f ? "Warning" : "Safe"); string pres = stress >= 2.0f ? "Y" : "N";
-            string lineData = $"{id},{pos.x:F2},{pos.y:F2},{pos.z:F2},{stress:F2},{risk},{pres}";
 
-            historyLines.Add(lineData);
-            currentData[id] = lineData;
+            // ⭐ 맨 끝에 재질 추가
+            string lineData = $"{id},{pos.x:F2},{pos.y:F2},{pos.z:F2},{stress:F2},{risk},{pres},{mat}";
+            currentLines.Add(lineData);
         }
 
-        File.AppendAllLines(historyPath, historyLines);
-
-        System.Collections.Generic.List<string> finalCurrentLines = new System.Collections.Generic.List<string>();
-        finalCurrentLines.Add("BlockID,PosX,PosY,PosZ,SHOCK_Stress,RiskLevel,Prescription");
-        finalCurrentLines.AddRange(currentData.Values);
-        File.WriteAllLines(currentPath, finalCurrentLines);
-
-        Debug.Log($"📄 [엑셀 추가기입 완료] 폭파 충격파 테스트 결과가 성공적으로 누적 저장되었습니다!");
+        File.WriteAllLines(historyPath, currentLines);
+        File.WriteAllLines(currentPath, currentLines);
+        Debug.Log($"📄 [엑셀] N키 진단결과 저장 완료! (재질포함)");
     }
 }
