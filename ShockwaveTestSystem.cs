@@ -100,7 +100,6 @@ public partial struct ShockwaveTestSystem : ISystem
         string historyPath = Path.Combine(shockDir, $"Shockwave_Log_{dateStamp}.csv");
         string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
 
-        // ⭐ 1. Current 데이터 읽기
         System.Collections.Generic.Dictionary<string, string> currentData = new System.Collections.Generic.Dictionary<string, string>();
         if (File.Exists(currentPath))
         {
@@ -112,7 +111,6 @@ public partial struct ShockwaveTestSystem : ISystem
             }
         }
 
-        // ⭐ 2. 히스토리 세팅 (파일 없으면 헤더 추가)
         System.Collections.Generic.List<string> historyLines = new System.Collections.Generic.List<string>();
         if (!File.Exists(historyPath)) historyLines.Add("BlockID,PosX,PosY,PosZ,SHOCK_Stress,RiskLevel,Prescription");
 
@@ -131,7 +129,6 @@ public partial struct ShockwaveTestSystem : ISystem
             currentData[id] = lineData;
         }
 
-        // ⭐ 3. 파일 출력 (히스토리는 Append, Current는 Update)
         File.AppendAllLines(historyPath, historyLines);
 
         System.Collections.Generic.List<string> finalCurrentLines = new System.Collections.Generic.List<string>();
