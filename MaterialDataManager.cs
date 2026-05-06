@@ -35,15 +35,18 @@ public class MaterialDataManager : MonoBehaviour
         {
             string[] defaultSpecs = {
                 "MaterialName,Density,Defense,BaseHP,R,G,B",
-                "Default,2.4,300,1000,1.0,1.0,1.0",
+                // ⭐ Default: 질량 10(밀도 0.37), 방어력 4, 체력 999999(무한)
+                "Default,0.37,4,999999,1.0,1.0,1.0",
                 "Concrete,2.4,400,1000,0.7,0.7,0.7",
+                // ⭐ 신규 자재: 철근 콘크리트 추가! (조금 더 짙은 회색)
+                "Reinforced_Concrete,2.5,500,1500,0.5,0.5,0.5",
                 "Steel,7.8,600,2000,0.3,0.3,0.4",
                 "Wood,0.6,80,300,0.6,0.4,0.2",
                 "Glass,2.5,200,50,0.8,0.9,1.0"
             };
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             File.WriteAllLines(path, defaultSpecs);
-            Debug.Log("📄 [자재 관리소] Material_Specs.csv 파일이 없어서 기본 단가표를 생성했습니다.");
+            Debug.Log("📄 [자재 관리소] 십장님 맞춤형 단가표(철근콘크리트 포함)가 생성되었습니다.");
         }
 
         MaterialDict.Clear();

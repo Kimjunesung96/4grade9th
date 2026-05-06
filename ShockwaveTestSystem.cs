@@ -93,22 +93,52 @@ public partial struct ShockwaveTestSystem : ISystem
 
     private void SaveShockwaveExcel(NativeList<float3> positions, NativeList<float> stresses)
     {
-        string timeStamp = DateTime.Now.ToString("yyyyMMdd_HHmmss"); string shockDir = Path.Combine(Application.dataPath, "StressBlock", "shockwave"); if (!Directory.Exists(shockDir)) Directory.CreateDirectory(shockDir);
-        string historyPath = Path.Combine(shockDir, $"Shockwave_All_{timeStamp}.csv"); string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
-        System.Collections.Generic.List<string> lines = new System.Collections.Generic.List<string>(); lines.Add("BlockID,PosX,PosY,PosZ,WEIGHT_Stress,RiskLevel,Prescription");
+        string dateStamp = DateTime.Now.ToString("yyyyMMdd");
+        string shockDir = Path.Combine(Application.dataPath, "StressBlock", "shockwave");
+        if (!Directory.Exists(shockDir)) Directory.CreateDirectory(shockDir);
+
+        string historyPath = Path.Combine(shockDir, $"Shockwave_Log_{dateStamp}.csv");
+        string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
+
+        // ⭐ 1. Current 데이터 읽기
+        System.Collections.Generic.Dictionary<string, string> currentData = new System.Collections.Generic.Dictionary<string, string>();
+        if (File.Exists(currentPath))
+        {
+            string[] existingLines = File.ReadAllLines(currentPath);
+            for (int i = 1; i < existingLines.Length; i++)
+            {
+                string[] cols = existingLines[i].Split(',');
+                if (cols.Length > 0) currentData[cols[0]] = existingLines[i];
+            }
+        }
+
+        // ⭐ 2. 히스토리 세팅 (파일 없으면 헤더 추가)
+        System.Collections.Generic.List<string> historyLines = new System.Collections.Generic.List<string>();
+        if (!File.Exists(historyPath)) historyLines.Add("BlockID,PosX,PosY,PosZ,SHOCK_Stress,RiskLevel,Prescription");
 
         for (int i = 0; i < positions.Length; i++)
         {
             float3 pos = positions[i]; float stress = stresses[i];
 
-            // ⭐ 모든 수학 장난 제거: 오직 10배수 정답만 남김!
             float ix = math.round(pos.x * 10f); float iz = math.round(pos.z * 10f); float iy = math.round(pos.y * 10f);
             string strX = $"{(ix < 0 ? "-" : "0")}{math.abs(ix):000}"; string strZ = $"{(iz < 0 ? "-" : "0")}{math.abs(iz):000}"; string strY = $"{(iy < 0 ? "-" : "0")}{math.abs(iy):000}";
 
             string id = $"{strX}_{strZ}_{strY}";
             string risk = stress >= 2.0f ? "Danger" : (stress >= 0.5f ? "Warning" : "Safe"); string pres = stress >= 2.0f ? "Y" : "N";
-            lines.Add($"{id},{pos.x:F2},{pos.y:F2},{pos.z:F2},{stress:F2},{risk},{pres}");
+            string lineData = $"{id},{pos.x:F2},{pos.y:F2},{pos.z:F2},{stress:F2},{risk},{pres}";
+
+            historyLines.Add(lineData);
+            currentData[id] = lineData;
         }
-        File.WriteAllLines(historyPath, lines); File.WriteAllLines(currentPath, lines);
+
+        // ⭐ 3. 파일 출력 (히스토리는 Append, Current는 Update)
+        File.AppendAllLines(historyPath, historyLines);
+
+        System.Collections.Generic.List<string> finalCurrentLines = new System.Collections.Generic.List<string>();
+        finalCurrentLines.Add("BlockID,PosX,PosY,PosZ,SHOCK_Stress,RiskLevel,Prescription");
+        finalCurrentLines.AddRange(currentData.Values);
+        File.WriteAllLines(currentPath, finalCurrentLines);
+
+        Debug.Log($"📄 [엑셀 추가기입 완료] 폭파 충격파 테스트 결과가 성공적으로 누적 저장되었습니다!");
     }
 }
