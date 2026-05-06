@@ -12,89 +12,128 @@ using Unity.Collections;
 public struct OriginalPosition : IComponentData { public float3 Value; }
 
 [BurstCompile]
-public partial struct ResetStressJob : IJobEntity { public void Execute(ref BlockStress stress) { stress.TargetStress = 0f; } }
+public partial struct ResetStressJob : IJobEntity
+{
+    public void Execute(ref BlockStress stress)
+    {
+        stress.TargetStress = 0.0f;
+    }
+}
 
 [BurstCompile]
 public partial struct CalculateJointStressJob : IJobEntity
 {
+    // 읽기 전용 돋보기들
     [ReadOnly] public ComponentLookup<LocalTransform> TransformLookup;
-    public ComponentLookup<BlockStress> StressLookup;
-
-    // ⭐ 블록 몸체에 박힌 스펙을 실시간으로 꺼내볼 수 있는 돋보기 장착!
     [ReadOnly] public ComponentLookup<BlockMaterial> MaterialLookup;
+    // 쓰기 가능 돋보기 (스트레스 누적용)
+    public ComponentLookup<BlockStress> StressLookup;
 
     public void Execute(in PhysicsConstrainedBodyPair pair, in PhysicsJoint joint)
     {
-        Entity entityA = pair.EntityA; Entity entityB = pair.EntityB;
-        if (TransformLookup.HasComponent(entityA) && TransformLookup.HasComponent(entityB) &&
-            MaterialLookup.HasComponent(entityA) && MaterialLookup.HasComponent(entityB))
+        Entity entityA = pair.EntityA;
+        Entity entityB = pair.EntityB;
+
+        // 1. 엔티티 존재 여부와 컴포넌트 보유 여부를 더 꼼꼼하게 체크
+        if (!TransformLookup.HasComponent(entityA) || !TransformLookup.HasComponent(entityB)) return;
+        if (!MaterialLookup.HasComponent(entityA) || !MaterialLookup.HasComponent(entityB)) return;
+        if (!StressLookup.HasComponent(entityA) || !StressLookup.HasComponent(entityB)) return;
+
+        var transA = TransformLookup[entityA];
+        var transB = TransformLookup[entityB];
+        var matA = MaterialLookup[entityA];
+        var matB = MaterialLookup[entityB];
+
+        // 2. 물리 스펙 융합 (모든 수치는 float)
+        bool isBrittle = matA.IsBrittle || matB.IsBrittle;
+        float tensile = (matA.TensileStiffness + matB.TensileStiffness) * 0.5f;
+        float compressive = (matA.CompressiveStiffness + matB.CompressiveStiffness) * 0.5f;
+        float shear = (matA.ShearStiffness + matB.ShearStiffness) * 0.5f;
+        float bending = (matA.BendingStiffness + matB.BendingStiffness) * 0.5f;
+        float torsion = (matA.TorsionStiffness + matB.TorsionStiffness) * 0.5f;
+
+        // 3. 변위 계산
+        float3 pivotA = math.transform(new RigidTransform(transA.Rotation, transA.Position), joint.BodyAFromJoint.Position);
+        float3 pivotB = math.transform(new RigidTransform(transB.Rotation, transB.Position), joint.BodyBFromJoint.Position);
+        float3 localDelta = math.mul(math.inverse(transA.Rotation), (pivotA - pivotB));
+
+        float axialDisplacement = localDelta.y;
+        float normalStress_Axial = axialDisplacement > 0.0f ? axialDisplacement * tensile : math.abs(axialDisplacement) * compressive;
+        float shearStress_Linear = math.length(new float2(localDelta.x, localDelta.z)) * shear;
+
+        // 4. 회전 변위 계산
+        quaternion relRot = math.mul(math.inverse(transA.Rotation), transB.Rotation);
+        float w = math.clamp(relRot.value.w, -1.0f, 1.0f);
+        float angle = 2.0f * math.acos(w);
+        float sinHalfAngle = math.sqrt(1.0f - w * w);
+        float3 axis = sinHalfAngle > 0.001f ? (relRot.value.xyz / sinHalfAngle) : new float3(0.0f, 1.0f, 0.0f);
+        float3 eulerVector = axis * angle;
+
+        float normalStress_Bending = math.length(new float2(eulerVector.x, eulerVector.z)) * bending;
+        float shearStress_Torsion = math.abs(eulerVector.y) * torsion;
+
+        float sigma = normalStress_Axial + normalStress_Bending;
+        float tau = shearStress_Linear + shearStress_Torsion;
+
+        // 5. 최종 스트레스 산출 (폰 미제스 / 랭킨)
+        float finalStress = 0.0f;
+        if (isBrittle)
         {
-            var transA = TransformLookup[entityA]; var transB = TransformLookup[entityB];
-            var matA = MaterialLookup[entityA]; var matB = MaterialLookup[entityB];
-
-            // ⭐ 양쪽 블록의 재질 정보를 융합해서 조인트(연결부)의 강성을 결정!
-            bool isBrittle = matA.IsBrittle || matB.IsBrittle; // 둘 중 하나라도 콘크리트면 찢어짐에 취약함
-            float tensile = (matA.TensileStiffness + matB.TensileStiffness) * 0.5f;
-            float compressive = (matA.CompressiveStiffness + matB.CompressiveStiffness) * 0.5f;
-            float shear = (matA.ShearStiffness + matB.ShearStiffness) * 0.5f;
-            float bending = (matA.BendingStiffness + matB.BendingStiffness) * 0.5f;
-            float torsion = (matA.TorsionStiffness + matB.TorsionStiffness) * 0.5f;
-
-            float3 pivotA = math.transform(new RigidTransform(transA.Rotation, transA.Position), joint.BodyAFromJoint.Position);
-            float3 pivotB = math.transform(new RigidTransform(transB.Rotation, transB.Position), joint.BodyBFromJoint.Position);
-            float3 localDelta = math.mul(math.inverse(transA.Rotation), (pivotA - pivotB));
-
-            float axialDisplacement = localDelta.y;
-
-            // ⭐ 엑셀에서 받아온 강성 수치 적용!
-            float normalStress_Axial = axialDisplacement > 0 ? axialDisplacement * tensile : math.abs(axialDisplacement) * compressive;
-            float shearStress_Linear = math.length(new float2(localDelta.x, localDelta.z)) * shear;
-
-            quaternion relRot = math.mul(math.inverse(transA.Rotation), transB.Rotation);
-            float w = math.clamp(relRot.value.w, -1f, 1f);
-            float angle = 2.0f * math.acos(w);
-            float sinHalfAngle = math.sqrt(1.0f - w * w);
-            float3 axis = sinHalfAngle > 0.001f ? (relRot.value.xyz / sinHalfAngle) : new float3(0, 1, 0);
-            float3 eulerVector = axis * angle;
-
-            float normalStress_Bending = math.length(new float2(eulerVector.x, eulerVector.z)) * bending;
-            float shearStress_Torsion = math.abs(eulerVector.y) * torsion;
-
-            float sigma = normalStress_Axial + normalStress_Bending;
-            float tau = shearStress_Linear + shearStress_Torsion;
-
-            float finalStress = 0f;
-
-            // ⭐ 폰 미제스(강철) / 랭킨(콘크리트) 투트랙 공식 발동!
-            if (isBrittle)
-            {
-                float principalStress1 = (sigma / 2f) + math.sqrt((sigma * sigma / 4f) + (tau * tau));
-                if (principalStress1 > 0 && axialDisplacement > 0) finalStress = principalStress1 * 2.0f;
-                else finalStress = math.sqrt((sigma * sigma) + 3.0f * (tau * tau));
-            }
-            else
-            {
-                finalStress = math.sqrt((sigma * sigma) + 3.0f * (tau * tau));
-            }
-
-            if (StressLookup.HasComponent(entityA)) { var stressA = StressLookup[entityA]; stressA.TargetStress += finalStress; StressLookup[entityA] = stressA; }
-            if (StressLookup.HasComponent(entityB)) { var stressB = StressLookup[entityB]; stressB.TargetStress += finalStress; StressLookup[entityB] = stressB; }
+            float principalStress1 = (sigma / 2.0f) + math.sqrt((sigma * sigma / 4.0f) + (tau * tau));
+            finalStress = (principalStress1 > 0.0f && axialDisplacement > 0.0f) ? principalStress1 * 2.0f : math.sqrt((sigma * sigma) + 3.0f * (tau * tau));
         }
+        else
+        {
+            finalStress = math.sqrt((sigma * sigma) + 3.0f * (tau * tau));
+        }
+
+        // 6. 결과 기록
+        var sA = StressLookup[entityA]; sA.TargetStress += finalStress; StressLookup[entityA] = sA;
+        var sB = StressLookup[entityB]; sB.TargetStress += finalStress; StressLookup[entityB] = sB;
     }
 }
 
 [BurstCompile]
 public partial struct ApplyExternalLoadJob : IJobEntity
 {
-    public bool IsWeightScanMode; public float DeltaTime; public float QuakeX; public float QuakeZ; public float BaseWeight; public float DynamicSensitivity;
-    public void Execute(in LocalTransform transform, ref BlockStress stress, ref PhysicsVelocity velRW) { float additionalStress = 0f; if (IsWeightScanMode) { additionalStress = BaseWeight; } else { velRW.Linear += new float3(QuakeX, 0, QuakeZ) * DeltaTime; additionalStress = math.lengthsq(velRW.Linear) * DynamicSensitivity; } stress.TargetStress += additionalStress; }
+    public bool IsWeightScanMode;
+    public float DeltaTime;
+    public float QuakeX;
+    public float QuakeZ;
+    public float BaseWeight;
+    public float DynamicSensitivity;
+
+    // ⭐ 질량 정보를 읽어오기 위해 추가
+    public void Execute(in LocalTransform transform, in PhysicsMass mass, ref BlockStress stress, ref PhysicsVelocity velRW)
+    {
+        float additionalStress = 0.0f;
+
+        if (IsWeightScanMode)
+        {
+            // ⭐ 단순히 1.0f를 더하는 게 아니라, 블록의 실제 질량을 고려!
+            // InverseMass가 0이면(고정 블록) 기본값 1.0f 적용, 아니면 실제 질량 적용
+            float realMass = mass.InverseMass > 0.0f ? (1.0f / mass.InverseMass) : 1.0f;
+            additionalStress = BaseWeight * realMass * 0.1f; // 0.1f는 수치 조정용 계수
+        }
+        else
+        {
+            velRW.Linear += new float3(QuakeX, 0.0f, QuakeZ) * DeltaTime;
+            additionalStress = math.lengthsq(velRW.Linear) * DynamicSensitivity;
+        }
+
+        stress.TargetStress += additionalStress;
+    }
 }
 
 [BurstCompile]
 public partial struct SmoothStressJob : IJobEntity
 {
     public float DeltaTime; public float SmoothSpeed;
-    public void Execute(ref BlockStress stress) { float currentSmoothed = math.lerp(stress.SmoothedStress, stress.TargetStress, DeltaTime * SmoothSpeed); stress.SmoothedStress = math.max(stress.SmoothedStress, currentSmoothed); }
+    public void Execute(ref BlockStress stress)
+    {
+        float currentSmoothed = math.lerp(stress.SmoothedStress, stress.TargetStress, DeltaTime * SmoothSpeed);
+        stress.SmoothedStress = math.max(stress.SmoothedStress, currentSmoothed);
+    }
 }
 
 [UpdateInGroup(typeof(SimulationSystemGroup))]
@@ -104,117 +143,102 @@ public partial struct StressVisualizationSystem : ISystem
     private float scanTimer; private bool isScanning; private bool needsColorUpdate; private bool isWeightScanMode;
 
     public void OnCreate(ref SystemState state) { state.RequireForUpdate<BlockStress>(); }
-    public void OnDestroy(ref SystemState state) { }
 
     public void OnUpdate(ref SystemState state)
     {
-        bool startScan = false;
-        if (Input.GetKeyDown(KeyCode.V)) { isWeightScanMode = true; startScan = true; Debug.Log("⚖️ V키 측정 시작!"); }
-        else if (Input.GetKeyDown(KeyCode.B)) { isWeightScanMode = false; startScan = true; Debug.Log("🌪️ B키 지진 시작!"); }
-
-        if (startScan)
-        {
-            scanTimer = 5.0f; isScanning = true; needsColorUpdate = false;
-            var ecb = new EntityCommandBuffer(Allocator.TempJob);
-            foreach (var (color, gravity, velocity, stress, transform, entity) in SystemAPI.Query<RefRW<URPMaterialPropertyBaseColor>, RefRW<PhysicsGravityFactor>, RefRW<PhysicsVelocity>, RefRW<BlockStress>, RefRO<LocalTransform>>().WithEntityAccess())
-            {
-                color.ValueRW.Value = new float4(1f, 1f, 1f, 1f); gravity.ValueRW.Value = 1f; velocity.ValueRW.Linear.y -= 0.01f; stress.ValueRW.SmoothedStress = 0f;
-
-                float snappedX = math.round((transform.ValueRO.Position.x - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                float snappedY = math.round((transform.ValueRO.Position.y - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                float snappedZ = math.round((transform.ValueRO.Position.z - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                float3 perfectPos = new float3(snappedX, snappedY, snappedZ);
-
-                if (!SystemAPI.HasComponent<OriginalPosition>(entity)) { ecb.AddComponent(entity, new OriginalPosition { Value = perfectPos }); }
-            }
-            ecb.Playback(state.EntityManager); ecb.Dispose();
-        }
+        if (Input.GetKeyDown(KeyCode.V)) { isWeightScanMode = true; StartScan(ref state); }
+        else if (Input.GetKeyDown(KeyCode.B)) { isWeightScanMode = false; StartScan(ref state); }
 
         if (isScanning)
         {
             scanTimer -= SystemAPI.Time.DeltaTime;
-            if (scanTimer <= 0f)
+            if (scanTimer <= 0.0f)
             {
-                isScanning = false; needsColorUpdate = true; Debug.Log("✅ 물리 엔진 정지! 위치 교정.");
-                foreach (var (transform, velocity, gravity, originalPos) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<PhysicsVelocity>, RefRW<PhysicsGravityFactor>, RefRO<OriginalPosition>>())
-                {
-                    gravity.ValueRW.Value = 0f; velocity.ValueRW.Linear = float3.zero; velocity.ValueRW.Angular = float3.zero;
-                    transform.ValueRW.Position = originalPos.ValueRO.Value; transform.ValueRW.Rotation = quaternion.identity;
-                }
+                isScanning = false; needsColorUpdate = true;
+                StopPhysics(ref state);
             }
-        }
 
-        if (!isScanning && !needsColorUpdate) return;
-
-        if (isScanning)
-        {
+            // Job 실행
             state.Dependency = new ResetStressJob().ScheduleParallel(state.Dependency);
+
             var transformLookup = SystemAPI.GetComponentLookup<LocalTransform>(true);
             var stressLookup = SystemAPI.GetComponentLookup<BlockStress>(false);
-            var materialLookup = SystemAPI.GetComponentLookup<BlockMaterial>(true); // ⭐ 돋보기 장착!
+            var materialLookup = SystemAPI.GetComponentLookup<BlockMaterial>(true);
 
-            var jointJob = new CalculateJointStressJob
+            state.Dependency = new CalculateJointStressJob
             {
                 TransformLookup = transformLookup,
                 StressLookup = stressLookup,
-                MaterialLookup = materialLookup // ⭐ Job에 재질 돋보기 넘겨줌
-            };
-            state.Dependency = jointJob.Schedule(state.Dependency);
+                MaterialLookup = materialLookup
+            }.Schedule(state.Dependency);
 
-            float time = (float)SystemAPI.Time.ElapsedTime; float quakePower = 5.0f;
-            var externalLoadJob = new ApplyExternalLoadJob { IsWeightScanMode = isWeightScanMode, DeltaTime = SystemAPI.Time.DeltaTime, QuakeX = !isWeightScanMode ? math.sin(time * 35f) * quakePower : 0f, QuakeZ = !isWeightScanMode ? math.cos(time * 28f) * quakePower : 0f, BaseWeight = 1.0f, DynamicSensitivity = 0.5f };
-            state.Dependency = externalLoadJob.ScheduleParallel(state.Dependency);
-
-            var smoothJob = new SmoothStressJob { DeltaTime = SystemAPI.Time.DeltaTime, SmoothSpeed = 3f };
-            state.Dependency = smoothJob.ScheduleParallel(state.Dependency);
-        }
-
-        if (needsColorUpdate)
-        {
-            state.Dependency.Complete();
-            float yieldLimit = isWeightScanMode ? 5.0f : 8.0f; string reportType = isWeightScanMode ? "WEIGHT" : "SHAKE";
-            string dateStamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-
-            string mainDir = Path.Combine(Application.dataPath, "StressBlock"); string allDir = Path.Combine(mainDir, "All"); string dangerDir = Path.Combine(mainDir, "danger");
-            if (!Directory.Exists(mainDir)) Directory.CreateDirectory(mainDir); if (!Directory.Exists(allDir)) Directory.CreateDirectory(allDir); if (!Directory.Exists(dangerDir)) Directory.CreateDirectory(dangerDir);
-
-            string currentStressPath = Path.Combine(mainDir, "CurrentStress.csv");
-            string allFilePath = Path.Combine(allDir, $"{reportType}_All_{dateStamp}.csv");
-            string stressFilePath = Path.Combine(dangerDir, $"{reportType}_StressOnly_{dateStamp}.csv");
-
-            // ⭐ 기존 CSV의 BlueprintManager 파싱이 고장나지 않도록, 'Material'을 8번째 맨 끝 칸에 추가합니다!
-            string header = $"BlockID,PosX,PosY,PosZ,{reportType}_Stress,RiskLevel,Prescription,Material";
-
-            using (StreamWriter allWriter = new StreamWriter(allFilePath, false))
-            using (StreamWriter stressWriter = new StreamWriter(stressFilePath, false))
-            using (StreamWriter currentWriter = new StreamWriter(currentStressPath, false))
+            float time = (float)SystemAPI.Time.ElapsedTime;
+            state.Dependency = new ApplyExternalLoadJob
             {
-                allWriter.WriteLine(header);
-                stressWriter.WriteLine(header);
-                currentWriter.WriteLine(header);
+                IsWeightScanMode = isWeightScanMode,
+                DeltaTime = SystemAPI.Time.DeltaTime,
+                QuakeX = !isWeightScanMode ? math.sin(time * 35.0f) * 5.0f : 0.0f,
+                QuakeZ = !isWeightScanMode ? math.cos(time * 28.0f) * 5.0f : 0.0f,
+                BaseWeight = 1.0f,
+                DynamicSensitivity = 0.5f
+            }.ScheduleParallel(state.Dependency);
 
-                // ⭐ 엑셀에 쓸 재질(MaterialName)을 같이 읽어옵니다.
-                foreach (var (stress, color, originalPos, mat) in SystemAPI.Query<RefRO<BlockStress>, RefRW<URPMaterialPropertyBaseColor>, RefRO<OriginalPosition>, RefRO<BlockMaterial>>())
-                {
-                    float3 perfectPos = originalPos.ValueRO.Value;
-                    float currentStress = stress.ValueRO.SmoothedStress; float t = math.clamp(currentStress / yieldLimit, 0f, 1f);
-                    if (isWeightScanMode) color.ValueRW.Value = new float4(1f, 1f - t, 1f - t, 1f); else color.ValueRW.Value = new float4(1f, 1f - t, 1f, 1f);
-                    string risk = t >= 0.8f ? "DANGER" : (t >= 0.5f ? "WARNING" : "SAFE"); string prescription = risk == "DANGER" ? "Y" : (risk == "WARNING" ? "U" : "");
-
-                    float ix = math.round(perfectPos.x * 10f); float iz = math.round(perfectPos.z * 10f); float iy = math.round(perfectPos.y * 10f);
-                    string strX = $"{(ix < 0 ? "-" : "0")}{math.abs(ix):000}"; string strZ = $"{(iz < 0 ? "-" : "0")}{math.abs(iz):000}"; string strY = $"{(iy < 0 ? "-" : "0")}{math.abs(iy):000}";
-
-                    string blockID = $"{strX}_{strZ}_{strY}";
-
-                    // ⭐ 맨 끝에 재질 이름(mat.ValueRO.MaterialName) 기록!
-                    string lineData = $"{blockID},{perfectPos.x:F2},{perfectPos.y:F2},{perfectPos.z:F2},{currentStress:F2},{risk},{prescription},{mat.ValueRO.MaterialName}";
-
-                    allWriter.WriteLine(lineData);
-                    if (t >= 0.5f) stressWriter.WriteLine(lineData);
-                    currentWriter.WriteLine(lineData);
-                }
-            }
-            needsColorUpdate = false;
+            state.Dependency = new SmoothStressJob { DeltaTime = SystemAPI.Time.DeltaTime, SmoothSpeed = 3.0f }.ScheduleParallel(state.Dependency);
         }
+
+        if (needsColorUpdate) { UpdateResults(ref state); }
+    }
+
+    private void StartScan(ref SystemState state)
+    {
+        scanTimer = 5.0f; isScanning = true; needsColorUpdate = false;
+        var ecb = new EntityCommandBuffer(Allocator.Temp);
+        foreach (var (color, gravity, velocity, stress, transform, entity) in SystemAPI.Query<RefRW<URPMaterialPropertyBaseColor>, RefRW<PhysicsGravityFactor>, RefRW<PhysicsVelocity>, RefRW<BlockStress>, RefRO<LocalTransform>>().WithEntityAccess())
+        {
+            color.ValueRW.Value = new float4(1.0f, 1.0f, 1.0f, 1.0f);
+            gravity.ValueRW.Value = 1.0f;
+            velocity.ValueRW.Linear.y -= 0.01f;
+            stress.ValueRW.SmoothedStress = 0.0f;
+            stress.ValueRW.TargetStress = 0.0f;
+
+            float3 p = transform.ValueRO.Position;
+            float3 perfectPos = new float3(math.round((p.x - 1.5f) / 3.0f) * 3.0f + 1.5f, math.round((p.y - 1.5f) / 3.0f) * 3.0f + 1.5f, math.round((p.z - 1.5f) / 3.0f) * 3.0f + 1.5f);
+            if (!SystemAPI.HasComponent<OriginalPosition>(entity)) ecb.AddComponent(entity, new OriginalPosition { Value = perfectPos });
+        }
+        ecb.Playback(state.EntityManager); ecb.Dispose();
+    }
+
+    private void StopPhysics(ref SystemState state)
+    {
+        foreach (var (transform, velocity, gravity, originalPos) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<PhysicsVelocity>, RefRW<PhysicsGravityFactor>, RefRO<OriginalPosition>>())
+        {
+            gravity.ValueRW.Value = 0.0f; velocity.ValueRW.Linear = float3.zero; velocity.ValueRW.Angular = float3.zero;
+            transform.ValueRW.Position = originalPos.ValueRO.Value; transform.ValueRW.Rotation = quaternion.identity;
+        }
+    }
+
+    private void UpdateResults(ref SystemState state)
+    {
+        state.Dependency.Complete();
+        float yieldLimit = isWeightScanMode ? 5.0f : 8.0f;
+        string currentStressPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
+
+        using (StreamWriter writer = new StreamWriter(currentStressPath, false))
+        {
+            writer.WriteLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material");
+            foreach (var (stress, color, originalPos, mat) in SystemAPI.Query<RefRO<BlockStress>, RefRW<URPMaterialPropertyBaseColor>, RefRO<OriginalPosition>, RefRO<BlockMaterial>>())
+            {
+                float3 p = originalPos.ValueRO.Value;
+                float curStress = stress.ValueRO.SmoothedStress;
+                float t = math.clamp(curStress / yieldLimit, 0.0f, 1.0f);
+                color.ValueRW.Value = isWeightScanMode ? new float4(1.0f, 1.0f - t, 1.0f - t, 1.0f) : new float4(1.0f, 1.0f - t, 1.0f, 1.0f);
+
+                string risk = t >= 0.8f ? "DANGER" : (t >= 0.5f ? "WARNING" : "SAFE");
+                string id = $"{(int)math.round(p.x * 10.0f)}_{(int)math.round(p.z * 10.0f)}_{(int)math.round(p.y * 10.0f)}";
+                writer.WriteLine($"{id},{p.x:F2},{p.y:F2},{p.z:F2},{curStress:F2},{risk},{(risk == "DANGER" ? "Y" : "")},{mat.ValueRO.MaterialName}");
+            }
+        }
+        needsColorUpdate = false;
+        Debug.Log("📊 스트레스 분석 리포트 생성 완료!");
     }
 }
