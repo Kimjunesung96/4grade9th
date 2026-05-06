@@ -209,47 +209,55 @@ public partial struct VibrationTestSystem : ISystem
     // =========================================================
     private void SaveVibrationExcel(NativeList<float3> positions, NativeList<float> stresses)
     {
-        string timeStamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-
+        string dateStamp = DateTime.Now.ToString("yyyyMMdd");
         string vibeDir = Path.Combine(Application.dataPath, "StressBlock", "vibe");
-        if (!Directory.Exists(vibeDir))
-        {
-            Directory.CreateDirectory(vibeDir);
-            Debug.Log($"📁 [폴더 생성] {vibeDir} 폴더를 새로 만들었습니다!");
-        }
+        if (!Directory.Exists(vibeDir)) Directory.CreateDirectory(vibeDir);
 
-        string historyPath = Path.Combine(vibeDir, $"Vibration_All_{timeStamp}.csv");
+        string historyPath = Path.Combine(vibeDir, $"Vibration_Log_{dateStamp}.csv");
         string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
 
-        System.Collections.Generic.List<string> lines = new System.Collections.Generic.List<string>();
-        lines.Add("BlockID,PosX,PosY,PosZ,WEIGHT_Stress,RiskLevel,Prescription");
+        // ⭐ 1. Current 데이터 읽기
+        System.Collections.Generic.Dictionary<string, string> currentData = new System.Collections.Generic.Dictionary<string, string>();
+        if (File.Exists(currentPath))
+        {
+            string[] existingLines = File.ReadAllLines(currentPath);
+            for (int i = 1; i < existingLines.Length; i++)
+            {
+                string[] cols = existingLines[i].Split(',');
+                if (cols.Length > 0) currentData[cols[0]] = existingLines[i];
+            }
+        }
+
+        // ⭐ 2. 신규 데이터 정리 및 히스토리용 리스트
+        System.Collections.Generic.List<string> historyLines = new System.Collections.Generic.List<string>();
+        if (!File.Exists(historyPath)) historyLines.Add("BlockID,PosX,PosY,PosZ,VIBE_Stress,RiskLevel,Prescription");
 
         for (int i = 0; i < positions.Length; i++)
         {
-            float3 pos = positions[i];
-            float stress = stresses[i];
+            float3 pos = positions[i]; float stress = stresses[i];
 
-            int ix = (int)math.round(pos.x * 10f);
-            int iy = (int)math.round(pos.y * 10f);
-            int iz = (int)math.round(pos.z * 10f);
-
-            string signX = ix < 0 ? "-" : "0";
-            string signZ = iz < 0 ? "-" : "0";
-            string signY = iy < 0 ? "-" : "0";
-
+            int ix = (int)math.round(pos.x * 10f); int iy = (int)math.round(pos.y * 10f); int iz = (int)math.round(pos.z * 10f);
+            string signX = ix < 0 ? "-" : "0"; string signZ = iz < 0 ? "-" : "0"; string signY = iy < 0 ? "-" : "0";
             string id = $"{signX}{math.abs(ix):000}_{signZ}{math.abs(iz):000}_{signY}{math.abs(iy):000}";
 
-            string risk = "Safe";
-            string pres = "N";
+            string risk = "Safe"; string pres = "N";
             if (stress >= 2.0f) { risk = "Danger"; pres = "Y"; }
             else if (stress >= 0.5f) { risk = "Warning"; pres = "N"; }
 
-            lines.Add($"{id},{pos.x:F2},{pos.y:F2},{pos.z:F2},{stress:F2},{risk},{pres}");
+            string lineData = $"{id},{pos.x:F2},{pos.y:F2},{pos.z:F2},{stress:F2},{risk},{pres}";
+
+            historyLines.Add(lineData);
+            currentData[id] = lineData; // 딕셔너리 갱신
         }
 
-        File.WriteAllLines(historyPath, lines);
-        File.WriteAllLines(currentPath, lines);
+        // ⭐ 3. 파일 출력 (히스토리는 Append, Current는 Update)
+        File.AppendAllLines(historyPath, historyLines);
 
-        Debug.Log($"📄 [엑셀 저장 완료] 지진 내진 테스트 결과가 성공적으로 저장되었습니다!\n1. 히스토리: {historyPath}\n2. 현재 도면: {currentPath}\n(이제 Y키를 눌러 보강 도면을 생성하세요!)");
+        System.Collections.Generic.List<string> finalCurrentLines = new System.Collections.Generic.List<string>();
+        finalCurrentLines.Add("BlockID,PosX,PosY,PosZ,VIBE_Stress,RiskLevel,Prescription");
+        finalCurrentLines.AddRange(currentData.Values);
+        File.WriteAllLines(currentPath, finalCurrentLines);
+
+        Debug.Log($"📄 [엑셀 추가기입 완료] 지진 내진 테스트 결과가 성공적으로 누적 저장되었습니다!");
     }
 }
