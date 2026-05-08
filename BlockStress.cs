@@ -27,7 +27,7 @@ public partial struct DefaultMaterialInitSystem : ISystem
         foreach (var (tag, entity) in SystemAPI.Query<RefRO<BlockTag>>().WithNone<BlockMaterial>().WithEntityAccess())
         {
             ecb.AddComponent(entity, new BlockMaterial { MaterialName = "Default" });
-            ecb.AddComponent(entity, new BlockHealth { MaxHP = 999999.0f, CurrentHP = 999999.0f, Defense = 4.0f });
+            ecb.AddComponent(entity, new BlockHealth { MaxHP = 999999.0f, CurrentHP = 999999.0f, Defense = 300.0f });
         }
         ecb.Playback(state.EntityManager);
         ecb.Dispose();

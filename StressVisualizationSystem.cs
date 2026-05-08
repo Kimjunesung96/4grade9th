@@ -23,10 +23,8 @@ public partial struct ResetStressJob : IJobEntity
 [BurstCompile]
 public partial struct CalculateJointStressJob : IJobEntity
 {
-    // 읽기 전용 돋보기들
     [ReadOnly] public ComponentLookup<LocalTransform> TransformLookup;
     [ReadOnly] public ComponentLookup<BlockMaterial> MaterialLookup;
-    // 쓰기 가능 돋보기 (스트레스 누적용)
     public ComponentLookup<BlockStress> StressLookup;
 
     public void Execute(in PhysicsConstrainedBodyPair pair, in PhysicsJoint joint)
@@ -34,60 +32,28 @@ public partial struct CalculateJointStressJob : IJobEntity
         Entity entityA = pair.EntityA;
         Entity entityB = pair.EntityB;
 
-        // 1. 엔티티 존재 여부와 컴포넌트 보유 여부를 더 꼼꼼하게 체크
         if (!TransformLookup.HasComponent(entityA) || !TransformLookup.HasComponent(entityB)) return;
         if (!MaterialLookup.HasComponent(entityA) || !MaterialLookup.HasComponent(entityB)) return;
         if (!StressLookup.HasComponent(entityA) || !StressLookup.HasComponent(entityB)) return;
 
-        var transA = TransformLookup[entityA];
-        var transB = TransformLookup[entityB];
         var matA = MaterialLookup[entityA];
         var matB = MaterialLookup[entityB];
 
-        // 2. 물리 스펙 융합 (모든 수치는 float)
-        bool isBrittle = matA.IsBrittle || matB.IsBrittle;
-        float tensile = (matA.TensileStiffness + matB.TensileStiffness) * 0.5f;
-        float compressive = (matA.CompressiveStiffness + matB.CompressiveStiffness) * 0.5f;
-        float shear = (matA.ShearStiffness + matB.ShearStiffness) * 0.5f;
-        float bending = (matA.BendingStiffness + matB.BendingStiffness) * 0.5f;
-        float torsion = (matA.TorsionStiffness + matB.TorsionStiffness) * 0.5f;
+        // ⭐ 재질 초기화 전(0)일 경우를 대비해 최소 강성 보장 및 증폭 계수 적용
+        float tensile = math.max(10.0f, (matA.TensileStiffness + matB.TensileStiffness) * 0.5f);
 
-        // 3. 변위 계산
+        var transA = TransformLookup[entityA];
+        var transB = TransformLookup[entityB];
+
         float3 pivotA = math.transform(new RigidTransform(transA.Rotation, transA.Position), joint.BodyAFromJoint.Position);
         float3 pivotB = math.transform(new RigidTransform(transB.Rotation, transB.Position), joint.BodyBFromJoint.Position);
-        float3 localDelta = math.mul(math.inverse(transA.Rotation), (pivotA - pivotB));
 
-        float axialDisplacement = localDelta.y;
-        float normalStress_Axial = axialDisplacement > 0.0f ? axialDisplacement * tensile : math.abs(axialDisplacement) * compressive;
-        float shearStress_Linear = math.length(new float2(localDelta.x, localDelta.z)) * shear;
+        // 조인트 변위 거리 계산
+        float dist = math.distance(pivotA, pivotB);
 
-        // 4. 회전 변위 계산
-        quaternion relRot = math.mul(math.inverse(transA.Rotation), transB.Rotation);
-        float w = math.clamp(relRot.value.w, -1.0f, 1.0f);
-        float angle = 2.0f * math.acos(w);
-        float sinHalfAngle = math.sqrt(1.0f - w * w);
-        float3 axis = sinHalfAngle > 0.001f ? (relRot.value.xyz / sinHalfAngle) : new float3(0.0f, 1.0f, 0.0f);
-        float3 eulerVector = axis * angle;
+        // 물리적 스트레스 계산 (방어력 체급에 맞게 시각화되도록 계수 조정 가능)
+        float finalStress = dist * tensile * 100.0f;
 
-        float normalStress_Bending = math.length(new float2(eulerVector.x, eulerVector.z)) * bending;
-        float shearStress_Torsion = math.abs(eulerVector.y) * torsion;
-
-        float sigma = normalStress_Axial + normalStress_Bending;
-        float tau = shearStress_Linear + shearStress_Torsion;
-
-        // 5. 최종 스트레스 산출 (폰 미제스 / 랭킨)
-        float finalStress = 0.0f;
-        if (isBrittle)
-        {
-            float principalStress1 = (sigma / 2.0f) + math.sqrt((sigma * sigma / 4.0f) + (tau * tau));
-            finalStress = (principalStress1 > 0.0f && axialDisplacement > 0.0f) ? principalStress1 * 2.0f : math.sqrt((sigma * sigma) + 3.0f * (tau * tau));
-        }
-        else
-        {
-            finalStress = math.sqrt((sigma * sigma) + 3.0f * (tau * tau));
-        }
-
-        // 6. 결과 기록
         var sA = StressLookup[entityA]; sA.TargetStress += finalStress; StressLookup[entityA] = sA;
         var sB = StressLookup[entityB]; sB.TargetStress += finalStress; StressLookup[entityB] = sB;
     }
@@ -97,30 +63,26 @@ public partial struct CalculateJointStressJob : IJobEntity
 public partial struct ApplyExternalLoadJob : IJobEntity
 {
     public bool IsWeightScanMode;
+    public float BaseWeight;
+    public float DynamicSensitivity;
     public float DeltaTime;
     public float QuakeX;
     public float QuakeZ;
-    public float BaseWeight;
-    public float DynamicSensitivity;
 
-    // ⭐ 질량 정보를 읽어오기 위해 추가
-    public void Execute(in LocalTransform transform, in PhysicsMass mass, ref BlockStress stress, ref PhysicsVelocity velRW)
+    public void Execute(in PhysicsMass mass, ref BlockStress stress, ref PhysicsVelocity velRW)
     {
         float additionalStress = 0.0f;
-
         if (IsWeightScanMode)
         {
-            // ⭐ 단순히 1.0f를 더하는 게 아니라, 블록의 실제 질량을 고려!
-            // InverseMass가 0이면(고정 블록) 기본값 1.0f 적용, 아니면 실제 질량 적용
             float realMass = mass.InverseMass > 0.0f ? (1.0f / mass.InverseMass) : 1.0f;
-            additionalStress = BaseWeight * realMass * 0.1f; // 0.1f는 수치 조정용 계수
+            // 환경 하중 비중을 조절하여 물리 계산값이 묻히지 않게 함
+            additionalStress = BaseWeight * realMass * 0.01f;
         }
         else
         {
             velRW.Linear += new float3(QuakeX, 0.0f, QuakeZ) * DeltaTime;
             additionalStress = math.lengthsq(velRW.Linear) * DynamicSensitivity;
         }
-
         stress.TargetStress += additionalStress;
     }
 }
@@ -128,7 +90,8 @@ public partial struct ApplyExternalLoadJob : IJobEntity
 [BurstCompile]
 public partial struct SmoothStressJob : IJobEntity
 {
-    public float DeltaTime; public float SmoothSpeed;
+    public float DeltaTime;
+    public float SmoothSpeed;
     public void Execute(ref BlockStress stress)
     {
         float currentSmoothed = math.lerp(stress.SmoothedStress, stress.TargetStress, DeltaTime * SmoothSpeed);
@@ -140,9 +103,17 @@ public partial struct SmoothStressJob : IJobEntity
 [UpdateAfter(typeof(FixedStepSimulationSystemGroup))]
 public partial struct StressVisualizationSystem : ISystem
 {
-    private float scanTimer; private bool isScanning; private bool needsColorUpdate; private bool isWeightScanMode;
+    private float scanTimer;
+    private bool isScanning;
+    private bool needsColorUpdate;
+    private bool isWeightScanMode;
+    private EntityQuery jointQuery;
 
-    public void OnCreate(ref SystemState state) { state.RequireForUpdate<BlockStress>(); }
+    public void OnCreate(ref SystemState state)
+    {
+        state.RequireForUpdate<BlockStress>();
+        jointQuery = state.GetEntityQuery(ComponentType.ReadOnly<PhysicsConstrainedBodyPair>(), ComponentType.ReadOnly<PhysicsJoint>());
+    }
 
     public void OnUpdate(ref SystemState state)
     {
@@ -152,13 +123,8 @@ public partial struct StressVisualizationSystem : ISystem
         if (isScanning)
         {
             scanTimer -= SystemAPI.Time.DeltaTime;
-            if (scanTimer <= 0.0f)
-            {
-                isScanning = false; needsColorUpdate = true;
-                StopPhysics(ref state);
-            }
+            if (scanTimer <= 0.0f) { isScanning = false; needsColorUpdate = true; StopPhysics(ref state); return; }
 
-            // Job 실행
             state.Dependency = new ResetStressJob().ScheduleParallel(state.Dependency);
 
             var transformLookup = SystemAPI.GetComponentLookup<LocalTransform>(true);
@@ -170,17 +136,17 @@ public partial struct StressVisualizationSystem : ISystem
                 TransformLookup = transformLookup,
                 StressLookup = stressLookup,
                 MaterialLookup = materialLookup
-            }.Schedule(state.Dependency);
+            }.Schedule(jointQuery, state.Dependency);
 
             float time = (float)SystemAPI.Time.ElapsedTime;
             state.Dependency = new ApplyExternalLoadJob
             {
                 IsWeightScanMode = isWeightScanMode,
+                BaseWeight = 1.0f,
+                DynamicSensitivity = 0.5f,
                 DeltaTime = SystemAPI.Time.DeltaTime,
                 QuakeX = !isWeightScanMode ? math.sin(time * 35.0f) * 5.0f : 0.0f,
-                QuakeZ = !isWeightScanMode ? math.cos(time * 28.0f) * 5.0f : 0.0f,
-                BaseWeight = 1.0f,
-                DynamicSensitivity = 0.5f
+                QuakeZ = !isWeightScanMode ? math.cos(time * 28.0f) * 5.0f : 0.0f
             }.ScheduleParallel(state.Dependency);
 
             state.Dependency = new SmoothStressJob { DeltaTime = SystemAPI.Time.DeltaTime, SmoothSpeed = 3.0f }.ScheduleParallel(state.Dependency);
@@ -220,25 +186,34 @@ public partial struct StressVisualizationSystem : ISystem
     private void UpdateResults(ref SystemState state)
     {
         state.Dependency.Complete();
-        float yieldLimit = isWeightScanMode ? 5.0f : 8.0f;
         string currentStressPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
 
         using (StreamWriter writer = new StreamWriter(currentStressPath, false))
         {
-            writer.WriteLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material");
-            foreach (var (stress, color, originalPos, mat) in SystemAPI.Query<RefRO<BlockStress>, RefRW<URPMaterialPropertyBaseColor>, RefRO<OriginalPosition>, RefRO<BlockMaterial>>())
+            writer.WriteLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Defense");
+
+            foreach (var (stress, color, health, originalPos, mat) in
+                     SystemAPI.Query<RefRO<BlockStress>, RefRW<URPMaterialPropertyBaseColor>, RefRO<BlockHealth>, RefRO<OriginalPosition>, RefRO<BlockMaterial>>())
             {
                 float3 p = originalPos.ValueRO.Value;
                 float curStress = stress.ValueRO.SmoothedStress;
-                float t = math.clamp(curStress / yieldLimit, 0.0f, 1.0f);
-                color.ValueRW.Value = isWeightScanMode ? new float4(1.0f, 1.0f - t, 1.0f - t, 1.0f) : new float4(1.0f, 1.0f - t, 1.0f, 1.0f);
+
+                // ⭐ 각 블록의 실제 방어력(Defense)을 기준으로 그라데이션 비율(t) 계산
+                float defense = math.max(1.0f, health.ValueRO.Defense);
+                float t = math.clamp(curStress / defense, 0.0f, 1.0f);
+
+                if (isWeightScanMode)
+                    color.ValueRW.Value = new float4(1.0f, 1.0f - t, 1.0f - t, 1.0f);
+                else
+                    color.ValueRW.Value = new float4(1.0f - t, 1.0f, 1.0f - t, 1.0f);
 
                 string risk = t >= 0.8f ? "DANGER" : (t >= 0.5f ? "WARNING" : "SAFE");
                 string id = $"{(int)math.round(p.x * 10.0f)}_{(int)math.round(p.z * 10.0f)}_{(int)math.round(p.y * 10.0f)}";
-                writer.WriteLine($"{id},{p.x:F2},{p.y:F2},{p.z:F2},{curStress:F2},{risk},{(risk == "DANGER" ? "Y" : "")},{mat.ValueRO.MaterialName}");
+
+                writer.WriteLine($"{id},{p.x:F2},{p.y:F2},{p.z:F2},{curStress:F2},{risk},{(risk == "DANGER" ? "Y" : "")},{mat.ValueRO.MaterialName},{defense:F1}");
             }
         }
         needsColorUpdate = false;
-        Debug.Log("📊 스트레스 분석 리포트 생성 완료!");
+        Debug.Log("📊 [방어력 비례 시각화] 스트레스 분석 리포트 생성 완료!");
     }
 }
