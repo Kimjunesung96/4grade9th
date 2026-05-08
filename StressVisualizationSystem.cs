@@ -14,10 +14,7 @@ public struct OriginalPosition : IComponentData { public float3 Value; }
 [BurstCompile]
 public partial struct ResetStressJob : IJobEntity
 {
-    public void Execute(ref BlockStress stress)
-    {
-        stress.TargetStress = 0.0f;
-    }
+    public void Execute(ref BlockStress stress) { stress.TargetStress = 0.0f; }
 }
 
 [BurstCompile]
@@ -29,33 +26,24 @@ public partial struct CalculateJointStressJob : IJobEntity
 
     public void Execute(in PhysicsConstrainedBodyPair pair, in PhysicsJoint joint)
     {
-        Entity entityA = pair.EntityA;
-        Entity entityB = pair.EntityB;
+        Entity entityA = pair.EntityA; Entity entityB = pair.EntityB;
+        if (!TransformLookup.HasComponent(entityA) || !TransformLookup.HasComponent(entityB) ||
+            !MaterialLookup.HasComponent(entityA) || !MaterialLookup.HasComponent(entityB)) return;
 
-        if (!TransformLookup.HasComponent(entityA) || !TransformLookup.HasComponent(entityB)) return;
-        if (!MaterialLookup.HasComponent(entityA) || !MaterialLookup.HasComponent(entityB)) return;
-        if (!StressLookup.HasComponent(entityA) || !StressLookup.HasComponent(entityB)) return;
-
-        var matA = MaterialLookup[entityA];
-        var matB = MaterialLookup[entityB];
-
-        // ⭐ 재질 초기화 전(0)일 경우를 대비해 최소 강성 보장 및 증폭 계수 적용
-        float tensile = math.max(10.0f, (matA.TensileStiffness + matB.TensileStiffness) * 0.5f);
-
-        var transA = TransformLookup[entityA];
-        var transB = TransformLookup[entityB];
+        var matA = MaterialLookup[entityA]; var matB = MaterialLookup[entityB];
+        var transA = TransformLookup[entityA]; var transB = TransformLookup[entityB];
 
         float3 pivotA = math.transform(new RigidTransform(transA.Rotation, transA.Position), joint.BodyAFromJoint.Position);
         float3 pivotB = math.transform(new RigidTransform(transB.Rotation, transB.Position), joint.BodyBFromJoint.Position);
 
-        // 조인트 변위 거리 계산
         float dist = math.distance(pivotA, pivotB);
+        float tensile = math.max(10.0f, (matA.TensileStiffness + matB.TensileStiffness) * 0.5f);
 
-        // 물리적 스트레스 계산 (방어력 체급에 맞게 시각화되도록 계수 조정 가능)
-        float finalStress = dist * tensile * 100.0f;
+        // ⭐ 가짜 증폭 계수 철거 완료! (무게가 15cm급으로 가벼워져서 실제 변위만으로도 정상 작동합니다)
+        float finalStress = dist * tensile;
 
-        var sA = StressLookup[entityA]; sA.TargetStress += finalStress; StressLookup[entityA] = sA;
-        var sB = StressLookup[entityB]; sB.TargetStress += finalStress; StressLookup[entityB] = sB;
+        if (StressLookup.HasComponent(entityA)) { var s = StressLookup[entityA]; s.TargetStress += finalStress; StressLookup[entityA] = s; }
+        if (StressLookup.HasComponent(entityB)) { var s = StressLookup[entityB]; s.TargetStress += finalStress; StressLookup[entityB] = s; }
     }
 }
 
@@ -75,7 +63,6 @@ public partial struct ApplyExternalLoadJob : IJobEntity
         if (IsWeightScanMode)
         {
             float realMass = mass.InverseMass > 0.0f ? (1.0f / mass.InverseMass) : 1.0f;
-            // 환경 하중 비중을 조절하여 물리 계산값이 묻히지 않게 함
             additionalStress = BaseWeight * realMass * 0.01f;
         }
         else
@@ -126,16 +113,11 @@ public partial struct StressVisualizationSystem : ISystem
             if (scanTimer <= 0.0f) { isScanning = false; needsColorUpdate = true; StopPhysics(ref state); return; }
 
             state.Dependency = new ResetStressJob().ScheduleParallel(state.Dependency);
-
-            var transformLookup = SystemAPI.GetComponentLookup<LocalTransform>(true);
-            var stressLookup = SystemAPI.GetComponentLookup<BlockStress>(false);
-            var materialLookup = SystemAPI.GetComponentLookup<BlockMaterial>(true);
-
             state.Dependency = new CalculateJointStressJob
             {
-                TransformLookup = transformLookup,
-                StressLookup = stressLookup,
-                MaterialLookup = materialLookup
+                TransformLookup = SystemAPI.GetComponentLookup<LocalTransform>(true),
+                MaterialLookup = SystemAPI.GetComponentLookup<BlockMaterial>(true),
+                StressLookup = SystemAPI.GetComponentLookup<BlockStress>(false)
             }.Schedule(jointQuery, state.Dependency);
 
             float time = (float)SystemAPI.Time.ElapsedTime;
@@ -164,9 +146,7 @@ public partial struct StressVisualizationSystem : ISystem
             color.ValueRW.Value = new float4(1.0f, 1.0f, 1.0f, 1.0f);
             gravity.ValueRW.Value = 1.0f;
             velocity.ValueRW.Linear.y -= 0.01f;
-            stress.ValueRW.SmoothedStress = 0.0f;
-            stress.ValueRW.TargetStress = 0.0f;
-
+            stress.ValueRW.SmoothedStress = 0.0f; stress.ValueRW.TargetStress = 0.0f;
             float3 p = transform.ValueRO.Position;
             float3 perfectPos = new float3(math.round((p.x - 1.5f) / 3.0f) * 3.0f + 1.5f, math.round((p.y - 1.5f) / 3.0f) * 3.0f + 1.5f, math.round((p.z - 1.5f) / 3.0f) * 3.0f + 1.5f);
             if (!SystemAPI.HasComponent<OriginalPosition>(entity)) ecb.AddComponent(entity, new OriginalPosition { Value = perfectPos });
@@ -186,34 +166,37 @@ public partial struct StressVisualizationSystem : ISystem
     private void UpdateResults(ref SystemState state)
     {
         state.Dependency.Complete();
-        string currentStressPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
+        string path = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
 
-        using (StreamWriter writer = new StreamWriter(currentStressPath, false))
+        using (StreamWriter writer = new StreamWriter(path, false))
         {
-            writer.WriteLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Defense");
+            writer.WriteLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive");
 
-            foreach (var (stress, color, health, originalPos, mat) in
-                     SystemAPI.Query<RefRO<BlockStress>, RefRW<URPMaterialPropertyBaseColor>, RefRO<BlockHealth>, RefRO<OriginalPosition>, RefRO<BlockMaterial>>())
+            foreach (var (stress, color, mat, pos) in SystemAPI.Query<RefRO<BlockStress>, RefRW<URPMaterialPropertyBaseColor>, RefRO<BlockMaterial>, RefRO<OriginalPosition>>())
             {
-                float3 p = originalPos.ValueRO.Value;
                 float curStress = stress.ValueRO.SmoothedStress;
 
-                // ⭐ 각 블록의 실제 방어력(Defense)을 기준으로 그라데이션 비율(t) 계산
-                float defense = math.max(1.0f, health.ValueRO.Defense);
-                float t = math.clamp(curStress / defense, 0.0f, 1.0f);
+                // ⭐ 투트랙 판정: 인장과 압축 중 더 약한 고리(min값)를 기준으로 위험도 계산
+                float limit = math.max(1.0f, math.min(mat.ValueRO.TensileStiffness, mat.ValueRO.CompressiveStiffness));
+                float t = math.clamp(curStress / limit, 0.0f, 1.0f);
 
-                if (isWeightScanMode)
-                    color.ValueRW.Value = new float4(1.0f, 1.0f - t, 1.0f - t, 1.0f);
-                else
-                    color.ValueRW.Value = new float4(1.0f - t, 1.0f, 1.0f - t, 1.0f);
+                if (isWeightScanMode) color.ValueRW.Value = new float4(1.0f, 1.0f - t, 1.0f - t, 1.0f);
+                else color.ValueRW.Value = new float4(1.0f - t, 1.0f, 1.0f - t, 1.0f);
 
                 string risk = t >= 0.8f ? "DANGER" : (t >= 0.5f ? "WARNING" : "SAFE");
-                string id = $"{(int)math.round(p.x * 10.0f)}_{(int)math.round(p.z * 10.0f)}_{(int)math.round(p.y * 10.0f)}";
+                float3 p = pos.ValueRO.Value;
 
-                writer.WriteLine($"{id},{p.x:F2},{p.y:F2},{p.z:F2},{curStress:F2},{risk},{(risk == "DANGER" ? "Y" : "")},{mat.ValueRO.MaterialName},{defense:F1}");
+                // ⭐ int 캐스팅 제거, float 패딩 통일!
+                float ix = math.round(p.x * 10f); float iy = math.round(p.y * 10f); float iz = math.round(p.z * 10f);
+                string strX = $"{(ix < 0f ? "-" : "0")}{math.abs(ix):000}";
+                string strZ = $"{(iz < 0f ? "-" : "0")}{math.abs(iz):000}";
+                string strY = $"{(iy < 0f ? "-" : "0")}{math.abs(iy):000}";
+                string id = $"{strX}_{strZ}_{strY}";
+
+                writer.WriteLine($"{id},{p.x:F2},{p.y:F2},{p.z:F2},{curStress:F2},{risk},{(risk == "DANGER" ? "Y" : "")},{mat.ValueRO.MaterialName},{mat.ValueRO.TensileStiffness:F1},{mat.ValueRO.CompressiveStiffness:F1}");
             }
         }
         needsColorUpdate = false;
-        Debug.Log("📊 [방어력 비례 시각화] 스트레스 분석 리포트 생성 완료!");
+        Debug.Log("📊 [투트랙 & float ID 통일] 15cm 규격 시각화 완료!");
     }
 }
