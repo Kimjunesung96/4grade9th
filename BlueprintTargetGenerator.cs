@@ -193,14 +193,17 @@ public class BlueprintTargetGenerator : MonoBehaviour
         {
             pendingFileName = Path.GetFileNameWithoutExtension(imagePath);
             
-            byte[] bytes = File.ReadAllBytes(imagePath);
-            Texture2D tex = new Texture2D(2, 2);
-            tex.LoadImage(bytes);
-            
-            currentPixels = tex.GetPixels32();
-            texWidth = (float)tex.width;
-            texHeight = (float)tex.height;
-            Destroy(tex);
+           // 🛠️ 수정된 코드
+byte[] bytes = File.ReadAllBytes(imagePath);
+Texture2D tex = new Texture2D(2, 2);
+tex.LoadImage(bytes);
+
+currentPixels = tex.GetPixels32();
+texWidth = (float)tex.width;
+texHeight = (float)tex.height;
+
+// 에디터 환경에서는 무조건 즉시 파괴(Immediate)를 써야 찌꺼기가 안 남습니다!
+DestroyImmediate(tex);
 
             isWaitingForLimit = true;
             Debug.Log($"⚙️ [{pendingFileName}] 이미지 스캔 대기! 숫자키[1~0]를 눌러 타설 사이즈(밀도)를 확정하세요.");
