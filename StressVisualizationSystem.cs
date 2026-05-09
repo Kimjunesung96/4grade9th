@@ -117,7 +117,7 @@ public partial struct StressVisualizationSystem : ISystem
             float3 perfectPos = new float3(math.round((p.x - 1.5f) / 3.0f) * 3.0f + 1.5f, math.round((p.y - 1.5f) / 3.0f) * 3.0f + 1.5f, math.round((p.z - 1.5f) / 3.0f) * 3.0f + 1.5f);
 
             if (!SystemAPI.HasComponent<OriginalPosition>(entity)) ecb.AddComponent(entity, new OriginalPosition { Value = perfectPos });
-            if (SystemAPI.HasComponent<PhysicsVelocity>(entity)) { var vel = SystemAPI.GetComponent<PhysicsVelocity>(entity); vel.Linear.y -= 0.01f; ecb.SetComponent(entity, vel); }
+            if (SystemAPI.HasComponent<PhysicsVelocity>(entity)) { var vel = SystemAPI.GetComponent[PhysicsVelocity](entity); vel.Linear.y -= 0.01f; ecb.SetComponent(entity, vel); }
             if (SystemAPI.HasComponent<PhysicsGravityFactor>(entity)) { ecb.SetComponent(entity, new PhysicsGravityFactor { Value = 1.0f }); }
         }
         ecb.Playback(state.EntityManager); ecb.Dispose();
@@ -149,7 +149,7 @@ public partial struct StressVisualizationSystem : ISystem
             for (int i = 1; i < lines.Length; i++)
             {
                 var cols = lines[i].Split(',');
-                if (cols.Length > 0) masterData[cols] = lines[i];
+                if (cols.Length > 0) masterData[cols[0]] = lines[i];
             }
         }
 
@@ -159,8 +159,8 @@ public partial struct StressVisualizationSystem : ISystem
             foreach (var (stress, color, pos, entity) in SystemAPI.Query<RefRO<BlockStress>, RefRW<URPMaterialPropertyBaseColor>, RefRO<OriginalPosition>>().WithEntityAccess())
             {
                 float curStress = stress.ValueRO.SmoothedStress;
-                string matName = SystemAPI.HasComponent<BlockMaterial>(entity) ? SystemAPI.GetComponent<BlockMaterial>(entity).MaterialName.ToString() : "Default";
-                float tensile = SystemAPI.HasComponent<BlockMaterial>(entity) ? SystemAPI.GetComponent<BlockMaterial>(entity).TensileStiffness : 400f;
+                string matName = SystemAPI.HasComponent[BlockMaterial](entity) ? SystemAPI.GetComponent[BlockMaterial](entity).MaterialName.ToString() : "Default";
+                float tensile = SystemAPI.HasComponent[BlockMaterial](entity) ? SystemAPI.GetComponent[BlockMaterial](entity).TensileStiffness : 400f;
                 float limit = math.max(1.0f, tensile);
                 float t = math.clamp(curStress / limit, 0.0f, 1.0f);
 
@@ -168,19 +168,19 @@ public partial struct StressVisualizationSystem : ISystem
                 int ix = (int)math.round(p.x * 10f);
                 int iy = (int)math.round(p.y * 10f);
                 int iz = (int)math.round(p.z * 10f);
-                string id = $"{ix}_{iz}_{iy}";
+                string id = ix.ToString() + "_" + iz.ToString() + "_" + iy.ToString();
 
                 string tool = "Existing";
                 if (masterData.ContainsKey(id))
                 {
                     string[] oldCols = masterData[id].Split(',');
-                    [cite_start]if (oldCols.Length >= 9) tool = oldCols[8];
+                    if (oldCols.Length >= 9) tool = oldCols[8];
                 }
 
-                writer.WriteLine($"{id},{p.x:F2},{p.y:F2},{p.z:F2},{curStress:F2},{(t >= 0.8f ? "DANGER" : "SAFE")},{(t >= 0.8f ? "Y" : "N")},{matName},{tool}");
+                writer.WriteLine(id + "," + p.x.ToString("F2") + "," + p.y.ToString("F2") + "," + p.z.ToString("F2") + "," + curStress.ToString("F2") + "," + (t >= 0.8f ? "DANGER" : "SAFE") + "," + (t >= 0.8f ? "Y" : "N") + "," + matName + "," + tool);
             }
         }
         needsColorUpdate = false;
-        Debug.Log("📊 [시각화] CurrentStress.csv 표준화 업데이트 완료!");
+        Debug.Log("한글 주석: CurrentStress 갱신 완료");
     }
 }
