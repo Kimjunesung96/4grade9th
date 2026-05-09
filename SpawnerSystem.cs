@@ -82,17 +82,12 @@ public partial struct SpawnerSystem : ISystem
 
         PhysicsWorld physicsWorld = physicsSingleton.PhysicsWorld;
 
-        // =====================================================================
-        // ⭐ 수동 타설 백업 로직 (십장님 호통 반영: 고양이 전체를 복사하라!)
-        // =====================================================================
         if (backupIDToQuery > -1f)
         {
             StringBuilder csv = new StringBuilder();
             csv.AppendLine("ID,X,Y,Z,Type");
             bool found = false;
 
-            // ❌ 기존의 멍청했던 '마지막 번호(StructureID)만 찾기' 조건문 삭제!
-            // ✅ 현장에 지어진 '모든 블록(고양이 몸통, 머리, 귀 전부)'을 한 번에 싹 다 긁어모아 저장합니다.
             foreach (var transform in SystemAPI.Query<RefRO<LocalTransform>>().WithAll<BlockTag>())
             {
                 float px = transform.ValueRO.Position.x;
@@ -100,7 +95,12 @@ public partial struct SpawnerSystem : ISystem
                 float pz = transform.ValueRO.Position.z;
                 string typeStr = py > 1.5f ? "Wall" : "Floor";
 
-                string realId = $"{(int)math.round(px * 10f)}_{(int)math.round(pz * 10f)}_{(int)math.round(py * 10f)}";
+                float ix = math.round(px * 10f); float iy = math.round(py * 10f); float iz = math.round(pz * 10f);
+                string strX = $"{(ix < 0f ? "-" : "0")}{math.abs(ix):000}";
+                string strZ = $"{(iz < 0f ? "-" : "0")}{math.abs(iz):000}";
+                string strY = $"{(iy < 0f ? "-" : "0")}{math.abs(iy):000}";
+                string realId = $"{strX}_{strZ}_{strY}";
+
                 csv.AppendLine($"{realId},{px},{py},{pz},{typeStr}");
                 found = true;
             }
@@ -110,9 +110,9 @@ public partial struct SpawnerSystem : ISystem
                 string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
                 if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
                 File.WriteAllText(path, csv.ToString());
-                UnityEngine.Debug.Log($"💾 [U모드 스냅샷] 고양이 귀만이 아닌, 현장의 전체 건축물 통째로 백업 완료!");
+                UnityEngine.Debug.Log($"💾 [U모드 스냅샷] 현장의 전체 건축물 통째로 백업 완료!");
             }
-            backupIDToQuery = -1f; // 백업 완료 후 스위치 초기화
+            backupIDToQuery = -1f;
         }
 
         if (isClearREnabled && Input.GetKeyDown(KeyCode.R)) { if (LogManager.Instance != null) LogManager.Instance.OnPressRKey(); isCenterMoved = false; UnityEngine.Debug.Log("🪓 [현장 철거] R키 작동! 건물은 철거되지만 도면은 유지됩니다."); }
@@ -207,7 +207,7 @@ public partial struct SpawnerSystem : ISystem
                     {
                         ecb.AddComponent<BlockTag>(instance);
                         ecb.AddComponent<BlockStress>(instance);
-                        ecb.AddComponent(instance, new StructureID { Value = (int)nextStructureID });
+                        ecb.AddComponent(instance, new StructureID { Value = nextStructureID });
 
                         if (isReinforceBlock)
                         {
@@ -238,17 +238,7 @@ public partial struct SpawnerSystem : ISystem
 
                 if (triggerSpecialReal)
                 {
-                    var keys = gridMap.GetKeyArray(Allocator.Temp);
-                    int3[] gridDirs = { new int3(1, 0, 0), new int3(0, 1, 0), new int3(0, 0, 1) };
-                    float3[] internalDirs = { math.right(), math.up(), math.forward() };
-
-                    foreach (var key in keys)
-                    {
-                        Entity cur = gridMap[key]; float3 curPos = posMap[cur];
-                        for (int d = 0; d < 3; d++) { if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor)) CreateIndestructibleJoint(ref ecb, cur, neighbor, internalDirs[d] * 3.0f); }
-                        foreach (var anchorDir in new float3[] { math.up(), math.down() }) { RaycastInput ray = new RaycastInput { Start = curPos, End = curPos + anchorDir * 2.0f, Filter = CollisionFilter.Default }; if (physicsWorld.CastRay(ray, out Unity.Physics.RaycastHit hit)) { if (hit.Entity != Entity.Null && !posMap.ContainsKey(hit.Entity) && SystemAPI.HasComponent<BlockTag>(hit.Entity)) { float3 hitPos = SystemAPI.GetComponent<LocalTransform>(hit.Entity).Position; CreateIndestructibleJoint(ref ecb, hit.Entity, cur, curPos - hitPos); } } }
-                    }
-                    keys.Dispose();
+                    ApplyOptimizedJoints(ref ecb, gridMap, posMap);
 
                     if (isYMode)
                     {
@@ -261,12 +251,9 @@ public partial struct SpawnerSystem : ISystem
                     else
                     {
                         ExternalBlueprintData.Clear();
-                        isOMode = false;
-                        isLMode = false;
-                        isUMode = false;
+                        isOMode = false; isLMode = false; isUMode = false;
                         UnityEngine.Debug.Log("🏗️ [도면 공사] O/U 복층 도면 타설 완료!");
                     }
-
                     nextStructureID += 1f;
                 }
                 gridMap.Dispose(); posMap.Dispose();
@@ -278,79 +265,19 @@ public partial struct SpawnerSystem : ISystem
         if (loadDelayTimer > 0f)
         {
             loadDelayTimer -= 1f;
-            if (loadDelayTimer <= 0f)
-            {
-                string planCsvPath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
-                if (File.Exists(planCsvPath))
-                {
-                    string[] lines = File.ReadAllLines(planCsvPath);
-                    float minX = 99999f, minZ = 99999f, maxX = -99999f, maxZ = -99999f;
-
-                    System.Collections.Generic.List<float4> tempList = new System.Collections.Generic.List<float4>();
-                    System.Collections.Generic.HashSet<string> loadedIDs = new System.Collections.Generic.HashSet<string>();
-
-                    for (float i = 1f; i < (float)lines.Length; i += 1f)
-                    {
-                        string[] cols = lines[(int)i].Split(',');
-
-                        if (cols.Length >= 5f && (cols[4] == "Reinforcement" || cols[4] == "Existing"))
-                        {
-                            string[] idParts = cols[0].Split('_');
-                            if (idParts.Length >= 3f)
-                            {
-                                float px = float.Parse(idParts[0]) / 10f;
-                                float pz = float.Parse(idParts[1]) / 10f;
-                                float py = float.Parse(idParts[2]) / 10f;
-
-                                float x = math.round((px - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                                float z = math.round((pz - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                                float y = math.round((py - 1.5f) / 3.0f) * 3.0f + 1.5f;
-
-                                string uniqueKey = $"{x}_{y}_{z}";
-                                if (loadedIDs.Contains(uniqueKey)) continue;
-
-                                float isReinforce = cols[4] == "Reinforcement" ? 1f : 0f;
-                                tempList.Add(new float4(x, y, z, isReinforce));
-                                loadedIDs.Add(uniqueKey);
-
-                                if (x < minX) minX = x; if (x > maxX) maxX = x; if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
-                            }
-                        }
-                    }
-                    if (tempList.Count > 0)
-                    {
-                        isYMode = true; blueprintOffsets.Clear(); tempList.Sort((a, b) => a.y.CompareTo(b.y));
-                        float centerX = math.round(((minX + maxX) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                        float centerZ = math.round(((minZ + maxZ) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
-
-                        customCenterPos = new float3(centerX, 0f, centerZ);
-                        isCenterMoved = true;
-
-                        foreach (var pos in tempList) { blueprintOffsets.Add(new float4(pos.x - centerX, pos.y, pos.z - centerZ, pos.w)); }
-                        UnityEngine.Debug.Log($"🏗️ [스마트 로드 완] {tempList.Count}개의 구조물이 도면에 장전되었습니다! F키로 확인해 보세요.");
-                    }
-                }
-            }
+            if (loadDelayTimer <= 0f) LoadReinforcementPlan();
         }
 
         if (isYMode && !isBMode)
         {
             if (Input.GetKeyDown(KeyCode.Q))
             {
-                for (int i = 0; i < blueprintOffsets.Length; i++)
-                {
-                    float4 offset = blueprintOffsets[i];
-                    blueprintOffsets[i] = new float4(-offset.z, offset.y, offset.x, offset.w);
-                }
+                for (int i = 0; i < blueprintOffsets.Length; i++) { float4 offset = blueprintOffsets[i]; blueprintOffsets[i] = new float4(-offset.z, offset.y, offset.x, offset.w); }
                 UnityEngine.Debug.Log("🔄 Y도면이 왼쪽[Q]으로 90도 회전했습니다!");
             }
             if (Input.GetKeyDown(KeyCode.E))
             {
-                for (int i = 0; i < blueprintOffsets.Length; i++)
-                {
-                    float4 offset = blueprintOffsets[i];
-                    blueprintOffsets[i] = new float4(offset.z, offset.y, -offset.x, offset.w);
-                }
+                for (int i = 0; i < blueprintOffsets.Length; i++) { float4 offset = blueprintOffsets[i]; blueprintOffsets[i] = new float4(offset.z, offset.y, -offset.x, offset.w); }
                 UnityEngine.Debug.Log("🔄 Y도면이 오른쪽[E]으로 90도 회전했습니다!");
             }
         }
@@ -404,23 +331,113 @@ public partial struct SpawnerSystem : ISystem
                 if (LogManager.Instance != null) { string toolName = GetToolName(currentBuildMode); string centerStr = $"[{(actualStartPos.x + actualEndPos.x) / 2f:F1}, {finalBuildY:F1}, {(actualStartPos.z + actualEndPos.z) / 2f:F1}]"; LogManager.Instance.AddLog(toolName, (int)math.round(guideHeight), isGhost ? "Key_F" : "Key_G", isGhost ? "Preview" : "Build", centerStr, 0f, 0f); }
                 ExecuteBuild(ref state, spawnerData, actualStartPos, actualEndPos, finalBuildY, hitEntity, isGhost);
 
-                if (!isGhost)
+                if (!isGhost) { backupIDToQuery = 1f; isGuideActive = false; }
+            }
+        }
+    }
+
+    // ⭐ [중복 방지] 조인트 최적화 모듈
+    private void ApplyOptimizedJoints(ref EntityCommandBuffer ecb, NativeHashMap<int3, Entity> gridMap, NativeHashMap<Entity, float3> posMap)
+    {
+        var jointHistory = new NativeParallelHashSet<long>(gridMap.Count * 6, Allocator.Temp);
+        var keys = gridMap.GetKeyArray(Allocator.Temp);
+        int3[] dirs = { new int3(1, 0, 0), new int3(0, 1, 0), new int3(0, 0, 1), new int3(-1, 0, 0), new int3(0, -1, 0), new int3(0, 0, -1) };
+
+        foreach (var key in keys)
+        {
+            Entity cur = gridMap[key];
+            for (int i = 0; i < 6; i++)
+            {
+                if (gridMap.TryGetValue(key + dirs[i], out Entity neighbor))
                 {
-                    backupIDToQuery = 1f; // 이제 이 변수는 그냥 '트리거' 역할만 합니다. 1이든 10이든 상관없습니다.
-                    isGuideActive = false;
+                    long jKey = CreateJointKey(cur, neighbor);
+                    if (!jointHistory.Contains(jKey))
+                    {
+                        CreateIndestructibleJoint(ref ecb, cur, neighbor, posMap[neighbor] - posMap[cur]);
+                        jointHistory.Add(jKey);
+                    }
                 }
             }
+        }
+        jointHistory.Dispose(); keys.Dispose();
+    }
+
+    private long CreateJointKey(Entity a, Entity b)
+    {
+        long idA = (long)a.Index; long idB = (long)b.Index; return idA < idB ? (idA << 32) | idB : (idB << 32) | idA;
+    }
+
+    // ⭐ [해결됨] 시스템 각주 버그를 우회하는 절대 안전 로드 방식!
+    private void LoadReinforcementPlan()
+    {
+        string path = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
+        if (!File.Exists(path)) return;
+
+        string[] lines = File.ReadAllLines(path);
+        float minX = 99999f, minZ = 99999f, maxX = -99999f, maxZ = -99999f;
+
+        System.Collections.Generic.List<float4> tempList = new System.Collections.Generic.List<float4>();
+        System.Collections.Generic.HashSet<string> loadedIDs = new System.Collections.Generic.HashSet<string>();
+
+        for (int i = 1; i < lines.Length; i++)
+        {
+            string line = (string)lines.GetValue(i);
+            string[] cols = line.Split(',');
+            if (cols.Length < 5) continue;
+
+            string col0 = (string)cols.GetValue(0); // 버그 방지
+            string col4 = (string)cols.GetValue(4); // 버그 방지
+
+            if (col4 == "Reinforcement" || col4 == "Existing")
+            {
+                string[] idParts = col0.Split('_');
+                if (idParts.Length >= 3)
+                {
+                    string idp0 = (string)idParts.GetValue(0);
+                    string idp1 = (string)idParts.GetValue(1);
+                    string idp2 = (string)idParts.GetValue(2);
+
+                    float px = float.Parse(idp0) / 10f;
+                    float pz = float.Parse(idp1) / 10f;
+                    float py = float.Parse(idp2) / 10f;
+
+                    float x = math.round((px - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                    float z = math.round((pz - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                    float y = math.round((py - 1.5f) / 3.0f) * 3.0f + 1.5f;
+
+                    string uniqueKey = $"{x}_{y}_{z}";
+                    if (loadedIDs.Contains(uniqueKey)) continue;
+
+                    float isReinforce = (col4 == "Reinforcement") ? 1f : 0f;
+                    tempList.Add(new float4(x, y, z, isReinforce));
+                    loadedIDs.Add(uniqueKey);
+
+                    if (x < minX) minX = x; if (x > maxX) maxX = x; if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+                }
+            }
+        }
+        if (tempList.Count > 0)
+        {
+            isYMode = true; blueprintOffsets.Clear(); tempList.Sort((a, b) => a.y.CompareTo(b.y));
+            float centerX = math.round(((minX + maxX) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
+            float centerZ = math.round(((minZ + maxZ) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
+
+            customCenterPos = new float3(centerX, 0f, centerZ);
+            isCenterMoved = true;
+
+            foreach (var pos in tempList) { blueprintOffsets.Add(new float4(pos.x - centerX, pos.y, pos.z - centerZ, pos.w)); }
+            UnityEngine.Debug.Log($"🏗️ [스마트 로드 완] {tempList.Count}개의 구조물이 도면에 장전되었습니다! F키로 확인해 보세요.");
         }
     }
 
     private void ExecuteBuild(ref SystemState state, SpawnerData data, float3 actualStart, float3 actualEnd, float targetY, Entity hitEntity, bool isGhost)
     {
         bool hitExistingBlock = SystemAPI.HasComponent<BlockTag>(hitEntity); float3 hitEntityPos = hitExistingBlock ? SystemAPI.GetComponent<LocalTransform>(hitEntity).Position : float3.zero;
-        if (math.abs(currentBuildMode - 1f) < 0.01f) BuildSolidWall(ref state, data, actualStart, actualEnd, targetY, hitExistingBlock ? hitEntity : Entity.Null, hitEntityPos, (int)nextStructureID, isGhost);
-        else if (math.abs(currentBuildMode - 2f) < 0.01f) BuildEmptyFrame(ref state, data, actualStart, actualEnd, targetY, hitExistingBlock ? hitEntity : Entity.Null, hitEntityPos, (int)nextStructureID, isGhost);
-        else if (math.abs(currentBuildMode - 3f) < 0.01f) BuildCircularPattern(ref state, data, actualStart, actualEnd, targetY, hitExistingBlock ? hitEntity : Entity.Null, hitEntityPos, (int)nextStructureID, isGhost);
-        else if (math.abs(currentBuildMode - 4f) < 0.01f) BuildPyramid(ref state, data, actualStart, actualEnd, targetY, hitExistingBlock ? hitEntity : Entity.Null, hitEntityPos, (int)nextStructureID, isGhost);
-        else if (math.abs(currentBuildMode - 5f) < 0.01f) BuildCone(ref state, data, actualStart, actualEnd, targetY, hitExistingBlock ? hitEntity : Entity.Null, hitEntityPos, (int)nextStructureID, isGhost);
+        if (math.abs(currentBuildMode - 1f) < 0.01f) BuildSolidWall(ref state, data, actualStart, actualEnd, targetY, hitExistingBlock ? hitEntity : Entity.Null, hitEntityPos, isGhost);
+        else if (math.abs(currentBuildMode - 2f) < 0.01f) BuildEmptyFrame(ref state, data, actualStart, actualEnd, targetY, hitExistingBlock ? hitEntity : Entity.Null, hitEntityPos, isGhost);
+        else if (math.abs(currentBuildMode - 3f) < 0.01f) BuildCircularPattern(ref state, data, actualStart, actualEnd, targetY, hitExistingBlock ? hitEntity : Entity.Null, hitEntityPos, isGhost);
+        else if (math.abs(currentBuildMode - 4f) < 0.01f) BuildPyramid(ref state, data, actualStart, actualEnd, targetY, hitExistingBlock ? hitEntity : Entity.Null, hitEntityPos, isGhost);
+        else if (math.abs(currentBuildMode - 5f) < 0.01f) BuildCone(ref state, data, actualStart, actualEnd, targetY, hitExistingBlock ? hitEntity : Entity.Null, hitEntityPos, isGhost);
         if (!isGhost) nextStructureID += 1f;
     }
 
@@ -440,5 +457,189 @@ public partial struct SpawnerSystem : ISystem
     private void CreateIndestructibleJoint(ref EntityCommandBuffer ecb, Entity entityA, Entity entityB, float3 offsetToB)
     {
         Entity jointEntity = ecb.CreateEntity(); ecb.AddSharedComponent(jointEntity, new PhysicsWorldIndex()); ecb.AddComponent<JointTag>(jointEntity); ecb.AddComponent(jointEntity, new PhysicsConstrainedBodyPair(entityA, entityB, true)); ecb.AddComponent(jointEntity, PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f)));
+    }
+
+    private void BuildSolidWall(ref SystemState state, SpawnerData data, float3 start, float3 end, float targetY, Entity hitEntity, float3 hitPos, bool isGhost)
+    {
+        var ecb = SystemAPI.GetSingleton<BeginSimulationEntityCommandBufferSystem.Singleton>().CreateCommandBuffer(state.WorldUnmanaged);
+        float blockSize = 3.0f; float halfSize = 1.5f;
+        float3 startXZ = new float3(start.x, 0, start.z); float3 endXZ = new float3(end.x, 0, end.z);
+        float dist = math.distance(startXZ, endXZ); float3 dir = dist < 0.1f ? new float3(1, 0, 0) : math.normalize(endXZ - startXZ);
+        int total = (int)math.max(1, math.round(dist / blockSize));
+        int height = (int)math.max(1, math.round(guideHeight));
+        var gridMap = new NativeHashMap<int3, Entity>(total * height, Allocator.Temp);
+        var posMap = new NativeHashMap<Entity, float3>(total * height, Allocator.Temp);
+
+        for (int i = 0; i <= total; i++)
+        {
+            for (int h = 0; h < height; h++)
+            {
+                float3 pos = startXZ + (dir * (i * blockSize)); pos.y = targetY + halfSize + (h * blockSize);
+                var inst = ecb.Instantiate(data.Prefab);
+                ecb.SetComponent(inst, LocalTransform.FromPositionRotationScale(pos, quaternion.identity, 2.95f));
+                if (isGhost) { ecb.AddComponent<GhostBlockTag>(inst); ecb.RemoveComponent<PhysicsCollider>(inst); }
+                else
+                {
+                    ecb.AddComponent<BlockTag>(inst); ecb.AddComponent<BlockStress>(inst); ecb.AddComponent(inst, new StructureID { Value = nextStructureID });
+                    if (pos.y <= 2.0f) { var m = SystemAPI.GetComponent<PhysicsMass>(data.Prefab); m.InverseMass = 0f; ecb.SetComponent(inst, m); }
+                    int3 key = new int3((int)math.floor(pos.x / 3f), (int)math.floor(pos.y / 3f), (int)math.floor(pos.z / 3f));
+                    gridMap.TryAdd(key, inst); posMap.TryAdd(inst, pos);
+                }
+            }
+        }
+        if (!isGhost) ApplyOptimizedJoints(ref ecb, gridMap, posMap);
+        gridMap.Dispose(); posMap.Dispose();
+    }
+
+    private void BuildEmptyFrame(ref SystemState state, SpawnerData data, float3 start, float3 end, float targetY, Entity hitEntity, float3 hitPos, bool isGhost)
+    {
+        var ecb = SystemAPI.GetSingleton<BeginSimulationEntityCommandBufferSystem.Singleton>().CreateCommandBuffer(state.WorldUnmanaged);
+        float blockSize = 3.0f; float halfSize = 1.5f;
+        int widthCount = (int)math.max(1, math.round(math.abs(end.x - start.x) / blockSize) + 1);
+        int depthCount = (int)math.max(1, math.round(math.abs(end.z - start.z) / blockSize) + 1);
+        int heightCount = (int)math.max(1, math.round(guideHeight));
+        float3 corner = new float3(math.min(start.x, end.x), 0, math.min(start.z, end.z));
+        var gridMap = new NativeHashMap<int3, Entity>(widthCount * heightCount * depthCount, Allocator.Temp);
+        var posMap = new NativeHashMap<Entity, float3>(widthCount * heightCount * depthCount, Allocator.Temp);
+
+        for (int h = 0; h < heightCount; h++)
+        {
+            for (int x = 0; x < widthCount; x++)
+            {
+                for (int z = 0; z < depthCount; z++)
+                {
+                    bool isEdge = (x == 0 || x == widthCount - 1 || z == 0 || z == depthCount - 1 || h == 0 || h == heightCount - 1);
+                    if (!isEdge) continue;
+                    float3 pos = corner + new float3(x * blockSize + halfSize, targetY + halfSize + (h * blockSize), z * blockSize + halfSize);
+                    var inst = ecb.Instantiate(data.Prefab);
+                    ecb.SetComponent(inst, LocalTransform.FromPositionRotationScale(pos, quaternion.identity, 2.95f));
+                    if (isGhost) { ecb.AddComponent<GhostBlockTag>(inst); ecb.RemoveComponent<PhysicsCollider>(inst); }
+                    else
+                    {
+                        ecb.AddComponent<BlockTag>(inst); ecb.AddComponent<BlockStress>(inst); ecb.AddComponent(inst, new StructureID { Value = nextStructureID });
+                        if (pos.y <= 2.0f) { var m = SystemAPI.GetComponent<PhysicsMass>(data.Prefab); m.InverseMass = 0f; ecb.SetComponent(inst, m); }
+                        int3 key = new int3((int)math.floor(pos.x / 3f), (int)math.floor(pos.y / 3f), (int)math.floor(pos.z / 3f));
+                        gridMap.TryAdd(key, inst); posMap.TryAdd(inst, pos);
+                    }
+                }
+            }
+        }
+        if (!isGhost) ApplyOptimizedJoints(ref ecb, gridMap, posMap);
+        gridMap.Dispose(); posMap.Dispose();
+    }
+
+    private void BuildCircularPattern(ref SystemState state, SpawnerData data, float3 start, float3 end, float targetY, Entity hitEntity, float3 hitPos, bool isGhost)
+    {
+        var ecb = SystemAPI.GetSingleton<BeginSimulationEntityCommandBufferSystem.Singleton>().CreateCommandBuffer(state.WorldUnmanaged);
+        float blockSize = 3.0f; float halfSize = 1.5f;
+        float radius = math.distance(start, end) / 2.0f;
+        float3 center = (start + end) / 2.0f; center = new float3(math.floor(center.x / 3f) * 3f + 1.5f, 0, math.floor(center.z / 3f) * 3f + 1.5f);
+        int baseCount = (int)math.floor(radius / blockSize);
+        int floors = (int)math.max(1, math.round(guideHeight));
+        var gridMap = new NativeHashMap<int3, Entity>((baseCount * 2 + 1) * (baseCount * 2 + 1) * floors, Allocator.Temp);
+        var posMap = new NativeHashMap<Entity, float3>((baseCount * 2 + 1) * (baseCount * 2 + 1) * floors, Allocator.Temp);
+
+        for (int h = 0; h < floors; h++)
+        {
+            for (int x = -baseCount; x <= baseCount; x++)
+            {
+                for (int z = -baseCount; z <= baseCount; z++)
+                {
+                    float dist = math.sqrt(x * x + z * z);
+                    bool inside = (h == 0) ? (dist <= baseCount + 0.5f) : (dist <= baseCount + 0.5f && dist >= baseCount - 0.5f);
+                    if (!inside) continue;
+                    float3 pos = center + new float3(x * blockSize, targetY + halfSize + (h * blockSize), z * blockSize);
+                    var inst = ecb.Instantiate(data.Prefab);
+                    ecb.SetComponent(inst, LocalTransform.FromPositionRotationScale(pos, quaternion.identity, 2.95f));
+                    if (isGhost) { ecb.AddComponent<GhostBlockTag>(inst); ecb.RemoveComponent<PhysicsCollider>(inst); }
+                    else
+                    {
+                        ecb.AddComponent<BlockTag>(inst); ecb.AddComponent<BlockStress>(inst); ecb.AddComponent(inst, new StructureID { Value = nextStructureID });
+                        if (pos.y <= 2.0f) { var m = SystemAPI.GetComponent<PhysicsMass>(data.Prefab); m.InverseMass = 0f; ecb.SetComponent(inst, m); }
+                        int3 key = new int3((int)math.floor(pos.x / 3f), (int)math.floor(pos.y / 3f), (int)math.floor(pos.z / 3f));
+                        gridMap.TryAdd(key, inst); posMap.TryAdd(inst, pos);
+                    }
+                }
+            }
+        }
+        if (!isGhost) ApplyOptimizedJoints(ref ecb, gridMap, posMap);
+        gridMap.Dispose(); posMap.Dispose();
+    }
+
+    private void BuildPyramid(ref SystemState state, SpawnerData data, float3 start, float3 end, float targetY, Entity hitEntity, float3 hitPos, bool isGhost)
+    {
+        var ecb = SystemAPI.GetSingleton<BeginSimulationEntityCommandBufferSystem.Singleton>().CreateCommandBuffer(state.WorldUnmanaged);
+        float blockSize = 3.0f; float halfSize = 1.5f;
+        float minX = math.min(start.x, end.x); float maxX = math.max(start.x, end.x);
+        float minZ = math.min(start.z, end.z); float maxZ = math.max(start.z, end.z);
+        int levels = (int)math.min(math.round((maxX - minX) / blockSize) + 1, math.round((maxZ - minZ) / blockSize) + 1);
+        var gridMap = new NativeHashMap<int3, Entity>(1000, Allocator.Temp);
+        var posMap = new NativeHashMap<Entity, float3>(1000, Allocator.Temp);
+
+        for (int lv = 0; lv < levels; lv++)
+        {
+            float inset = lv * blockSize;
+            float curMinX = minX + inset; float curMaxX = maxX - inset;
+            float curMinZ = minZ + inset; float curMaxZ = maxZ - inset;
+            if (curMinX > curMaxX + 0.1f || curMinZ > curMaxZ + 0.1f) break;
+            for (float x = curMinX; x <= curMaxX + 0.1f; x += blockSize)
+            {
+                for (float z = curMinZ; z <= curMaxZ + 0.1f; z += blockSize)
+                {
+                    float3 pos = new float3(x + halfSize, targetY + halfSize + (lv * blockSize), z + halfSize);
+                    var inst = ecb.Instantiate(data.Prefab);
+                    ecb.SetComponent(inst, LocalTransform.FromPositionRotationScale(pos, quaternion.identity, 2.95f));
+                    if (isGhost) { ecb.AddComponent<GhostBlockTag>(inst); ecb.RemoveComponent<PhysicsCollider>(inst); }
+                    else
+                    {
+                        ecb.AddComponent<BlockTag>(inst); ecb.AddComponent<BlockStress>(inst); ecb.AddComponent(inst, new StructureID { Value = nextStructureID });
+                        if (pos.y <= 2.0f) { var m = SystemAPI.GetComponent<PhysicsMass>(data.Prefab); m.InverseMass = 0f; ecb.SetComponent(inst, m); }
+                        int3 key = new int3((int)math.floor(pos.x / 3f), (int)math.floor(pos.y / 3f), (int)math.floor(pos.z / 3f));
+                        gridMap.TryAdd(key, inst); posMap.TryAdd(inst, pos);
+                    }
+                }
+            }
+        }
+        if (!isGhost) ApplyOptimizedJoints(ref ecb, gridMap, posMap);
+        gridMap.Dispose(); posMap.Dispose();
+    }
+
+    private void BuildCone(ref SystemState state, SpawnerData data, float3 start, float3 end, float targetY, Entity hitEntity, float3 hitPos, bool isGhost)
+    {
+        var ecb = SystemAPI.GetSingleton<BeginSimulationEntityCommandBufferSystem.Singleton>().CreateCommandBuffer(state.WorldUnmanaged);
+        float blockSize = 3.0f; float halfSize = 1.5f;
+        float radius = math.distance(start, end) / 2.0f;
+        float3 center = (start + end) / 2.0f; center = new float3(math.floor(center.x / 3f) * 3f + 1.5f, 0, math.floor(center.z / 3f) * 3f + 1.5f);
+        int baseRadiusCount = (int)math.floor(radius / blockSize);
+        int floors = (int)math.max(1, math.round(guideHeight));
+        var gridMap = new NativeHashMap<int3, Entity>(1000, Allocator.Temp);
+        var posMap = new NativeHashMap<Entity, float3>(1000, Allocator.Temp);
+
+        for (int h = 0; h < floors; h++)
+        {
+            float curRad = math.max(0, (float)baseRadiusCount * (1.0f - (float)h / (float)floors));
+            for (int x = -baseRadiusCount; x <= baseRadiusCount; x++)
+            {
+                for (int z = -baseRadiusCount; z <= baseRadiusCount; z++)
+                {
+                    if (math.sqrt(x * x + z * z) <= curRad + 0.5f)
+                    {
+                        float3 pos = center + new float3(x * blockSize, targetY + halfSize + (h * blockSize), z * blockSize);
+                        var inst = ecb.Instantiate(data.Prefab);
+                        ecb.SetComponent(inst, LocalTransform.FromPositionRotationScale(pos, quaternion.identity, 2.95f));
+                        if (isGhost) { ecb.AddComponent<GhostBlockTag>(inst); ecb.RemoveComponent<PhysicsCollider>(inst); }
+                        else
+                        {
+                            ecb.AddComponent<BlockTag>(inst); ecb.AddComponent<BlockStress>(inst); ecb.AddComponent(inst, new StructureID { Value = nextStructureID });
+                            if (pos.y <= 2.0f) { var m = SystemAPI.GetComponent<PhysicsMass>(data.Prefab); m.InverseMass = 0f; ecb.SetComponent(inst, m); }
+                            int3 key = new int3((int)math.floor(pos.x / 3f), (int)math.floor(pos.y / 3f), (int)math.floor(pos.z / 3f));
+                            gridMap.TryAdd(key, inst); posMap.TryAdd(inst, pos);
+                        }
+                    }
+                }
+            }
+        }
+        if (!isGhost) ApplyOptimizedJoints(ref ecb, gridMap, posMap);
+        gridMap.Dispose(); posMap.Dispose();
     }
 }
