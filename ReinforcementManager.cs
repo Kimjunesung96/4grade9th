@@ -1,7 +1,6 @@
 ﻿using UnityEngine;
 using System.IO;
 using System.Collections.Generic;
-using Unity.Mathematics;
 
 public class ReinforcementManager : MonoBehaviour
 {
@@ -12,39 +11,34 @@ public class ReinforcementManager : MonoBehaviour
     {
         stressCsvPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
         planCsvPath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
-        Debug.Log("한글 주석: Y키로 도면 갱신 대기 중");
+        Debug.Log("👷‍♂️ Y(도면 갱신) 대기 중!");
     }
 
-    void Update()
-    {
-        if (Input.GetKeyDown(KeyCode.Y))
-        {
-            CreatePlanExcel();
-        }
-    }
+    void Update() { if (Input.GetKeyDown(KeyCode.Y)) { CreatePlanExcel(); } }
 
     public void CreatePlanExcel()
     {
         if (!File.Exists(stressCsvPath)) return;
-
-        string header = "BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tool";
         string[] lines = File.ReadAllLines(stressCsvPath);
+        if (lines.Length <= 1) return;
 
-        Dictionary<string, string> planData = new Dictionary<string, string>();
+        HashSet<string> existingBlocks = new HashSet<string>();
+        List<string> planLines = new List<string> { "BlockID,PosX,PosY,PosZ,Tool" };
 
         for (int i = 1; i < lines.Length; i++)
         {
-            var cols = lines[i].Split(',');
-            if (cols.Length >= 9)
-            {
-                planData[cols[0]] = lines[i];
-            }
+            string[] cols = lines[i].Split(',');
+            if (cols.Length < 7) continue;
+            string id = cols[0];
+            existingBlocks.Add(id);
+            planLines.Add($"{id},{cols[1]},{cols[2]},{cols[3]},Existing");
         }
 
         for (int i = 1; i < lines.Length; i++)
         {
-            var cols = lines[i].Split(',');
-            if (cols.Length < 7 || cols[6] != "Y") continue;
+            string[] cols = lines[i].Split(',');
+            if (cols.Length < 7) continue;
+            if (cols[6] != "Y") continue;
 
             string id = cols[0];
             string[] parts = id.Split('_');
@@ -57,31 +51,26 @@ public class ReinforcementManager : MonoBehaviour
             while (currentY >= 45f)
             {
                 currentY -= 30f;
+                float ix = Mathf.Round(cleanX * 10f);
+                float iz = Mathf.Round(cleanZ * 10f);
+                float iy = currentY;
 
-                float ix = (float)math.round(cleanX * 10f);
-                float iz = (float)math.round(cleanZ * 10f);
+                // ⭐ ID 생성 규칙 통일
+                string strX = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}";
+                string strZ = $"{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}";
+                string strY = $"{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
 
-                string strX = (ix < 0f ? "-" : "0") + math.abs(ix).ToString("000");
-                string strZ = (iz < 0f ? "-" : "0") + math.abs(iz).ToString("000");
-                string strY = (currentY < 0f ? "-" : "0") + math.abs(currentY).ToString("000");
-                string targetId = strX + "_" + strZ + "_" + strY;
-
-                if (!planData.ContainsKey(targetId))
+                string targetId = $"{strX}_{strZ}_{strY}";
+                if (!existingBlocks.Contains(targetId))
                 {
                     float exactY = currentY / 10f;
-                    planData[targetId] = targetId + "," + cleanX.ToString("F2") + "," + exactY.ToString("F2") + "," + cleanZ.ToString("F2") + ",0.00,SAFE,N,Steel,Reinforcement";
+                    planLines.Add($"{targetId},{cleanX:F2},{exactY:F2},{cleanZ:F2},Reinforcement");
+                    existingBlocks.Add(targetId);
                 }
             }
         }
 
-        List<string> output = new List<string>();
-        output.Add(header);
-        foreach (var val in planData.Values) output.Add(val);
-
-        string dir = Path.GetDirectoryName(planCsvPath);
-        if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-
-        File.WriteAllLines(planCsvPath, output);
-        Debug.Log("한글 주석: 보강 계획서 업데이트 완료");
+        File.WriteAllLines(planCsvPath, planLines);
+        Debug.Log($"📄 [ReinforcementManager] 도면 작성 완료! {planLines.Count - 1}개의 블록이 등록되었습니다.");
     }
 }
