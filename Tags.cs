@@ -10,5 +10,5 @@ public struct JointTag : IComponentData { }
 public struct DestroyTag : IComponentData { }
 public struct StructureID : IComponentData
 {
-    public int Value; // 같은 값 = 같은 덩어리(하나의 객체)
+    public float Value; // 같은 값 = 같은 덩어리(하나의 객체)
 }
