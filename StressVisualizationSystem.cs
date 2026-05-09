@@ -5,6 +5,7 @@ using Unity.Mathematics;
 using Unity.Rendering;
 using UnityEngine;
 using System.IO;
+using System.Collections.Generic;
 using Unity.Burst;
 using Unity.Collections;
 
@@ -32,8 +33,6 @@ public partial struct CalculateJointStressJob : IJobEntity
         float3 pivotB = math.transform(new RigidTransform(transB.Rotation, transB.Position), joint.BodyBFromJoint.Position);
 
         float dist = math.distance(pivotA, pivotB);
-
-        // ⭐ 십장님 호통 반영: 기본 자재 강도는 콘크리트가 아니라 'Default' 규격인 400!
         float tensile = 400.0f;
         float finalStress = dist * tensile;
 
@@ -86,8 +85,8 @@ public partial struct StressVisualizationSystem : ISystem
 
     public void OnUpdate(ref SystemState state)
     {
-        if (Input.GetKeyDown(KeyCode.V)) { isWeightScanMode = true; StartScan(ref state); Debug.Log("🔍 [V모드 하중 스캔 시작] 구조물 변형을 분석 중입니다... (5초 대기)"); }
-        else if (Input.GetKeyDown(KeyCode.B)) { isWeightScanMode = false; StartScan(ref state); Debug.Log("🌍 [B모드 지진 테스트 시작] 진동 분석을 진행 중입니다... (5초 대기)"); }
+        if (Input.GetKeyDown(KeyCode.V)) { isWeightScanMode = true; StartScan(ref state); }
+        else if (Input.GetKeyDown(KeyCode.B)) { isWeightScanMode = false; StartScan(ref state); }
 
         if (isScanning)
         {
@@ -134,51 +133,54 @@ public partial struct StressVisualizationSystem : ISystem
         }
     }
 
-    private void UpdateResults(ref SystemState state)
+    public void UpdateResults(ref SystemState state)
     {
         state.Dependency.Complete();
         string dirPath = Path.Combine(Application.dataPath, "StressBlock");
         if (!Directory.Exists(dirPath)) Directory.CreateDirectory(dirPath);
         string path = Path.Combine(dirPath, "CurrentStress.csv");
 
+        string header = "BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tool";
+        Dictionary<string, string> masterData = new Dictionary<string, string>();
+
+        if (File.Exists(path))
+        {
+            string[] lines = File.ReadAllLines(path);
+            for (int i = 1; i < lines.Length; i++)
+            {
+                var cols = lines[i].Split(',');
+                if (cols.Length > 0) masterData[cols] = lines[i];
+            }
+        }
+
         using (StreamWriter writer = new StreamWriter(path, false))
         {
-            writer.WriteLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive");
-
+            writer.WriteLine(header);
             foreach (var (stress, color, pos, entity) in SystemAPI.Query<RefRO<BlockStress>, RefRW<URPMaterialPropertyBaseColor>, RefRO<OriginalPosition>>().WithEntityAccess())
             {
                 float curStress = stress.ValueRO.SmoothedStress;
-
-                // ⭐ 십장님 호통 반영 완료: 아무것도 안 적혀 있으면 기본값은 'Default'! (강도 400)
-                string matName = "Default";
-                float tensile = 400.0f;
-                float compressive = 400.0f;
-
-                if (SystemAPI.HasComponent<BlockMaterial>(entity))
-                {
-                    var mat = SystemAPI.GetComponent<BlockMaterial>(entity);
-                    matName = mat.MaterialName.ToString();
-                    tensile = mat.TensileStiffness;
-                    compressive = mat.CompressiveStiffness;
-                }
-
-                float limit = math.max(1.0f, math.min(tensile, compressive));
+                string matName = SystemAPI.HasComponent<BlockMaterial>(entity) ? SystemAPI.GetComponent<BlockMaterial>(entity).MaterialName.ToString() : "Default";
+                float tensile = SystemAPI.HasComponent<BlockMaterial>(entity) ? SystemAPI.GetComponent<BlockMaterial>(entity).TensileStiffness : 400f;
+                float limit = math.max(1.0f, tensile);
                 float t = math.clamp(curStress / limit, 0.0f, 1.0f);
 
-                if (isWeightScanMode) color.ValueRW.Value = new float4(1.0f, 1.0f - t, 1.0f - t, 1.0f);
-                else color.ValueRW.Value = new float4(1.0f - t, 1.0f, 1.0f - t, 1.0f);
-
                 float3 p = pos.ValueRO.Value;
-                float ix = math.round(p.x * 10.0f); float iy = math.round(p.y * 10.0f); float iz = math.round(p.z * 10.0f);
-                string strX = $"{(ix < 0.0f ? "-" : "0")}{math.abs(ix):000}";
-                string strZ = $"{(iz < 0.0f ? "-" : "0")}{math.abs(iz):000}";
-                string strY = $"{(iy < 0.0f ? "-" : "0")}{math.abs(iy):000}";
-                string id = $"{strX}_{strZ}_{strY}";
+                int ix = (int)math.round(p.x * 10f);
+                int iy = (int)math.round(p.y * 10f);
+                int iz = (int)math.round(p.z * 10f);
+                string id = $"{ix}_{iz}_{iy}";
 
-                writer.WriteLine($"{id},{p.x:F2},{p.y:F2},{p.z:F2},{curStress:F2},{(t >= 0.8f ? "DANGER" : "SAFE")},{(t >= 0.8f ? "Y" : "")},{matName},{tensile:F1},{compressive:F1}");
+                string tool = "Existing";
+                if (masterData.ContainsKey(id))
+                {
+                    string[] oldCols = masterData[id].Split(',');
+                    [cite_start]if (oldCols.Length >= 9) tool = oldCols[8];
+                }
+
+                writer.WriteLine($"{id},{p.x:F2},{p.y:F2},{p.z:F2},{curStress:F2},{(t >= 0.8f ? "DANGER" : "SAFE")},{(t >= 0.8f ? "Y" : "N")},{matName},{tool}");
             }
         }
         needsColorUpdate = false;
-        Debug.Log("📊 [시각화] V키 스캔 완료 및 엑셀 데이터(스마트 기입) 저장 완료!");
+        Debug.Log("📊 [시각화] CurrentStress.csv 표준화 업데이트 완료!");
     }
 }
