@@ -39,7 +39,7 @@ public partial struct CalculateJointStressJob : IJobEntity
         float dist = math.distance(pivotA, pivotB);
         float tensile = math.max(10.0f, (matA.TensileStiffness + matB.TensileStiffness) * 0.5f);
 
-        // ⭐ 가짜 증폭 계수 철거 완료! (무게가 15cm급으로 가벼워져서 실제 변위만으로도 정상 작동합니다)
+        // ⭐ 무게가 15cm급이므로 실제 변위만으로 작동
         float finalStress = dist * tensile;
 
         if (StressLookup.HasComponent(entityA)) { var s = StressLookup[entityA]; s.TargetStress += finalStress; StressLookup[entityA] = s; }
@@ -175,28 +175,24 @@ public partial struct StressVisualizationSystem : ISystem
             foreach (var (stress, color, mat, pos) in SystemAPI.Query<RefRO<BlockStress>, RefRW<URPMaterialPropertyBaseColor>, RefRO<BlockMaterial>, RefRO<OriginalPosition>>())
             {
                 float curStress = stress.ValueRO.SmoothedStress;
-
-                // ⭐ 투트랙 판정: 인장과 압축 중 더 약한 고리(min값)를 기준으로 위험도 계산
                 float limit = math.max(1.0f, math.min(mat.ValueRO.TensileStiffness, mat.ValueRO.CompressiveStiffness));
                 float t = math.clamp(curStress / limit, 0.0f, 1.0f);
 
                 if (isWeightScanMode) color.ValueRW.Value = new float4(1.0f, 1.0f - t, 1.0f - t, 1.0f);
                 else color.ValueRW.Value = new float4(1.0f - t, 1.0f, 1.0f - t, 1.0f);
 
-                string risk = t >= 0.8f ? "DANGER" : (t >= 0.5f ? "WARNING" : "SAFE");
                 float3 p = pos.ValueRO.Value;
-
-                // ⭐ int 캐스팅 제거, float 패딩 통일!
+                // ⭐ float 기반 ID 생성 (int 제거)
                 float ix = math.round(p.x * 10f); float iy = math.round(p.y * 10f); float iz = math.round(p.z * 10f);
                 string strX = $"{(ix < 0f ? "-" : "0")}{math.abs(ix):000}";
                 string strZ = $"{(iz < 0f ? "-" : "0")}{math.abs(iz):000}";
                 string strY = $"{(iy < 0f ? "-" : "0")}{math.abs(iy):000}";
                 string id = $"{strX}_{strZ}_{strY}";
 
-                writer.WriteLine($"{id},{p.x:F2},{p.y:F2},{p.z:F2},{curStress:F2},{risk},{(risk == "DANGER" ? "Y" : "")},{mat.ValueRO.MaterialName},{mat.ValueRO.TensileStiffness:F1},{mat.ValueRO.CompressiveStiffness:F1}");
+                writer.WriteLine($"{id},{p.x:F2},{p.y:F2},{p.z:F2},{curStress:F2},{(t >= 0.8f ? "DANGER" : "SAFE")},{(t >= 0.8f ? "Y" : "")},{mat.ValueRO.MaterialName},{mat.ValueRO.TensileStiffness:F1},{mat.ValueRO.CompressiveStiffness:F1}");
             }
         }
         needsColorUpdate = false;
-        Debug.Log("📊 [투트랙 & float ID 통일] 15cm 규격 시각화 완료!");
+        Debug.Log("📊 [시각화] float ID 규격 통일 완료!");
     }
 }
