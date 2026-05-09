@@ -11,7 +11,7 @@ public class MaterialDataManager : MonoBehaviour
         public string Name;
         public float Density;
         public float BaseHP;
-        public bool IsBrittle; // TRUE면 콘크리트(찢어짐 약함), FALSE면 철골
+        public bool IsBrittle; // TRUE면 콘크리트, FALSE면 철골
         public float Tensile; // 인장강도
         public float Compressive; // 압축강도
         public float Shear; // 전단강도
@@ -36,7 +36,7 @@ public class MaterialDataManager : MonoBehaviour
 
         if (!File.Exists(path))
         {
-            // ⭐ 대괄호 에러 원천 차단: new string[] 과 중괄호 { } 로 확실히 묶습니다.
+            // ⭐ 십장님 지시: 기본 방어력 400 동기화 및 float 규격 적용
             string[] defaultSpecs = new string[]
             {
                 "MaterialName,Density,BaseHP,IsBrittle,Tensile,Compressive,Shear,Bending,Torsion,R,G,B",
@@ -47,7 +47,6 @@ public class MaterialDataManager : MonoBehaviour
                 "Wood,0.6,300,TRUE,50,200,100,150,50,0.6,0.4,0.2",
                 "Glass,2.5,50,TRUE,10,50,50,50,50,0.8,0.9,1.0"
             };
-
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             File.WriteAllLines(path, defaultSpecs);
             Debug.Log("📄 [자재 관리소] 15cm 축척 스펙이 적용된 신규 단가표가 생성되었습니다.");
@@ -61,16 +60,16 @@ public class MaterialDataManager : MonoBehaviour
             if (cols.Length >= 12)
             {
                 MaterialSpec spec = new MaterialSpec();
-                spec.Name = cols;
-                [cite_start]spec.Density = float.Parse(cols[1]);
-                [cite_start]spec.BaseHP = float.Parse(cols[2]);
-                [cite_start]spec.IsBrittle = cols[3].Trim().ToUpper() == "TRUE";
-                [cite_start]spec.Tensile = float.Parse(cols[4]);
-                [cite_start]spec.Compressive = float.Parse(cols[5]);
-                [cite_start]spec.Shear = float.Parse(cols[6]);
-                [cite_start]spec.Bending = float.Parse(cols[7]);
-                [cite_start]spec.Torsion = float.Parse(cols[8]);
-                [cite_start]spec.Color = new Color(float.Parse(cols[9]), float.Parse(cols[10]), float.Parse(cols[11]));
+                spec.Name = cols[0]; // ⭐ [복구] 인덱스 0번 이름표
+                spec.Density = float.Parse(cols[1]); // ⭐ [복구] 인덱스 1번 밀도
+                spec.BaseHP = float.Parse(cols[2]);
+                spec.IsBrittle = cols[3].Trim().ToUpper() == "TRUE";
+                spec.Tensile = float.Parse(cols[4]);
+                spec.Compressive = float.Parse(cols[5]);
+                spec.Shear = float.Parse(cols[6]);
+                spec.Bending = float.Parse(cols[7]);
+                spec.Torsion = float.Parse(cols[8]);
+                spec.Color = new Color(float.Parse(cols[9]), float.Parse(cols[10]), float.Parse(cols[11]));
 
                 MaterialDict[spec.Name] = spec;
             }
