@@ -163,40 +163,92 @@ public partial struct StressVisualizationSystem : ISystem
         }
     }
 
-    private void UpdateResults(ref SystemState state)
+   private void UpdateResults(ref SystemState state)
+{
+    state.Dependency.Complete();
+    string path = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
+    string reinforcePath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
+    string lastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+
+    // ① 기존 CurrentStress에서 Tool, Type 보존용으로 읽기
+    // key = BlockID, value = (Tool, Type)
+    var toolMap  = new Dictionary<string, string>();
+    var typeMap  = new Dictionary<string, string>();
+
+    if (File.Exists(path))
     {
-        state.Dependency.Complete();
-        string path = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
-
-        using (StreamWriter writer = new StreamWriter(path, false))
+        string[] old = File.ReadAllLines(path);
+        for (int i = 1; i < old.Length; i++)
         {
-            writer.WriteLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive");
-
-            foreach (var (stress, color, mat, pos) in SystemAPI.Query<RefRO<BlockStress>, RefRW<URPMaterialPropertyBaseColor>, RefRO<BlockMaterial>, RefRO<OriginalPosition>>())
+            var c = old[i].Split(',');
+            if (c.Length >= 12)
             {
-                float curStress = stress.ValueRO.SmoothedStress;
-
-                // ⭐ 투트랙 판정: 인장과 압축 중 더 약한 고리(min값)를 기준으로 위험도 계산
-                float limit = math.max(1.0f, math.min(mat.ValueRO.TensileStiffness, mat.ValueRO.CompressiveStiffness));
-                float t = math.clamp(curStress / limit, 0.0f, 1.0f);
-
-                if (isWeightScanMode) color.ValueRW.Value = new float4(1.0f, 1.0f - t, 1.0f - t, 1.0f);
-                else color.ValueRW.Value = new float4(1.0f - t, 1.0f, 1.0f - t, 1.0f);
-
-                string risk = t >= 0.8f ? "DANGER" : (t >= 0.5f ? "WARNING" : "SAFE");
-                float3 p = pos.ValueRO.Value;
-
-                // ⭐ int 캐스팅 제거, float 패딩 통일!
-                float ix = math.round(p.x * 10f); float iy = math.round(p.y * 10f); float iz = math.round(p.z * 10f);
-                string strX = $"{(ix < 0f ? "-" : "0")}{math.abs(ix):000}";
-                string strZ = $"{(iz < 0f ? "-" : "0")}{math.abs(iz):000}";
-                string strY = $"{(iy < 0f ? "-" : "0")}{math.abs(iy):000}";
-                string id = $"{strX}_{strZ}_{strY}";
-
-                writer.WriteLine($"{id},{p.x:F2},{p.y:F2},{p.z:F2},{curStress:F2},{risk},{(risk == "DANGER" ? "Y" : "")},{mat.ValueRO.MaterialName},{mat.ValueRO.TensileStiffness:F1},{mat.ValueRO.CompressiveStiffness:F1}");
+                toolMap[c[0]]  = c[10]; // Tool
+                typeMap[c[0]]  = c[11]; // Type
             }
         }
-        needsColorUpdate = false;
-        Debug.Log("📊 [투트랙 & float ID 통일] 15cm 규격 시각화 완료!");
     }
+
+    // ② Reinforcement_Plan에서 Tool 덮어쓰기 (Y키로 생성된 최신 정보 우선)
+    if (File.Exists(reinforcePath))
+    {
+        string[] rLines = File.ReadAllLines(reinforcePath);
+        for (int i = 1; i < rLines.Length; i++)
+        {
+            var c = rLines[i].Split(',');
+            if (c.Length >= 5)
+                toolMap[c[0]] = c[4]; // Existing or Reinforcement
+        }
+    }
+
+    // ③ Last_Building에서 Type 덮어쓰기 (Wall or Floor)
+    if (File.Exists(lastBuildPath))
+    {
+        string[] lLines = File.ReadAllLines(lastBuildPath);
+        for (int i = 1; i < lLines.Length; i++)
+        {
+            var c = lLines[i].Split(',');
+            if (c.Length >= 5)
+                typeMap[c[0]] = c[4]; // Wall or Floor
+        }
+    }
+
+    // ④ 현재 스트레스 데이터로 통합 CSV 작성
+    using (StreamWriter writer = new StreamWriter(path, false))
+    {
+        writer.WriteLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
+
+        foreach (var (stress, color, mat, pos) in SystemAPI.Query
+            RefRO<BlockStress>,
+            RefRW<URPMaterialPropertyBaseColor>,
+            RefRO<BlockMaterial>,
+            RefRO<OriginalPosition>>())
+        {
+            float curStress = stress.ValueRO.SmoothedStress;
+            float limit = math.max(1.0f, math.min(mat.ValueRO.TensileStiffness, mat.ValueRO.CompressiveStiffness));
+            float t = math.clamp(curStress / limit, 0.0f, 1.0f);
+
+            if (isWeightScanMode) color.ValueRW.Value = new float4(1.0f, 1.0f - t, 1.0f - t, 1.0f);
+            else color.ValueRW.Value = new float4(1.0f - t, 1.0f, 1.0f - t, 1.0f);
+
+            string risk = t >= 0.8f ? "DANGER" : (t >= 0.5f ? "WARNING" : "SAFE");
+            float3 p = pos.ValueRO.Value;
+
+            float ix = math.round(p.x * 10f); float iy = math.round(p.y * 10f); float iz = math.round(p.z * 10f);
+            string strX = $"{(ix < 0f ? "-" : "0")}{math.abs(ix):000}";
+            string strZ = $"{(iz < 0f ? "-" : "0")}{math.abs(iz):000}";
+            string strY = $"{(iy < 0f ? "-" : "0")}{math.abs(iy):000}";
+            string id = $"{strX}_{strZ}_{strY}";
+
+            // Tool, Type — 없으면 기본값
+            string tool = toolMap.ContainsKey(id) ? toolMap[id] : "Existing";
+            string type = typeMap.ContainsKey(id) ? typeMap[id] : (p.y > 1.5f ? "Wall" : "Floor");
+
+            writer.WriteLine($"{id},{p.x:F2},{p.y:F2},{p.z:F2},{curStress:F2},{risk},{(risk == "DANGER" ? "Y" : "")},{mat.ValueRO.MaterialName},{mat.ValueRO.TensileStiffness:F1},{mat.ValueRO.CompressiveStiffness:F1},{tool},{type}");
+        }
+    }
+
+    needsColorUpdate = false;
+    Debug.Log("📊 [통합 CSV] CurrentStress 업데이트 완료! (Tool+Type 보존)");
+}
 }
