@@ -85,34 +85,49 @@ public partial struct SpawnerSystem : ISystem
         // =====================================================================
         // ⭐ 수동 타설 백업 로직 (십장님 호통 반영: 고양이 전체를 복사하라!)
         // =====================================================================
+        // [SpawnerSystem.cs 내 백업 로직 - 최종형태]
+        // [SpawnerSystem.cs 내 백업 로직 부분]
         if (backupIDToQuery > -1f)
         {
-            StringBuilder csv = new StringBuilder();
-            csv.AppendLine("ID,X,Y,Z,Type");
-            bool found = false;
+            string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+            string header = "BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tool";
 
-            // ❌ 기존의 멍청했던 '마지막 번호(StructureID)만 찾기' 조건문 삭제!
-            // ✅ 현장에 지어진 '모든 블록(고양이 몸통, 머리, 귀 전부)'을 한 번에 싹 다 긁어모아 저장합니다.
-            foreach (var transform in SystemAPI.Query<RefRO<LocalTransform>>().WithAll<BlockTag>())
+            Dictionary<string, string> masterData = new Dictionary<string, string>();
+            if (File.Exists(path))
             {
-                float px = transform.ValueRO.Position.x;
-                float py = transform.ValueRO.Position.y;
-                float pz = transform.ValueRO.Position.z;
-                string typeStr = py > 1.5f ? "Wall" : "Floor";
+                string[] existingLines = File.ReadAllLines(path);
+                for (int i = 1; i < existingLines.Length; i++)
+                {
+                    string[] cols = existingLines[i].Split(',');
+                    if (cols.Length > 0) masterData[cols] = existingLines[i];
+                }
+            }
 
-                string realId = $"{(int)math.round(px * 10f)}_{(int)math.round(pz * 10f)}_{(int)math.round(py * 10f)}";
-                csv.AppendLine($"{realId},{px},{py},{pz},{typeStr}");
+            bool found = false;
+            foreach (var (transform, mat, entity) in SystemAPI.Query<RefRO<LocalTransform>, RefRO<BlockMaterial>>().WithAll<BlockTag>().WithEntityAccess())
+            {
+                float3 p = transform.ValueRO.Position;
+                string realId = $"{(int)math.round(p.x * 10f)}_{(int)math.round(p.z * 10f)}_{(int)math.round(p.y * 10f)}";
+                string matName = mat.ValueRO.MaterialName.ToString();
+                string toolType = p.y > 1.5f ? "Wall" : "Floor";
+
+                string row = $"{realId},{p.x:F2},{p.y:F2},{p.z:F2},0.00,SAFE,N,{matName},{toolType}";
+                masterData[realId] = row;
                 found = true;
             }
 
             if (found)
             {
-                string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
                 if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
-                File.WriteAllText(path, csv.ToString());
-                UnityEngine.Debug.Log($"💾 [U모드 스냅샷] 고양이 귀만이 아닌, 현장의 전체 건축물 통째로 백업 완료!");
+
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine(header);
+                foreach (var line in masterData.Values) sb.AppendLine(line);
+
+                File.WriteAllText(path, sb.ToString());
+                UnityEngine.Debug.Log($"💾 [표준 백업] {masterData.Count}개 항목 저장 완료!");
             }
-            backupIDToQuery = -1f; // 백업 완료 후 스위치 초기화
+            backupIDToQuery = -1f;
         }
 
         if (isClearREnabled && Input.GetKeyDown(KeyCode.R)) { if (LogManager.Instance != null) LogManager.Instance.OnPressRKey(); isCenterMoved = false; UnityEngine.Debug.Log("🪓 [현장 철거] R키 작동! 건물은 철거되지만 도면은 유지됩니다."); }
