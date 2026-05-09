@@ -41,7 +41,7 @@ public partial struct SpawnerSystem : ISystem
 
     private NativeList<float4> blueprintOffsets;
     private float loadDelayTimer;
-
+    private bool pendingJointCleanup;
     private string GetToolName(float mode)
     {
         if (math.abs(mode - 1f) < 0.01f) return "1_Solid_Wall";
@@ -71,6 +71,15 @@ public partial struct SpawnerSystem : ISystem
     public void OnUpdate(ref SystemState state)
     {
         if (!UnityEngine.Application.isPlaying || Camera.main == null) return;
+
+        // ← 여기 추가
+        if (pendingJointCleanup)
+        {
+            RemoveDuplicateJoints(ref state);
+            pendingJointCleanup = false;
+            UnityEngine.Debug.Log("🔧 [중복 조인트 정리] 완료!");
+        }
+
         if (!SystemAPI.HasSingleton<BuilderStateData>()) return;
         var builderState = SystemAPI.GetSingletonRW<BuilderStateData>();
         if (!SystemAPI.TryGetSingleton<PhysicsWorldSingleton>(out var physicsSingleton)) return;
@@ -268,6 +277,7 @@ public partial struct SpawnerSystem : ISystem
                     }
 
                     nextStructureID += 1f;
+                    pendingJointCleanup = true; // ← 여기도 추가
                 }
                 gridMap.Dispose(); posMap.Dispose();
                 return;
@@ -408,7 +418,9 @@ public partial struct SpawnerSystem : ISystem
                 {
                     backupIDToQuery = 1f; // 이제 이 변수는 그냥 '트리거' 역할만 합니다. 1이든 10이든 상관없습니다.
                     isGuideActive = false;
+                    pendingJointCleanup = true;  // ← 여기 추가
                 }
+               
             }
         }
     }
@@ -436,7 +448,33 @@ public partial struct SpawnerSystem : ISystem
         if (math.abs(mode - 1f) < 0.01f || math.abs(mode - 2f) < 0.01f) { float minX = math.min(start.x, end.x); float maxX = math.max(start.x, end.x) + blockSize; float minZ = math.min(start.z, end.z); float maxZ = math.max(start.z, end.z) + blockSize; float minY = start.y; float maxY = start.y + (heightParam * floorHeight); Vector3 p1 = new Vector3(minX, minY, minZ); Vector3 p2 = new Vector3(maxX, minY, minZ); Vector3 p3 = new Vector3(maxX, minY, maxZ); Vector3 p4 = new Vector3(minX, minY, maxZ); Debug.DrawLine(p1, p2, color); Debug.DrawLine(p2, p3, color); Debug.DrawLine(p3, p4, color); Debug.DrawLine(p4, p1, color); if (heightParam > 0f) { Vector3 t1 = new Vector3(minX, maxY, minZ); Vector3 t2 = new Vector3(maxX, maxY, minZ); Vector3 t3 = new Vector3(maxX, maxY, maxZ); Vector3 t4 = new Vector3(minX, maxY, maxZ); Debug.DrawLine(t1, t2, color); Debug.DrawLine(t2, t3, color); Debug.DrawLine(t3, t4, color); Debug.DrawLine(t4, t1, color); Debug.DrawLine(p1, t1, color); Debug.DrawLine(p2, t2, color); Debug.DrawLine(p3, t3, color); Debug.DrawLine(p4, t4, color); } }
         else if (math.abs(mode - 3f) < 0.01f || math.abs(mode - 4f) < 0.01f || math.abs(mode - 5f) < 0.01f) { float3 center = (start + end) / 2f; center.x += (blockSize / 2f); center.z += (blockSize / 2f); float radius = (math.distance(start, end) / 2f) + (blockSize / 2f); float minY = start.y; float maxY = start.y + (heightParam * floorHeight); float segments = 24f; float angleStep = (2f * math.PI) / segments; Vector3 prev = center + new float3(radius, 0f, 0f); prev.y = minY; for (float i = 1f; i <= segments; i += 1f) { Vector3 next = center + new float3(math.cos(i * angleStep) * radius, 0f, math.sin(i * angleStep) * radius); next.y = minY; Debug.DrawLine(prev, next, color); prev = next; } if (heightParam > 0f) Debug.DrawLine(new Vector3(center.x, minY, center.z), new Vector3(center.x, maxY, center.z), color); }
     }
+    private void RemoveDuplicateJoints(ref SystemState state)
+    {
+        // (EntityA, EntityB) 쌍을 정규화해서 추적
+        // 정규화: Index가 작은 쪽을 항상 A로 고정 → (A,B)와 (B,A)를 같은 쌍으로 처리
+        var seenPairs = new NativeHashSet<int2>(64, Allocator.Temp);
+        var ecb = new EntityCommandBuffer(Allocator.Temp);
 
+        foreach (var (pair, entity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>()
+            .WithAll<JointTag>().WithEntityAccess())
+        {
+            int idA = pair.ValueRO.EntityA.Index;
+            int idB = pair.ValueRO.EntityB.Index;
+
+            // 항상 작은 Index가 x, 큰 Index가 y
+            int2 key = idA < idB ? new int2(idA, idB) : new int2(idB, idA);
+
+            if (!seenPairs.Add(key))
+            {
+                // 이미 같은 쌍이 있음 → 이 조인트는 중복, 삭제
+                ecb.DestroyEntity(entity);
+            }
+        }
+
+        ecb.Playback(state.EntityManager);
+        ecb.Dispose();
+        seenPairs.Dispose();
+    }
     private void CreateIndestructibleJoint(ref EntityCommandBuffer ecb, Entity entityA, Entity entityB, float3 offsetToB)
     {
         Entity jointEntity = ecb.CreateEntity(); ecb.AddSharedComponent(jointEntity, new PhysicsWorldIndex()); ecb.AddComponent<JointTag>(jointEntity); ecb.AddComponent(jointEntity, new PhysicsConstrainedBodyPair(entityA, entityB, true)); ecb.AddComponent(jointEntity, PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f)));

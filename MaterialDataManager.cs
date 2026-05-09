@@ -63,7 +63,7 @@ public class MaterialDataManager : MonoBehaviour
             if (cols.Length >= 12)
             {
                 MaterialSpec spec = new MaterialSpec();
-              
+                spec.Name = cols[0];
                 spec.Density = float.Parse(cols[1]);
                 spec.BaseHP = float.Parse(cols[2]);
                 spec.IsBrittle = cols[3].Trim().ToUpper() == "TRUE";
