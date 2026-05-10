@@ -8,7 +8,7 @@ using System.IO;
 using System;
 using Unity.Burst;
 using Unity.Collections;
-
+using System.Collections.Generic;
 public struct OriginalPosition : IComponentData { public float3 Value; }
 
 [BurstCompile]
