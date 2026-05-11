@@ -314,7 +314,7 @@ DestroyImmediate(tex);
         File.WriteAllText(path, sb.ToString());
     }
 
-    private void LoadLastBuildingForUMode()
+    public void LoadLastBuildingForUMode()
     {
         string path = Path.Combine(stressBlockFolder, "Last_Building.csv");
         if (File.Exists(path))
