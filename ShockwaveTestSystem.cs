@@ -108,29 +108,51 @@ public partial struct ShockwaveTestSystem : ISystem
         string shockDir = Path.Combine(Application.dataPath, "StressBlock", "shockwave");
         if (!Directory.Exists(shockDir)) Directory.CreateDirectory(shockDir);
 
-        string historyPath = Path.Combine(shockDir, $"Shockwave_All_{dateStamp}.csv");
+        string historyPath = Path.Combine(shockDir, "Shockwave_All_" + dateStamp + ".csv");
         string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
 
         System.Collections.Generic.List<string> currentLines = new System.Collections.Generic.List<string>();
-        currentLines.Add("BlockID,PosX,PosY,PosZ,SHOCK_Stress,RiskLevel,Prescription,Material"); // ⭐ 헤더 변경
+
+        // 12칸 표준 규격 헤더
+        currentLines.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
 
         for (int i = 0; i < positions.Length; i++)
         {
-            float3 pos = positions[i]; float stress = stresses[i]; string mat = materials[i].ToString();
+            float3 pos = positions[i];
+            float stress = stresses[i];
+            string mat = materials[i].ToString();
 
-            float ix = math.round(pos.x * 10f); float iz = math.round(pos.z * 10f); float iy = math.round(pos.y * 10f);
-            string strX = $"{(ix < 0 ? "-" : "0")}{math.abs(ix):000}"; string strZ = $"{(iz < 0 ? "-" : "0")}{math.abs(iz):000}"; string strY = $"{(iy < 0 ? "-" : "0")}{math.abs(iy):000}";
+            float ix = math.round(pos.x * 10f);
+            float iz = math.round(pos.z * 10f);
+            float iy = math.round(pos.y * 10f);
+            string strX = (ix < 0 ? "-" : "0") + math.abs(ix).ToString("000");
+            string strZ = (iz < 0 ? "-" : "0") + math.abs(iz).ToString("000");
+            string strY = (iy < 0 ? "-" : "0") + math.abs(iy).ToString("000");
 
-            string id = $"{strX}_{strZ}_{strY}";
-            string risk = stress >= 2.0f ? "Danger" : (stress >= 0.5f ? "Warning" : "Safe"); string pres = stress >= 2.0f ? "Y" : "N";
+            string id = strX + "_" + strZ + "_" + strY;
+            string risk = stress >= 2.0f ? "Danger" : (stress >= 0.5f ? "Warning" : "Safe");
+            string pres = stress >= 2.0f ? "Y" : "N";
+            string typeStr = pos.y > 1.5f ? "Wall" : "Floor";
 
-            // ⭐ 맨 끝에 재질 추가
-            string lineData = $"{id},{pos.x:F2},{pos.y:F2},{pos.z:F2},{stress:F2},{risk},{pres},{mat}";
+            // 12칸 표준 규격 데이터 작성
+            string lineData = id + "," +
+                              pos.x.ToString("F2") + "," +
+                              pos.y.ToString("F2") + "," +
+                              pos.z.ToString("F2") + "," +
+                              stress.ToString("F2") + "," +
+                              risk + "," +
+                              pres + "," +
+                              mat + "," +
+                              "0.0" + "," +
+                              "0.0" + "," +
+                              "Existing" + "," +
+                              typeStr;
+
             currentLines.Add(lineData);
         }
 
         File.WriteAllLines(historyPath, currentLines);
         File.WriteAllLines(currentPath, currentLines);
-        Debug.Log($"📄 [엑셀] N키 진단결과 저장 완료! (재질포함)");
+        UnityEngine.Debug.Log("📄 [엑셀] N키 폭발 진단결과 저장 완료! (12칸 표준 규격)");
     }
 }

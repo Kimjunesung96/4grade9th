@@ -8,6 +8,7 @@ using Unity.Rendering;
 using Unity.Burst;
 using System.IO;
 using System.Text;
+using System.Linq; // ⭐ 대괄호 에러 방지를 위한 필수 마법 주문!
 
 public struct GhostBlockTag : IComponentData { }
 
@@ -42,6 +43,7 @@ public partial struct SpawnerSystem : ISystem
     private NativeList<float4> blueprintOffsets;
     public static float loadDelayTimer;
     private bool pendingJointCleanup;
+
     private string GetToolName(float mode)
     {
         if (math.abs(mode - 1f) < 0.01f) return "1_Solid_Wall";
@@ -72,7 +74,6 @@ public partial struct SpawnerSystem : ISystem
     {
         if (!UnityEngine.Application.isPlaying || Camera.main == null) return;
 
-        // ← 여기 추가
         if (pendingJointCleanup)
         {
             RemoveDuplicateJoints(ref state);
@@ -92,25 +93,29 @@ public partial struct SpawnerSystem : ISystem
         PhysicsWorld physicsWorld = physicsSingleton.PhysicsWorld;
 
         // =====================================================================
-        // ⭐ 수동 타설 백업 로직 (십장님 호통 반영: 고양이 전체를 복사하라!)
+        // ⭐ 수동 타설 백업 로직 
         // =====================================================================
         if (backupIDToQuery > -1f)
         {
             StringBuilder csv = new StringBuilder();
-            csv.AppendLine("ID,X,Y,Z,Type");
+            csv.AppendLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
             bool found = false;
 
-            // ❌ 기존의 멍청했던 '마지막 번호(StructureID)만 찾기' 조건문 삭제!
-            // ✅ 현장에 지어진 '모든 블록(고양이 몸통, 머리, 귀 전부)'을 한 번에 싹 다 긁어모아 저장합니다.
             foreach (var transform in SystemAPI.Query<RefRO<LocalTransform>>().WithAll<BlockTag>())
             {
                 float px = transform.ValueRO.Position.x;
                 float py = transform.ValueRO.Position.y;
                 float pz = transform.ValueRO.Position.z;
                 string typeStr = py > 1.5f ? "Wall" : "Floor";
-
                 string realId = $"{(int)math.round(px * 10f)}_{(int)math.round(pz * 10f)}_{(int)math.round(py * 10f)}";
-                csv.AppendLine($"{realId},{px},{py},{pz},{typeStr}");
+
+                string lineData = realId + "," +
+                                  px.ToString("F2") + "," +
+                                  py.ToString("F2") + "," +
+                                  pz.ToString("F2") + "," +
+                                  "0.00,Safe,N,Concrete,0.0,0.0,Existing," + typeStr;
+
+                csv.AppendLine(lineData);
                 found = true;
             }
 
@@ -119,9 +124,9 @@ public partial struct SpawnerSystem : ISystem
                 string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
                 if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
                 File.WriteAllText(path, csv.ToString());
-                UnityEngine.Debug.Log($"💾 [U모드 스냅샷] 고양이 귀만이 아닌, 현장의 전체 건축물 통째로 백업 완료!");
+                UnityEngine.Debug.Log("💾 [U모드 스냅샷] 현장의 전체 건축물 통째로 백업 완료! (12칸 표준 규격)");
             }
-            backupIDToQuery = -1f; // 백업 완료 후 스위치 초기화
+            backupIDToQuery = -1f;
         }
 
         if (isClearREnabled && Input.GetKeyDown(KeyCode.R)) { if (LogManager.Instance != null) LogManager.Instance.OnPressRKey(); isCenterMoved = false; UnityEngine.Debug.Log("🪓 [현장 철거] R키 작동! 건물은 철거되지만 도면은 유지됩니다."); }
@@ -277,7 +282,7 @@ public partial struct SpawnerSystem : ISystem
                     }
 
                     nextStructureID += 1f;
-                    pendingJointCleanup = true; // ← 여기도 추가
+                    pendingJointCleanup = true;
                 }
                 gridMap.Dispose(); posMap.Dispose();
                 return;
@@ -289,6 +294,8 @@ public partial struct SpawnerSystem : ISystem
             if (BudgetUIManager.Instance != null)
                 BudgetUIManager.Instance.OnYKeyPressed();
         }
+
+        // ⭐ 이 부분이 찌꺼기 숫자가 날아가서 에러가 났던 곳입니다! 리스트 방식으로 완전 개조했습니다.
         if (loadDelayTimer > 0f)
         {
             loadDelayTimer -= 1f;
@@ -297,37 +304,37 @@ public partial struct SpawnerSystem : ISystem
                 string planCsvPath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
                 if (File.Exists(planCsvPath))
                 {
-                    string[] lines = File.ReadAllLines(planCsvPath);
+                    var linesList = File.ReadAllLines(planCsvPath).ToList();
                     float minX = 99999f, minZ = 99999f, maxX = -99999f, maxZ = -99999f;
 
                     System.Collections.Generic.List<float4> tempList = new System.Collections.Generic.List<float4>();
                     System.Collections.Generic.HashSet<string> loadedIDs = new System.Collections.Generic.HashSet<string>();
 
-                    for (float i = 1f; i < (float)lines.Length; i += 1f)
+                    for (int i = 1; i < linesList.Count; i++)
                     {
-                        string[] cols = lines[(int)i].Split(',');
+                        var cols = linesList.ElementAt(i).Split(',').ToList();
 
-                        if (cols.Length >= 5f && (cols[4] == "Reinforcement" || cols[4] == "Existing"))
+                        if (cols.Count >= 12 && (cols.ElementAt(10) == "Reinforcement" || cols.ElementAt(10) == "Existing"))
                         {
-                            string[] idParts = cols[0].Split('_');
-                            if (idParts.Length >= 3f)
+                            var idParts = cols.ElementAt(0).Split('_').ToList();
+                            if (idParts.Count >= 3)
                             {
-                                float px = float.Parse(idParts[0]) / 10f;
-                                float pz = float.Parse(idParts[1]) / 10f;
-                                float py = float.Parse(idParts[2]) / 10f;
-
+                                float px = float.Parse(idParts.ElementAt(0)) / 10f;
+                                float pz = float.Parse(idParts.ElementAt(1)) / 10f;
+                                float py = float.Parse(idParts.ElementAt(2)) / 10f;
                                 float x = math.round((px - 1.5f) / 3.0f) * 3.0f + 1.5f;
                                 float z = math.round((pz - 1.5f) / 3.0f) * 3.0f + 1.5f;
                                 float y = math.round((py - 1.5f) / 3.0f) * 3.0f + 1.5f;
 
-                                string uniqueKey = $"{x}_{y}_{z}";
+                                string uniqueKey = x.ToString() + "_" + y.ToString() + "_" + z.ToString();
                                 if (loadedIDs.Contains(uniqueKey)) continue;
 
-                                float isReinforce = cols[4] == "Reinforcement" ? 1f : 0f;
+                                float isReinforce = cols.ElementAt(10) == "Reinforcement" ? 1f : 0f;
                                 tempList.Add(new float4(x, y, z, isReinforce));
                                 loadedIDs.Add(uniqueKey);
 
-                                if (x < minX) minX = x; if (x > maxX) maxX = x; if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+                                if (x < minX) minX = x; if (x > maxX) maxX = x;
+                                if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
                             }
                         }
                     }
@@ -336,11 +343,13 @@ public partial struct SpawnerSystem : ISystem
                         isYMode = true; blueprintOffsets.Clear(); tempList.Sort((a, b) => a.y.CompareTo(b.y));
                         float centerX = math.round(((minX + maxX) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
                         float centerZ = math.round(((minZ + maxZ) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
-
                         customCenterPos = new float3(centerX, 0f, centerZ);
                         isCenterMoved = true;
 
-                        foreach (var pos in tempList) { blueprintOffsets.Add(new float4(pos.x - centerX, pos.y, pos.z - centerZ, pos.w)); }
+                        foreach (var pos in tempList)
+                        {
+                            blueprintOffsets.Add(new float4(pos.x - centerX, pos.y, pos.z - centerZ, pos.w));
+                        }
                         UnityEngine.Debug.Log($"🏗️ [스마트 로드 완] {tempList.Count}개의 구조물이 도면에 장전되었습니다! F키로 확인해 보세요.");
                     }
                 }
@@ -420,11 +429,10 @@ public partial struct SpawnerSystem : ISystem
 
                 if (!isGhost)
                 {
-                    backupIDToQuery = 1f; // 이제 이 변수는 그냥 '트리거' 역할만 합니다. 1이든 10이든 상관없습니다.
+                    backupIDToQuery = 1f;
                     isGuideActive = false;
-                    pendingJointCleanup = true;  // ← 여기 추가
+                    pendingJointCleanup = true;
                 }
-               
             }
         }
     }
@@ -454,8 +462,6 @@ public partial struct SpawnerSystem : ISystem
     }
     private void RemoveDuplicateJoints(ref SystemState state)
     {
-        // (EntityA, EntityB) 쌍을 정규화해서 추적
-        // 정규화: Index가 작은 쪽을 항상 A로 고정 → (A,B)와 (B,A)를 같은 쌍으로 처리
         var seenPairs = new NativeHashSet<int2>(64, Allocator.Temp);
         var ecb = new EntityCommandBuffer(Allocator.Temp);
 
@@ -465,12 +471,10 @@ public partial struct SpawnerSystem : ISystem
             int idA = pair.ValueRO.EntityA.Index;
             int idB = pair.ValueRO.EntityB.Index;
 
-            // 항상 작은 Index가 x, 큰 Index가 y
             int2 key = idA < idB ? new int2(idA, idB) : new int2(idB, idA);
 
             if (!seenPairs.Add(key))
             {
-                // 이미 같은 쌍이 있음 → 이 조인트는 중복, 삭제
                 ecb.DestroyEntity(entity);
             }
         }
