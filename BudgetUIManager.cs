@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Linq;
 using Unity.Entities;
 using Unity.Mathematics;
-
 public class BudgetUIManager : MonoBehaviour
 {
     public static BudgetUIManager Instance;
@@ -20,7 +19,7 @@ public class BudgetUIManager : MonoBehaviour
     private bool floorIsWood = false;
     private string selectedFloorMaterial = "";
 
-    private string budgetInput = "500000";
+    private string budgetInput = "500000"; // 기본 예산 세팅
     private string floorCountInput = "1";
     private bool wantsReinforcement = false;
 
@@ -150,8 +149,10 @@ public class BudgetUIManager : MonoBehaviour
 
         GUILayout.FlexibleSpace();
 
+        // ══ 하단 버튼 그룹 ══
         GUILayout.BeginHorizontal();
 
+        // 좌측 (수동 기능)
         GUILayout.BeginVertical();
         GUILayout.Space(25);
         GUI.backgroundColor = new Color(0.4f, 0.8f, 0.4f);
@@ -160,10 +161,11 @@ public class BudgetUIManager : MonoBehaviour
 
         GUILayout.FlexibleSpace();
 
+        // 중앙 (예산 + 자동 측정 모드)
         GUILayout.BeginVertical();
         GUILayout.BeginHorizontal();
         GUILayout.FlexibleSpace();
-        GUILayout.Label("자동 측정 예산 (원):", GUILayout.Width(130));
+        GUILayout.Label("💰 자동 측정 예산 (원):", GUILayout.Width(130));
         budgetInput = GUILayout.TextField(budgetInput, GUILayout.Width(170));
         GUILayout.FlexibleSpace();
         GUILayout.EndHorizontal();
@@ -188,6 +190,7 @@ public class BudgetUIManager : MonoBehaviour
 
         GUILayout.FlexibleSpace();
 
+        // 우측 (확인/타설)
         GUILayout.BeginVertical();
         GUILayout.Space(25);
         GUI.backgroundColor = new Color(0.2f, 0.6f, 1f);
@@ -243,13 +246,13 @@ public class BudgetUIManager : MonoBehaviour
         if (rm != null) rm.CreatePlanExcel();
 
         showPanel = false;
+        yKeyState = 1;
+        SpawnerSystem.isUMode = true;
 
-        // ⭐ 버그 2 해결: U모드가 아닌 Y모드(보강 도면)를 정확하게 불러오도록 세팅 변경
-        yKeyState = 0;
-        SpawnerSystem.isUMode = false;
-        SpawnerSystem.loadDelayTimer = 5f;
+        var gen = FindFirstObjectByType<BlueprintTargetGenerator>();
+        if (gen != null) gen.LoadLastBuildingForUMode();
 
-        Debug.Log("✅ 설정 완료 적용 모드: " + currentMode + " / 보강 도면 장전 준비 완료!");
+        Debug.Log("✅ [설정 완료] 적용 모드: " + currentMode + " / 벽: " + selectedWallMaterial + " / 바닥: " + selectedFloorMaterial);
     }
 
     void OnJustReinforce()
@@ -258,7 +261,7 @@ public class BudgetUIManager : MonoBehaviour
         showPanel = false;
         SpawnerSystem.isUMode = false;
         SpawnerSystem.loadDelayTimer = 5f;
-        Debug.Log("(just보강) 보강 도면 로드!");
+        Debug.Log("🏗️ (just보강) 보강 도면 로드!");
     }
 
     void SaveBudgetMeta(float budget, string mode, int floors)
@@ -268,6 +271,7 @@ public class BudgetUIManager : MonoBehaviour
         File.WriteAllText(metaPath, header + "\n" + row);
     }
 
+    // ⭐ 핵심: 엑셀 데이터를 바탕으로 예산에 맞춰 자동으로 재질을 측정하고 변경하는 로직
     void ApplyMaterialsToScene(string mode, float budget)
     {
         if (!File.Exists(csvPath)) return;
@@ -275,14 +279,14 @@ public class BudgetUIManager : MonoBehaviour
         if (MaterialDataManager.Instance == null) return;
         var dict = MaterialDataManager.Instance.MaterialDict;
 
-        var cheapMats = dict.OrderBy(kv => kv.Value.Density * kv.Value.PricePerKg).ToList(); 
-        var strongestMats = dict.OrderByDescending(kv => math.min(kv.Value.Tensile, kv.Value.Compressive)).ToList();
-        var strongestMat = strongestMats.First();
+        var allMats = dict.OrderBy(kv => kv.Value.Density).ToList(); // 가격(밀도) 싼 순서
+        var strongestMat = allMats.OrderByDescending(kv => kv.Value.Tensile).First();
 
         var output = new List<string> { lines.FirstOrDefault() };
         float totalCost = 0f;
         List<BlockData> blocks = new List<BlockData>();
 
+        // 1. 블록 데이터 파싱
         for (int i = 1; i < lines.Length; i++)
         {
             string currentLine = lines.ElementAt(i);
@@ -297,6 +301,7 @@ public class BudgetUIManager : MonoBehaviour
             blocks.Add(b);
         }
 
+        // 2. 모드별 재질 자동 부여
         if (mode == "Manual")
         {
             foreach (var b in blocks)
@@ -307,8 +312,7 @@ public class BudgetUIManager : MonoBehaviour
                 {
                     b.Tensile = spec.Tensile;
                     b.Compressive = spec.Compressive;
-                    // ⭐ 실제 단가(PricePerKg)를 곱해서 블록 가격 산출 (3.375f는 체적 및 화폐단위 스케일 보정용)
-                    b.Price = spec.Density * spec.PricePerKg * 3.375f; 
+                    b.Price = spec.Density * 3375f;
                 }
                 totalCost += b.Price;
             }
@@ -317,56 +321,55 @@ public class BudgetUIManager : MonoBehaviour
         {
             foreach (var b in blocks)
             {
-                // ⭐ 싸게: 가성비 1순위부터 찾되, V/B/N 스트레스의 1.2배(안전마진) 이상을 버티는 재질 픽!
-                var target = cheapMats.FirstOrDefault(m => math.min(m.Value.Tensile, m.Value.Compressive) >= b.Stress * 1.2f);
-                if (string.IsNullOrEmpty(target.Key)) target = strongestMat; // 못 버티면 제일 쎈걸로 강제 배정
+                // 스트레스보다 강하면서 제일 싼 재질 찾기 (안전 마진 1.2배)
+                var target = allMats.FirstOrDefault(m => m.Value.Tensile >= b.Stress * 1.2f);
+                if (string.IsNullOrEmpty(target.Key)) target = strongestMat; // 못 버티면 제일 센거
 
                 b.MatName = target.Key;
                 b.Tensile = target.Value.Tensile;
                 b.Compressive = target.Value.Compressive;
-                b.Price = target.Value.Density * target.Value.PricePerKg * 3.375f;
+                b.Price = target.Value.Density * 3375f;
                 totalCost += b.Price;
             }
         }
         else if (mode == "Expensive")
         {
-            // ⭐ 1단계: '싸게' 모드와 동일하게 기초 안전마진을 맞춰 기본 예산 베이스를 깝니다.
+            // 일단 붕괴는 막는 제일 싼걸로 모두 세팅 (Cheap과 동일)
             foreach (var b in blocks)
             {
-                var target = cheapMats.FirstOrDefault(m => math.min(m.Value.Tensile, m.Value.Compressive) >= b.Stress * 1.2f);
+                var target = allMats.FirstOrDefault(m => m.Value.Tensile >= b.Stress * 1.2f);
                 if (string.IsNullOrEmpty(target.Key)) target = strongestMat;
 
                 b.MatName = target.Key;
                 b.Tensile = target.Value.Tensile;
                 b.Compressive = target.Value.Compressive;
-                b.Price = target.Value.Density * target.Value.PricePerKg * 3.375f;
+                b.Price = target.Value.Density * 3375f;
                 totalCost += b.Price;
             }
 
-            // ⭐ 2단계: 스트레스(위험도)를 가장 많이 받는 블록부터, 남은 예산 한도 내에서 초고강도 재질로 업그레이드!
+            // 예산이 남는 한도 내에서 제일 위험한 블록부터 차근차근 비싸고 튼튼한 걸로 업그레이드!
             var sortedBlocks = blocks.OrderByDescending(b => b.Stress).ToList();
-            
+            var expensiveMats = allMats.OrderByDescending(m => m.Value.Density).ToList(); // 비싼 순
+
             foreach (var b in sortedBlocks)
             {
-                foreach (var strongMat in strongestMats)
+                foreach (var expMat in expensiveMats)
                 {
-                    float newPrice = strongMat.Value.Density * strongMat.Value.PricePerKg * 3.375f;
-                    
-                    // 기존 재료보다 강도가 더 뛰어나면서, 이걸로 교체해도 전체 예산(budget) 안쪽이라면 통과!
-                    if (math.min(strongMat.Value.Tensile, strongMat.Value.Compressive) > math.min(b.Tensile, b.Compressive) 
-                        && (totalCost - b.Price + newPrice) <= budget)
+                    float newPrice = expMat.Value.Density * 3375f;
+                    if (newPrice > b.Price && (totalCost - b.Price + newPrice) <= budget)
                     {
                         totalCost = totalCost - b.Price + newPrice;
-                        b.MatName = strongMat.Key;
-                        b.Tensile = strongMat.Value.Tensile;
-                        b.Compressive = strongMat.Value.Compressive;
+                        b.MatName = expMat.Key;
+                        b.Tensile = expMat.Value.Tensile;
+                        b.Compressive = expMat.Value.Compressive;
                         b.Price = newPrice;
-                        break; // 이 블록은 최고급으로 업그레이드 했으니 다음 블록으로 넘어갑니다.
+                        break; // 이 블록은 업그레이드 완료
                     }
                 }
             }
         }
 
+        // 3. 다시 CSV 데이터로 합치기
         foreach (var b in blocks)
         {
             b.Cols.SetValue(b.MatName, 7);
@@ -375,10 +378,7 @@ public class BudgetUIManager : MonoBehaviour
             output.Add(string.Join(",", b.Cols));
         }
 
-        // 십장님이 찾아내신 바로 그 저장 코드 추가 완료!
-        File.WriteAllLines(csvPath, output);
-        UnityEngine.Debug.Log("저장 완료 CurrentStress.csv 파일에 재질 변경 내역 저장 완료");
-
+        // ⭐ 화면에 있는 실제 블록들(Entity)의 재질도 즉시 엑셀과 똑같이 교체!
         var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
         var query = em.CreateEntityQuery(typeof(BlockMaterial), typeof(OriginalPosition));
         var entities = query.ToEntityArray(Unity.Collections.Allocator.Temp);
