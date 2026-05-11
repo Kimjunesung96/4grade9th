@@ -243,13 +243,13 @@ public class BudgetUIManager : MonoBehaviour
         if (rm != null) rm.CreatePlanExcel();
 
         showPanel = false;
-        yKeyState = 1;
-        SpawnerSystem.isUMode = true;
 
-        var gen = FindFirstObjectByType<BlueprintTargetGenerator>();
-        if (gen != null) gen.LoadLastBuildingForUMode();
+        // ⭐ 버그 2 해결: U모드가 아닌 Y모드(보강 도면)를 정확하게 불러오도록 세팅 변경
+        yKeyState = 0;
+        SpawnerSystem.isUMode = false;
+        SpawnerSystem.loadDelayTimer = 5f;
 
-        Debug.Log("설정 완료 적용 모드: " + currentMode + " / 벽: " + selectedWallMaterial + " / 바닥: " + selectedFloorMaterial);
+        Debug.Log("✅ 설정 완료 적용 모드: " + currentMode + " / 보강 도면 장전 준비 완료!");
     }
 
     void OnJustReinforce()
