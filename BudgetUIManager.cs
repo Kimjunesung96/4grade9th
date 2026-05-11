@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Unity.Entities;
 using Unity.Mathematics;
+
 public class BudgetUIManager : MonoBehaviour
 {
     public static BudgetUIManager Instance;
@@ -19,7 +20,7 @@ public class BudgetUIManager : MonoBehaviour
     private bool floorIsWood = false;
     private string selectedFloorMaterial = "";
 
-    private string budgetInput = "500000"; // 기본 예산 세팅
+    private string budgetInput = "500000";
     private string floorCountInput = "1";
     private bool wantsReinforcement = false;
 
@@ -149,10 +150,8 @@ public class BudgetUIManager : MonoBehaviour
 
         GUILayout.FlexibleSpace();
 
-        // ══ 하단 버튼 그룹 ══
         GUILayout.BeginHorizontal();
 
-        // 좌측 (수동 기능)
         GUILayout.BeginVertical();
         GUILayout.Space(25);
         GUI.backgroundColor = new Color(0.4f, 0.8f, 0.4f);
@@ -161,11 +160,10 @@ public class BudgetUIManager : MonoBehaviour
 
         GUILayout.FlexibleSpace();
 
-        // 중앙 (예산 + 자동 측정 모드)
         GUILayout.BeginVertical();
         GUILayout.BeginHorizontal();
         GUILayout.FlexibleSpace();
-        GUILayout.Label("💰 자동 측정 예산 (원):", GUILayout.Width(130));
+        GUILayout.Label("자동 측정 예산 (원):", GUILayout.Width(130));
         budgetInput = GUILayout.TextField(budgetInput, GUILayout.Width(170));
         GUILayout.FlexibleSpace();
         GUILayout.EndHorizontal();
@@ -190,7 +188,6 @@ public class BudgetUIManager : MonoBehaviour
 
         GUILayout.FlexibleSpace();
 
-        // 우측 (확인/타설)
         GUILayout.BeginVertical();
         GUILayout.Space(25);
         GUI.backgroundColor = new Color(0.2f, 0.6f, 1f);
@@ -252,7 +249,7 @@ public class BudgetUIManager : MonoBehaviour
         var gen = FindFirstObjectByType<BlueprintTargetGenerator>();
         if (gen != null) gen.LoadLastBuildingForUMode();
 
-        Debug.Log("✅ [설정 완료] 적용 모드: " + currentMode + " / 벽: " + selectedWallMaterial + " / 바닥: " + selectedFloorMaterial);
+        Debug.Log("설정 완료 적용 모드: " + currentMode + " / 벽: " + selectedWallMaterial + " / 바닥: " + selectedFloorMaterial);
     }
 
     void OnJustReinforce()
@@ -261,7 +258,7 @@ public class BudgetUIManager : MonoBehaviour
         showPanel = false;
         SpawnerSystem.isUMode = false;
         SpawnerSystem.loadDelayTimer = 5f;
-        Debug.Log("🏗️ (just보강) 보강 도면 로드!");
+        Debug.Log("(just보강) 보강 도면 로드!");
     }
 
     void SaveBudgetMeta(float budget, string mode, int floors)
@@ -271,7 +268,6 @@ public class BudgetUIManager : MonoBehaviour
         File.WriteAllText(metaPath, header + "\n" + row);
     }
 
-    // ⭐ 핵심: 엑셀 데이터를 바탕으로 예산에 맞춰 자동으로 재질을 측정하고 변경하는 로직
     void ApplyMaterialsToScene(string mode, float budget)
     {
         if (!File.Exists(csvPath)) return;
@@ -279,14 +275,13 @@ public class BudgetUIManager : MonoBehaviour
         if (MaterialDataManager.Instance == null) return;
         var dict = MaterialDataManager.Instance.MaterialDict;
 
-        var allMats = dict.OrderBy(kv => kv.Value.Density).ToList(); // 가격(밀도) 싼 순서
+        var allMats = dict.OrderBy(kv => kv.Value.Density).ToList();
         var strongestMat = allMats.OrderByDescending(kv => kv.Value.Tensile).First();
 
         var output = new List<string> { lines.FirstOrDefault() };
         float totalCost = 0f;
         List<BlockData> blocks = new List<BlockData>();
 
-        // 1. 블록 데이터 파싱
         for (int i = 1; i < lines.Length; i++)
         {
             string currentLine = lines.ElementAt(i);
@@ -301,7 +296,6 @@ public class BudgetUIManager : MonoBehaviour
             blocks.Add(b);
         }
 
-        // 2. 모드별 재질 자동 부여
         if (mode == "Manual")
         {
             foreach (var b in blocks)
@@ -321,9 +315,8 @@ public class BudgetUIManager : MonoBehaviour
         {
             foreach (var b in blocks)
             {
-                // 스트레스보다 강하면서 제일 싼 재질 찾기 (안전 마진 1.2배)
                 var target = allMats.FirstOrDefault(m => m.Value.Tensile >= b.Stress * 1.2f);
-                if (string.IsNullOrEmpty(target.Key)) target = strongestMat; // 못 버티면 제일 센거
+                if (string.IsNullOrEmpty(target.Key)) target = strongestMat;
 
                 b.MatName = target.Key;
                 b.Tensile = target.Value.Tensile;
@@ -334,7 +327,6 @@ public class BudgetUIManager : MonoBehaviour
         }
         else if (mode == "Expensive")
         {
-            // 일단 붕괴는 막는 제일 싼걸로 모두 세팅 (Cheap과 동일)
             foreach (var b in blocks)
             {
                 var target = allMats.FirstOrDefault(m => m.Value.Tensile >= b.Stress * 1.2f);
@@ -347,9 +339,8 @@ public class BudgetUIManager : MonoBehaviour
                 totalCost += b.Price;
             }
 
-            // 예산이 남는 한도 내에서 제일 위험한 블록부터 차근차근 비싸고 튼튼한 걸로 업그레이드!
             var sortedBlocks = blocks.OrderByDescending(b => b.Stress).ToList();
-            var expensiveMats = allMats.OrderByDescending(m => m.Value.Density).ToList(); // 비싼 순
+            var expensiveMats = allMats.OrderByDescending(m => m.Value.Density).ToList();
 
             foreach (var b in sortedBlocks)
             {
@@ -363,13 +354,12 @@ public class BudgetUIManager : MonoBehaviour
                         b.Tensile = expMat.Value.Tensile;
                         b.Compressive = expMat.Value.Compressive;
                         b.Price = newPrice;
-                        break; // 이 블록은 업그레이드 완료
+                        break;
                     }
                 }
             }
         }
 
-        // 3. 다시 CSV 데이터로 합치기
         foreach (var b in blocks)
         {
             b.Cols.SetValue(b.MatName, 7);
@@ -378,7 +368,10 @@ public class BudgetUIManager : MonoBehaviour
             output.Add(string.Join(",", b.Cols));
         }
 
-        // ⭐ 화면에 있는 실제 블록들(Entity)의 재질도 즉시 엑셀과 똑같이 교체!
+        // 십장님이 찾아내신 바로 그 저장 코드 추가 완료!
+        File.WriteAllLines(csvPath, output);
+        UnityEngine.Debug.Log("저장 완료 CurrentStress.csv 파일에 재질 변경 내역 저장 완료");
+
         var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
         var query = em.CreateEntityQuery(typeof(BlockMaterial), typeof(OriginalPosition));
         var entities = query.ToEntityArray(Unity.Collections.Allocator.Temp);
