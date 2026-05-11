@@ -32,7 +32,9 @@ public class ReinforcementManager : MonoBehaviour
         {
             string currentLine = lines.ElementAt(i);
             var cols = currentLine.Split(',').ToList();
-            if (cols.Count < 7) continue;
+
+            // ⭐ 12칸 데이터를 모두 읽어오도록 안전망 수정
+            if (cols.Count < 12) continue;
 
             string id = cols.ElementAt(0);
             existingBlocks.Add(id);
@@ -40,7 +42,7 @@ public class ReinforcementManager : MonoBehaviour
             float posY = float.Parse(cols.ElementAt(2));
             string typeStr = posY > 1.5f ? "Wall" : "Floor";
 
-            // 12칸에 맞춰서 Existing(기존 블록) 저장
+            // ⭐ 하드코딩된 Concrete 제거! CurrentStress.csv의 재질과 강도를 그대로 읽어서 보존
             string lineData = id + "," +
                               cols.ElementAt(1) + "," +
                               cols.ElementAt(2) + "," +
@@ -48,9 +50,9 @@ public class ReinforcementManager : MonoBehaviour
                               "0.00" + "," +
                               "Safe" + "," +
                               "N" + "," +
-                              "Concrete" + "," +
-                              "0.0" + "," +
-                              "0.0" + "," +
+                              cols.ElementAt(7) + "," +  // 재질 이름 유지
+                              cols.ElementAt(8) + "," +  // 인장 강도 유지
+                              cols.ElementAt(9) + "," +  // 압축 강도 유지
                               "Existing" + "," +
                               typeStr;
 
@@ -61,7 +63,7 @@ public class ReinforcementManager : MonoBehaviour
         {
             string currentLine = lines.ElementAt(i);
             var cols = currentLine.Split(',').ToList();
-            if (cols.Count < 7) continue;
+            if (cols.Count < 12) continue;
 
             // 처방전(Prescription)이 Y인 블록만 보강
             if (cols.ElementAt(6) != "Y") continue;
@@ -91,7 +93,7 @@ public class ReinforcementManager : MonoBehaviour
                     float exactY = currentY / 10f;
                     string typeStr = exactY > 1.5f ? "Wall" : "Floor";
 
-                    // 12칸에 맞춰서 Reinforcement(보강 철근) 저장
+                    // 보강 철근은 무조건 Steel
                     string newLineData = targetId + "," +
                                          cleanX.ToString("F2") + "," +
                                          exactY.ToString("F2") + "," +
@@ -112,6 +114,6 @@ public class ReinforcementManager : MonoBehaviour
         }
 
         File.WriteAllLines(planCsvPath, planLines);
-        Debug.Log("📄 [ReinforcementManager] 12칸 표준 도면 작성 완료! " + (planLines.Count - 1) + "개의 블록이 등록되었습니다.");
+        Debug.Log("📄 [ReinforcementManager] 12칸 표준 도면 작성 완료 (기존 재질 완벽 보존)!");
     }
 }
