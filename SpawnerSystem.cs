@@ -8,7 +8,7 @@ using Unity.Rendering;
 using Unity.Burst;
 using System.IO;
 using System.Text;
-using System.Linq; // ⭐ 대괄호 에러 방지를 위한 필수 마법 주문!
+using System.Linq;
 
 public struct GhostBlockTag : IComponentData { }
 
@@ -16,6 +16,10 @@ public struct GhostBlockTag : IComponentData { }
 public partial struct SpawnerSystem : ISystem
 {
     public static System.Collections.Generic.List<float3> ExternalBlueprintData = new System.Collections.Generic.List<float3>();
+
+    // ⭐ 재질을 보존하기 위한 새로운 리스트 추가!
+    public static System.Collections.Generic.List<string> blueprintMaterials = new System.Collections.Generic.List<string>();
+
     public static bool isOMode = false;
     public static bool isLMode = false;
     public static bool isUMode = false;
@@ -44,6 +48,14 @@ public partial struct SpawnerSystem : ISystem
     public static float loadDelayTimer;
     private bool pendingJointCleanup;
 
+    // 임시 파싱용 구조체
+    private struct TempSpawnData
+    {
+        public float3 Pos;
+        public float IsReinforce;
+        public string MatName;
+    }
+
     private string GetToolName(float mode)
     {
         if (math.abs(mode - 1f) < 0.01f) return "1_Solid_Wall";
@@ -62,6 +74,8 @@ public partial struct SpawnerSystem : ISystem
         isYMode = false;
         blueprintOffsets = new NativeList<float4>(Allocator.Persistent);
         loadDelayTimer = 0f; isOMode = false; isLMode = false; isUMode = false; backupIDToQuery = -1f;
+
+        blueprintMaterials.Clear();
     }
 
     public void OnDestroy(ref SystemState state)
@@ -92,9 +106,6 @@ public partial struct SpawnerSystem : ISystem
 
         PhysicsWorld physicsWorld = physicsSingleton.PhysicsWorld;
 
-        // =====================================================================
-        // ⭐ 수동 타설 백업 로직 
-        // =====================================================================
         if (backupIDToQuery > -1f)
         {
             StringBuilder csv = new StringBuilder();
@@ -193,19 +204,50 @@ public partial struct SpawnerSystem : ISystem
 
                     if (isYMode)
                     {
-                        float4 data = blueprintOffsets[i];
+                        float4 data = blueprintOffsets.ElementAt(i);
                         posOffset = new float3(data.x, data.y, data.z);
                         isReinforceBlock = data.w > 0.5f;
                     }
                     else
                     {
-                        posOffset = ExternalBlueprintData[i];
+                        posOffset = ExternalBlueprintData.ElementAt(i);
                     }
 
                     float3 finalPos = baseCenter + posOffset;
 
                     var instance = ecb.Instantiate(spawnerData.Prefab);
                     ecb.SetComponent(instance, LocalTransform.FromPositionRotationScale(finalPos, quaternion.identity, 2.95f));
+
+                    // ⭐ 핵심 로직 적용! (CSV에서 읽어온 실제 재료 데이터 사용)
+                    string matName = "Concrete";
+                    if (isYMode && i < blueprintMaterials.Count)
+                    {
+                        matName = blueprintMaterials.ElementAt(i);
+                    }
+                    else
+                    {
+                        matName = isReinforceBlock ? "Steel" : "Concrete";
+                    }
+
+                    ecb.AddComponent(instance, new BlockMaterial { MaterialName = matName });
+
+                    float hp = isReinforceBlock ? 2000f : 1000f;
+                    float def = isReinforceBlock ? 600f : 400f;
+                    float4 bColor = isReinforceBlock ? new float4(0.2f, 0.5f, 1.0f, 1f) : new float4(0.7f, 0.7f, 0.7f, 1f);
+
+                    // MaterialDataManager 연동
+                    if (MaterialDataManager.Instance != null && MaterialDataManager.Instance.MaterialDict.TryGetValue(matName, out var spec))
+                    {
+                        hp = spec.BaseHP;
+                        def = math.min(spec.Tensile, spec.Compressive);
+                        bColor = new float4(spec.Color.r, spec.Color.g, spec.Color.b, spec.Color.a);
+                    }
+                    else
+                    {
+                        if (matName.Contains("Steel")) bColor = new float4(0.2f, 0.5f, 1.0f, 1.0f);
+                        else if (matName.Contains("Wood") || matName.Contains("Timber")) bColor = new float4(0.6f, 0.4f, 0.2f, 1.0f);
+                        else if (matName.Contains("Brick")) bColor = new float4(0.8f, 0.3f, 0.2f, 1.0f);
+                    }
 
                     if (triggerSpecialGhost)
                     {
@@ -214,8 +256,8 @@ public partial struct SpawnerSystem : ISystem
                         ecb.RemoveComponent<PhysicsVelocity>(instance);
                         ecb.RemoveComponent<PhysicsMass>(instance);
 
-                        float4 ghostColor = isReinforceBlock ? new float4(0.2f, 0.4f, 1.0f, 0.8f) : new float4(0.7f, 0.7f, 0.7f, 0.4f);
-                        ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = ghostColor });
+                        bColor.w = isReinforceBlock ? 0.8f : 0.4f;
+                        ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = bColor });
                     }
                     else
                     {
@@ -223,18 +265,8 @@ public partial struct SpawnerSystem : ISystem
                         ecb.AddComponent<BlockStress>(instance);
                         ecb.AddComponent(instance, new StructureID { Value = (int)nextStructureID });
 
-                        if (isReinforceBlock)
-                        {
-                            ecb.AddComponent(instance, new BlockMaterial { MaterialName = "Steel" });
-                            ecb.AddComponent(instance, new BlockHealth { MaxHP = 2000f, CurrentHP = 2000f, Defense = 600f });
-                            ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(0.2f, 0.5f, 1.0f, 1f) });
-                        }
-                        else
-                        {
-                            ecb.AddComponent(instance, new BlockMaterial { MaterialName = "Concrete" });
-                            ecb.AddComponent(instance, new BlockHealth { MaxHP = 1000f, CurrentHP = 1000f, Defense = 400f });
-                            ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(0.7f, 0.7f, 0.7f, 1f) });
-                        }
+                        ecb.AddComponent(instance, new BlockHealth { MaxHP = hp, CurrentHP = hp, Defense = def });
+                        ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = bColor });
 
                         if (finalPos.y <= 2.0f) { PhysicsMass m = SystemAPI.GetComponent<PhysicsMass>(spawnerData.Prefab); m.InverseMass = 0f; m.InverseInertia = float3.zero; ecb.SetComponent(instance, m); }
 
@@ -268,7 +300,9 @@ public partial struct SpawnerSystem : ISystem
                     {
                         var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
                         if (bpManager != null) bpManager.SaveBlueprint();
+
                         blueprintOffsets.Clear();
+                        blueprintMaterials.Clear(); // ⭐ 타설 끝났으니 재료 리스트도 깔끔하게 비움
                         isYMode = false;
                         UnityEngine.Debug.Log("🏗️ [보강 공사] 튼튼하게 기존 건물과 보강 철근이 융합되었습니다!");
                     }
@@ -295,7 +329,6 @@ public partial struct SpawnerSystem : ISystem
                 BudgetUIManager.Instance.OnYKeyPressed();
         }
 
-        // ⭐ 이 부분이 찌꺼기 숫자가 날아가서 에러가 났던 곳입니다! 리스트 방식으로 완전 개조했습니다.
         if (loadDelayTimer > 0f)
         {
             loadDelayTimer -= 1f;
@@ -307,7 +340,7 @@ public partial struct SpawnerSystem : ISystem
                     var linesList = File.ReadAllLines(planCsvPath).ToList();
                     float minX = 99999f, minZ = 99999f, maxX = -99999f, maxZ = -99999f;
 
-                    System.Collections.Generic.List<float4> tempList = new System.Collections.Generic.List<float4>();
+                    System.Collections.Generic.List<TempSpawnData> tempList = new System.Collections.Generic.List<TempSpawnData>();
                     System.Collections.Generic.HashSet<string> loadedIDs = new System.Collections.Generic.HashSet<string>();
 
                     for (int i = 1; i < linesList.Count; i++)
@@ -330,7 +363,9 @@ public partial struct SpawnerSystem : ISystem
                                 if (loadedIDs.Contains(uniqueKey)) continue;
 
                                 float isReinforce = cols.ElementAt(10) == "Reinforcement" ? 1f : 0f;
-                                tempList.Add(new float4(x, y, z, isReinforce));
+                                string readMat = cols.ElementAt(7).Replace("\0", "").Trim(); // ⭐ 재질 완벽 파싱
+
+                                tempList.Add(new TempSpawnData { Pos = new float3(x, y, z), IsReinforce = isReinforce, MatName = readMat });
                                 loadedIDs.Add(uniqueKey);
 
                                 if (x < minX) minX = x; if (x > maxX) maxX = x;
@@ -340,17 +375,25 @@ public partial struct SpawnerSystem : ISystem
                     }
                     if (tempList.Count > 0)
                     {
-                        isYMode = true; blueprintOffsets.Clear(); tempList.Sort((a, b) => a.y.CompareTo(b.y));
+                        isYMode = true;
+
+                        blueprintOffsets.Clear();
+                        blueprintMaterials.Clear();
+
+                        // Y축 기준으로 가지런히 정렬!
+                        tempList.Sort((a, b) => a.Pos.y.CompareTo(b.Pos.y));
+
                         float centerX = math.round(((minX + maxX) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
                         float centerZ = math.round(((minZ + maxZ) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
                         customCenterPos = new float3(centerX, 0f, centerZ);
                         isCenterMoved = true;
 
-                        foreach (var pos in tempList)
+                        foreach (var data in tempList)
                         {
-                            blueprintOffsets.Add(new float4(pos.x - centerX, pos.y, pos.z - centerZ, pos.w));
+                            blueprintOffsets.Add(new float4(data.Pos.x - centerX, data.Pos.y, data.Pos.z - centerZ, data.IsReinforce));
+                            blueprintMaterials.Add(data.MatName); // ⭐ 재질도 함께 장전!
                         }
-                        UnityEngine.Debug.Log($"🏗️ [스마트 로드 완] {tempList.Count}개의 구조물이 도면에 장전되었습니다! F키로 확인해 보세요.");
+                        UnityEngine.Debug.Log($"🏗️ [스마트 로드 완] {tempList.Count}개의 구조물과 재질 데이터가 장전되었습니다! F키로 확인해 보세요.");
                     }
                 }
             }
@@ -362,7 +405,7 @@ public partial struct SpawnerSystem : ISystem
             {
                 for (int i = 0; i < blueprintOffsets.Length; i++)
                 {
-                    float4 offset = blueprintOffsets[i];
+                    float4 offset = blueprintOffsets.ElementAt(i);
                     blueprintOffsets[i] = new float4(-offset.z, offset.y, offset.x, offset.w);
                 }
                 UnityEngine.Debug.Log("🔄 Y도면이 왼쪽[Q]으로 90도 회전했습니다!");
@@ -371,7 +414,7 @@ public partial struct SpawnerSystem : ISystem
             {
                 for (int i = 0; i < blueprintOffsets.Length; i++)
                 {
-                    float4 offset = blueprintOffsets[i];
+                    float4 offset = blueprintOffsets.ElementAt(i);
                     blueprintOffsets[i] = new float4(offset.z, offset.y, -offset.x, offset.w);
                 }
                 UnityEngine.Debug.Log("🔄 Y도면이 오른쪽[E]으로 90도 회전했습니다!");
