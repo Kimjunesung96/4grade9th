@@ -111,34 +111,54 @@ public partial struct VibrationTestSystem : ISystem
     private void SaveVibrationExcel(NativeList<float3> positions, NativeList<float> stresses, NativeList<FixedString32Bytes> materials)
     {
         string dateStamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-        string vibeDir = Path.Combine(Application.dataPath, "StressBlock", "vibe");
-        if (!Directory.Exists(vibeDir)) Directory.CreateDirectory(vibeDir);
+        string vibDir = Path.Combine(Application.dataPath, "StressBlock", "vibration");
+        if (!Directory.Exists(vibDir)) Directory.CreateDirectory(vibDir);
 
-        string historyPath = Path.Combine(vibeDir, $"Vibration_All_{dateStamp}.csv");
+        string historyPath = Path.Combine(vibDir, "Vibration_All_" + dateStamp + ".csv");
         string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
 
         System.Collections.Generic.List<string> currentLines = new System.Collections.Generic.List<string>();
-        currentLines.Add("BlockID,PosX,PosY,PosZ,VIBE_Stress,RiskLevel,Prescription,Material"); // ⭐ 헤더 변경
+
+        // 12칸 표준 규격 헤더
+        currentLines.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
 
         for (int i = 0; i < positions.Length; i++)
         {
-            float3 pos = positions[i]; float stress = stresses[i]; string mat = materials[i].ToString();
+            float3 pos = positions[i];
+            float stress = stresses[i];
+            string mat = materials[i].ToString();
 
-            int ix = (int)math.round(pos.x * 10f); int iy = (int)math.round(pos.y * 10f); int iz = (int)math.round(pos.z * 10f);
-            string signX = ix < 0 ? "-" : "0"; string signZ = iz < 0 ? "-" : "0"; string signY = iy < 0 ? "-" : "0";
-            string id = $"{signX}{math.abs(ix):000}_{signZ}{math.abs(iz):000}_{signY}{math.abs(iy):000}";
+            float ix = math.round(pos.x * 10f);
+            float iz = math.round(pos.z * 10f);
+            float iy = math.round(pos.y * 10f);
+            string strX = (ix < 0 ? "-" : "0") + math.abs(ix).ToString("000");
+            string strZ = (iz < 0 ? "-" : "0") + math.abs(iz).ToString("000");
+            string strY = (iy < 0 ? "-" : "0") + math.abs(iy).ToString("000");
 
-            string risk = "Safe"; string pres = "N";
-            if (stress >= 2.0f) { risk = "Danger"; pres = "Y"; }
-            else if (stress >= 0.5f) { risk = "Warning"; pres = "N"; }
+            string id = strX + "_" + strZ + "_" + strY;
+            string risk = stress >= 2.0f ? "Danger" : (stress >= 0.5f ? "Warning" : "Safe");
+            string pres = stress >= 2.0f ? "Y" : "N";
+            string typeStr = pos.y > 1.5f ? "Wall" : "Floor";
 
-            // ⭐ 맨 끝에 재질 추가
-            string lineData = $"{id},{pos.x:F2},{pos.y:F2},{pos.z:F2},{stress:F2},{risk},{pres},{mat}";
+            // 12칸 표준 규격 데이터 작성
+            string lineData = id + "," +
+                              pos.x.ToString("F2") + "," +
+                              pos.y.ToString("F2") + "," +
+                              pos.z.ToString("F2") + "," +
+                              stress.ToString("F2") + "," +
+                              risk + "," +
+                              pres + "," +
+                              mat + "," +
+                              "0.0" + "," +
+                              "0.0" + "," +
+                              "Existing" + "," +
+                              typeStr;
+
             currentLines.Add(lineData);
         }
 
         File.WriteAllLines(historyPath, currentLines);
         File.WriteAllLines(currentPath, currentLines);
-        Debug.Log($"📄 [엑셀] B키 진단결과 저장 완료! (재질포함)");
+        UnityEngine.Debug.Log("📄 [엑셀] B키 지진 진단결과 저장 완료! (12칸 표준 규격)");
     }
 }

@@ -9,6 +9,8 @@ using System;
 using Unity.Burst;
 using Unity.Collections;
 using System.Collections.Generic;
+using System.Linq;
+
 public struct OriginalPosition : IComponentData { public float3 Value; }
 
 [BurstCompile]
@@ -39,7 +41,6 @@ public partial struct CalculateJointStressJob : IJobEntity
         float dist = math.distance(pivotA, pivotB);
         float tensile = math.max(10.0f, (matA.TensileStiffness + matB.TensileStiffness) * 0.5f);
 
-        // ⭐ 가짜 증폭 계수 철거 완료! (무게가 15cm급으로 가벼워져서 실제 변위만으로도 정상 작동합니다)
         float finalStress = dist * tensile;
 
         if (StressLookup.HasComponent(entityA)) { var s = StressLookup[entityA]; s.TargetStress += finalStress; StressLookup[entityA] = s; }
@@ -170,50 +171,66 @@ public partial struct StressVisualizationSystem : ISystem
         string reinforcePath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
         string lastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
 
-        // ① 기존 CurrentStress에서 Tool, Type 보존용으로 읽기
-        // key = BlockID, value = (Tool, Type)
         var toolMap = new Dictionary<string, string>();
         var typeMap = new Dictionary<string, string>();
+        var matMap = new Dictionary<string, string>();
+        var tensileMap = new Dictionary<string, string>();
+        var compMap = new Dictionary<string, string>();
 
+        // ① 기존 CurrentStress 읽기 (Y키에서 수정한 재질 데이터 완벽 보존)
         if (File.Exists(path))
         {
-            string[] old = File.ReadAllLines(path);
-            for (int i = 1; i < old.Length; i++)
+            var oldLines = File.ReadAllLines(path).ToList();
+            for (int i = 1; i < oldLines.Count; i++)
             {
-                var c = old[i].Split(',');
-                if (c.Length >= 12)
+                var c = oldLines.ElementAt(i).Split(',').ToList();
+                if (c.Count >= 12)
                 {
-                    toolMap[c[0]] = c[10]; // Tool
-                    typeMap[c[0]] = c[11]; // Type
+                    string k = c.ElementAt(0);
+                    toolMap[k] = c.ElementAt(10);
+                    typeMap[k] = c.ElementAt(11);
+                    matMap[k] = c.ElementAt(7);      // 재질 이름 보존
+                    tensileMap[k] = c.ElementAt(8);  // 인장 강도 보존
+                    compMap[k] = c.ElementAt(9);     // 압축 강도 보존
                 }
             }
         }
 
-        // ② Reinforcement_Plan에서 Tool 덮어쓰기 (Y키로 생성된 최신 정보 우선)
+        // ② Reinforcement_Plan 읽기 (최신 보강 철근 데이터 덮어쓰기)
         if (File.Exists(reinforcePath))
         {
-            string[] rLines = File.ReadAllLines(reinforcePath);
-            for (int i = 1; i < rLines.Length; i++)
+            var rLines = File.ReadAllLines(reinforcePath).ToList();
+            for (int i = 1; i < rLines.Count; i++)
             {
-                var c = rLines[i].Split(',');
-                if (c.Length >= 5)
-                    toolMap[c[0]] = c[4]; // Existing or Reinforcement
+                var c = rLines.ElementAt(i).Split(',').ToList();
+                if (c.Count >= 12)
+                {
+                    string k = c.ElementAt(0);
+                    toolMap[k] = c.ElementAt(10);
+                    matMap[k] = c.ElementAt(7);
+                    tensileMap[k] = c.ElementAt(8);
+                    compMap[k] = c.ElementAt(9);
+                }
             }
         }
 
-        // ③ Last_Building에서 Type 덮어쓰기 (Wall or Floor)
+        // ③ Last_Building 읽기
         if (File.Exists(lastBuildPath))
         {
-            string[] lLines = File.ReadAllLines(lastBuildPath);
-            for (int i = 1; i < lLines.Length; i++)
+            var lLines = File.ReadAllLines(lastBuildPath).ToList();
+            for (int i = 1; i < lLines.Count; i++)
             {
-                var c = lLines[i].Split(',');
-                if (c.Length >= 5)
-                    typeMap[c[0]] = c[4]; // Wall or Floor
+                var c = lLines.ElementAt(i).Split(',').ToList();
+                if (c.Count >= 12)
+                {
+                    string k = c.ElementAt(0);
+                    if (typeMap.ContainsKey(k)) typeMap.Remove(k);
+                    typeMap.Add(k, c.ElementAt(11));
+                }
             }
         }
 
-        // ④ 현재 스트레스 데이터로 통합 CSV 작성
+        // ④ 보존된 데이터를 바탕으로 스트레스만 업데이트하여 CSV 작성
         using (StreamWriter writer = new StreamWriter(path, false))
         {
             writer.WriteLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
@@ -224,31 +241,78 @@ public partial struct StressVisualizationSystem : ISystem
               RefRO<BlockMaterial>,
               RefRO<OriginalPosition>>())
             {
+                float3 p = pos.ValueRO.Value;
+                float ix = math.round(p.x * 10f); float iy = math.round(p.y * 10f); float iz = math.round(p.z * 10f);
+
+                string strX = (ix < 0f ? "-" : "0") + math.abs(ix).ToString("000");
+                string strZ = (iz < 0f ? "-" : "0") + math.abs(iz).ToString("000");
+                string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
+                string id = strX + "_" + strZ + "_" + strY;
+
+                // ⭐ 기존 CSV의 재료 데이터가 있으면 그것을 최우선으로 가져옴! (V키가 재질을 엎어버리는 현상 해결)
+                string mName = matMap.ContainsKey(id) ? matMap[id] : mat.ValueRO.MaterialName.ToString().Replace("\0", "").Trim();
+                string tStr = tensileMap.ContainsKey(id) ? tensileMap[id] : mat.ValueRO.TensileStiffness.ToString("F1");
+                string cStr = compMap.ContainsKey(id) ? compMap[id] : mat.ValueRO.CompressiveStiffness.ToString("F1");
+
+                // 강도 문자열을 숫자로 안전하게 변환
+                float tensile = 100f; float compressive = 100f;
+                float.TryParse(tStr, out tensile);
+                float.TryParse(cStr, out compressive);
+                if (tensile <= 0.1f) tensile = mat.ValueRO.TensileStiffness;
+                if (compressive <= 0.1f) compressive = mat.ValueRO.CompressiveStiffness;
+
                 float curStress = stress.ValueRO.SmoothedStress;
-                float limit = math.max(1.0f, math.min(mat.ValueRO.TensileStiffness, mat.ValueRO.CompressiveStiffness));
+                float limit = math.max(1.0f, math.min(tensile, compressive));
                 float t = math.clamp(curStress / limit, 0.0f, 1.0f);
 
-                if (isWeightScanMode) color.ValueRW.Value = new float4(1.0f, 1.0f - t, 1.0f - t, 1.0f);
-                else color.ValueRW.Value = new float4(1.0f - t, 1.0f, 1.0f - t, 1.0f);
+                // ⭐ 재질별 고유 색상 매핑
+                float4 baseCol = new float4(0.7f, 0.7f, 0.7f, 1.0f); // 콘크리트 회색
+                if (mName.Contains("Steel")) baseCol = new float4(0.2f, 0.5f, 1.0f, 1.0f); // 파란색
+                else if (mName.Contains("Wood") || mName.Contains("Timber")) baseCol = new float4(0.6f, 0.4f, 0.2f, 1.0f); // 갈색
+                else if (mName.Contains("Brick")) baseCol = new float4(0.8f, 0.3f, 0.2f, 1.0f); // 진홍색
 
-                string risk = t >= 0.8f ? "DANGER" : (t >= 0.5f ? "WARNING" : "SAFE");
-                float3 p = pos.ValueRO.Value;
+                string risk = "Safe";
+                string pres = "N";
 
-                float ix = math.round(p.x * 10f); float iy = math.round(p.y * 10f); float iz = math.round(p.z * 10f);
-                string strX = $"{(ix < 0f ? "-" : "0")}{math.abs(ix):000}";
-                string strZ = $"{(iz < 0f ? "-" : "0")}{math.abs(iz):000}";
-                string strY = $"{(iy < 0f ? "-" : "0")}{math.abs(iy):000}";
-                string id = $"{strX}_{strZ}_{strY}";
+                // ⭐ 색상 우선순위 (스트레스 위험도가 최우선, 안전할 때만 재질 색상 표현)
+                if (t >= 0.8f)
+                {
+                    color.ValueRW.Value = new float4(1.0f, 0.0f, 0.0f, 1.0f); // 위험(빨강)
+                    risk = "Danger";
+                    pres = "Y";
+                }
+                else if (t >= 0.5f)
+                {
+                    color.ValueRW.Value = new float4(1.0f, 1.0f, 0.0f, 1.0f); // 경고(노랑)
+                    risk = "Warning";
+                }
+                else
+                {
+                    color.ValueRW.Value = baseCol; // 안전(재질 본연의 색상)
+                }
 
-                // Tool, Type — 없으면 기본값
                 string tool = toolMap.ContainsKey(id) ? toolMap[id] : "Existing";
                 string type = typeMap.ContainsKey(id) ? typeMap[id] : (p.y > 1.5f ? "Wall" : "Floor");
 
-                writer.WriteLine($"{id},{p.x:F2},{p.y:F2},{p.z:F2},{curStress:F2},{risk},{(risk == "DANGER" ? "Y" : "")},{mat.ValueRO.MaterialName},{mat.ValueRO.TensileStiffness:F1},{mat.ValueRO.CompressiveStiffness:F1},{tool},{type}");
+                // 최종적으로 업데이트된 스트레스와 보존된 재질 정보를 엑셀로 저장
+                string lineData = id + "," +
+                                  p.x.ToString("F2") + "," +
+                                  p.y.ToString("F2") + "," +
+                                  p.z.ToString("F2") + "," +
+                                  curStress.ToString("F2") + "," +
+                                  risk + "," +
+                                  pres + "," +
+                                  mName + "," +
+                                  tStr + "," +
+                                  cStr + "," +
+                                  tool + "," +
+                                  type;
+
+                writer.WriteLine(lineData);
             }
         }
 
         needsColorUpdate = false;
-        Debug.Log("📊 [통합 CSV] CurrentStress 업데이트 완료! (Tool+Type 보존)");
+        UnityEngine.Debug.Log("📊 [통합 CSV] 스트레스 업데이트 완료! (Y키의 재질 데이터 완벽 보존)");
     }
 }
