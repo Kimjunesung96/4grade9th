@@ -40,7 +40,7 @@ public partial struct SpawnerSystem : ISystem
     private bool isYMode;
 
     private NativeList<float4> blueprintOffsets;
-    private float loadDelayTimer;
+    public static float loadDelayTimer;
     private bool pendingJointCleanup;
     private string GetToolName(float mode)
     {
@@ -284,7 +284,11 @@ public partial struct SpawnerSystem : ISystem
             }
         }
 
-        if (Input.GetKeyDown(KeyCode.Y)) { loadDelayTimer = 5f; }
+        if (Input.GetKeyDown(KeyCode.Y))
+        {
+            if (BudgetUIManager.Instance != null)
+                BudgetUIManager.Instance.OnYKeyPressed();
+        }
         if (loadDelayTimer > 0f)
         {
             loadDelayTimer -= 1f;
