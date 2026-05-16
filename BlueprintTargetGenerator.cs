@@ -21,13 +21,11 @@ public class BlueprintTargetGenerator : MonoBehaviour
     private List<string> availableCsvFiles = new List<string>();
     private Vector2 leftScrollPosition = Vector2.zero;
     private Vector2 rightScrollPosition = Vector2.zero;
-
     private bool isWaitingForLimit = false;
     private string pendingFileName = "";
 
     private string stressBlockFolder;
     private string savedBlueprintsFolder;
-
     private List<string> selectedFloors = new List<string>();
 
     void Start()
@@ -59,7 +57,11 @@ public class BlueprintTargetGenerator : MonoBehaviour
             LoadLastBuildingForUMode();
         }
 
-        if (isWaitingForLimit) HandleNumericLimitInput();
+        if (isWaitingForLimit)
+        {
+            HandleNumericLimitInput();
+            return;
+        }
 
         if ((SpawnerSystem.isOMode || SpawnerSystem.isUMode) && currentScannedData.Count > 0f)
         {
@@ -85,11 +87,9 @@ public class BlueprintTargetGenerator : MonoBehaviour
     void OnGUI()
     {
         if (!showBlueprintUI) return;
-
         float boxWidth = 700f;
         float boxHeight = 550f;
         GUI.Box(new Rect(Screen.width / 2f - boxWidth / 2f, Screen.height / 2f - boxHeight / 2f, boxWidth, boxHeight), "📂 현장 도면 관리소 (O키로 닫기)");
-
         GUILayout.BeginArea(new Rect(Screen.width / 2f - 330f, Screen.height / 2f - 230f, 310f, 500f));
         GUI.color = Color.green;
         if (GUILayout.Button("➕ [새로 만들기] 새 이미지 스캔", GUILayout.Height(40f)))
@@ -112,7 +112,6 @@ public class BlueprintTargetGenerator : MonoBehaviour
         }
         GUILayout.EndScrollView();
         GUILayout.EndArea();
-
         GUILayout.BeginArea(new Rect(Screen.width / 2f + 20f, Screen.height / 2f - 230f, 310f, 500f));
         GUI.color = new Color(0.8f, 0.9f, 1f);
         GUILayout.BeginVertical("box");
@@ -175,7 +174,6 @@ public class BlueprintTargetGenerator : MonoBehaviour
             currentPixels = tex.GetPixels32();
             texWidth = (float)tex.width;
             texHeight = (float)tex.height;
-
             DestroyImmediate(tex);
 
             isWaitingForLimit = true;
@@ -186,8 +184,14 @@ public class BlueprintTargetGenerator : MonoBehaviour
 
     private void HandleNumericLimitInput()
     {
-        float targetLimit = -1f;
+        if (Input.GetKeyDown(KeyCode.Escape))
+        {
+            isWaitingForLimit = false;
+            Debug.Log("⚠️ [스캔 취소] 이미지 스캔 대기가 취소되었습니다.");
+            return;
+        }
 
+        float targetLimit = -1f;
         if (Input.GetKeyDown(KeyCode.Alpha1)) targetLimit = 1000f;
         else if (Input.GetKeyDown(KeyCode.Alpha2)) targetLimit = 2000f;
         else if (Input.GetKeyDown(KeyCode.Alpha3)) targetLimit = 3000f;
@@ -212,7 +216,6 @@ public class BlueprintTargetGenerator : MonoBehaviour
             string newCsvPath = Path.Combine(savedBlueprintsFolder, newFileName + ".csv");
 
             SaveListToCSV(finalBlocks, newCsvPath);
-
             Debug.Log($"💾 [{newFileName}.csv] 저장 완료! 장바구니에 담깁니다.");
 
             selectedFloors.Add(newCsvPath);
@@ -239,8 +242,6 @@ public class BlueprintTargetGenerator : MonoBehaviour
                 for (int j = 1; j < lines.Count; j++)
                 {
                     var cols = lines.ElementAt(j).Split(',').ToList();
-
-                    // ⭐ 숨겨진 찌꺼기 태그 완벽 제거! 에러 안 납니다.
                     if (cols.Count >= 4 && !cols.ElementAt(0).Contains("ID"))
                     {
                         float x = math.round((float.Parse(cols.ElementAt(1)) - 1.5f) / 3.0f) * 3.0f + 1.5f;
@@ -276,7 +277,6 @@ public class BlueprintTargetGenerator : MonoBehaviour
         {
             string typeStr = p.y > 1.5f ? "Wall" : "Floor";
             string id = $"{(int)math.round(p.x * 10f)}_{(int)math.round(p.z * 10f)}_{(int)math.round(p.y * 10f)}";
-
             string lineData = id + "," +
                               p.x.ToString("F2") + "," +
                               p.y.ToString("F2") + "," +
@@ -289,7 +289,6 @@ public class BlueprintTargetGenerator : MonoBehaviour
                               "0.0" + "," +
                               "0" + "," +
                               typeStr;
-
             sb.AppendLine(lineData);
         }
         File.WriteAllText(path, sb.ToString());
@@ -337,13 +336,14 @@ public class BlueprintTargetGenerator : MonoBehaviour
         float minX = 99999f, minZ = 99999f, maxX = -99999f, maxZ = -99999f;
         foreach (var p in rawData)
         {
-            if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
-            if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
+            if (p.x < minX) minX = p.x;
+            if (p.x > maxX) maxX = p.x;
+            if (p.z < minZ) minZ = p.z;
+            if (p.z > maxZ) maxZ = p.z;
         }
 
         float centerX = math.round(((minX + maxX) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
         float centerZ = math.round(((minZ + maxZ) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
-
         List<float3> centeredData = new List<float3>();
         foreach (var p in rawData) centeredData.Add(new float3(p.x - centerX, p.y, p.z - centerZ));
         return centeredData;
@@ -368,6 +368,7 @@ public class BlueprintTargetGenerator : MonoBehaviour
         List<float3> stackedData = new List<float3>();
         float maxY = 0f;
         foreach (var p in centeredRawData) { if (p.y > maxY) maxY = p.y; }
+
         float heightStep = math.floor(maxY / 15.0f) * 15.0f + 15.0f;
         if (heightStep < 15.0f) heightStep = 15.0f;
 
@@ -392,7 +393,6 @@ public class BlueprintTargetGenerator : MonoBehaviour
             float snapY = math.round((pos.y - 1.5f) / 3.0f) * 3.0f + 1.5f;
             float snapZ = math.round((pos.z - 1.5f) / 3.0f) * 3.0f + 1.5f;
             string id = $"{snapX}_{snapY}_{snapZ}";
-
             if (!uniqueCheck.Contains(id))
             {
                 uniqueCheck.Add(id);
@@ -421,7 +421,6 @@ public class BlueprintTargetGenerator : MonoBehaviour
             for (float z = 0f; z <= h - size; z += size)
             {
                 float redCount = 0f, blueCount = 0f, blackCount = 0f;
-
                 for (float i = 0f; i < size; i += 1f)
                 {
                     for (float j = 0f; j < size; j += 1f)
