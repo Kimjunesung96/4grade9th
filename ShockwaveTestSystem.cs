@@ -31,12 +31,27 @@ public partial struct ShockwaveTestSystem : ISystem
         if (isNMode)
         {
             UnityEngine.Debug.DrawLine(epicenter + new float3(-1, 0, 0), epicenter + new float3(1, 0, 0), UnityEngine.Color.red); UnityEngine.Debug.DrawLine(epicenter + new float3(0, -1, 0), epicenter + new float3(0, 1, 0), UnityEngine.Color.red); UnityEngine.Debug.DrawLine(epicenter + new float3(0, 0, -1), epicenter + new float3(0, 0, 1), UnityEngine.Color.red); UnityEngine.Debug.DrawRay(epicenter, UnityEngine.Vector3.up * 5f, UnityEngine.Color.red);
-            if (Input.GetMouseButtonDown(1))
+       if (Input.GetMouseButtonDown(1))
             {
-                UnityEngine.Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition); PhysicsWorld physicsWorld = SystemAPI.GetSingleton<PhysicsWorldSingleton>().PhysicsWorld; bool hitSuccess = false;
+                UnityEngine.Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
+                PhysicsWorld physicsWorld = SystemAPI.GetSingleton<PhysicsWorldSingleton>().PhysicsWorld; 
+                // bool hitSuccess = false; // ⭐ 미사용 변수 제거
+
                 RaycastInput rayInput = new RaycastInput { Start = ray.origin, End = ray.origin + ray.direction * 500f, Filter = CollisionFilter.Default };
-                if (physicsWorld.CastRay(rayInput, out Unity.Physics.RaycastHit hit)) { epicenter = hit.Position; hitSuccess = true; }
-                else { UnityEngine.Plane groundPlane = new UnityEngine.Plane(UnityEngine.Vector3.up, UnityEngine.Vector3.zero); if (groundPlane.Raycast(ray, out float enter)) { epicenter = ray.GetPoint(enter); hitSuccess = true; } }
+                if (physicsWorld.CastRay(rayInput, out Unity.Physics.RaycastHit hit)) 
+                { 
+                    epicenter = hit.Position; 
+                    // hitSuccess = true; // ⭐ 미사용 변수 제거
+                }
+                else 
+                { 
+                    UnityEngine.Plane groundPlane = new UnityEngine.Plane(UnityEngine.Vector3.up, UnityEngine.Vector3.zero);
+                    if (groundPlane.Raycast(ray, out float enter)) 
+                    { 
+                        epicenter = ray.GetPoint(enter); 
+                        // hitSuccess = true; // ⭐ 미사용 변수 제거
+                    } 
+                }
             }
         }
 
