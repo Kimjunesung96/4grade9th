@@ -308,7 +308,7 @@ public class AI_Builder : MonoBehaviour
     private void ConfirmAiBuild()
     {
         float blockSize = 3.0f;
-        float shiftY = 0f;
+        // float shiftY = 0f; // ⭐ 미사용 변수 제거 (경고 해결)
 
         var sortedHolograms = activeHolograms.OrderBy(h => h.transform.position.y - (h.transform.localScale.y / 2f)).ToList();
 

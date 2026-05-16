@@ -275,8 +275,9 @@ public class BudgetUIManager : MonoBehaviour
         if (MaterialDataManager.Instance == null) return;
         var dict = MaterialDataManager.Instance.MaterialDict;
 
-        var allMats = dict.OrderBy(kv => kv.Value.Density).ToList();
-        var strongestMat = allMats.OrderByDescending(kv => kv.Value.Tensile).First();
+        var cheapMats = dict.OrderBy(kv => kv.Value.Density * kv.Value.PricePerKg).ToList(); 
+        var strongestMats = dict.OrderByDescending(kv => math.min(kv.Value.Tensile, kv.Value.Compressive)).ToList();
+        var strongestMat = strongestMats.First();
 
         var output = new List<string> { lines.FirstOrDefault() };
         float totalCost = 0f;
@@ -306,7 +307,8 @@ public class BudgetUIManager : MonoBehaviour
                 {
                     b.Tensile = spec.Tensile;
                     b.Compressive = spec.Compressive;
-                    b.Price = spec.Density * 3375f;
+                    // ⭐ 실제 단가(PricePerKg)를 곱해서 블록 가격 산출 (3.375f는 체적 및 화폐단위 스케일 보정용)
+                    b.Price = spec.Density * spec.PricePerKg * 3.375f; 
                 }
                 totalCost += b.Price;
             }
@@ -315,46 +317,51 @@ public class BudgetUIManager : MonoBehaviour
         {
             foreach (var b in blocks)
             {
-                var target = allMats.FirstOrDefault(m => m.Value.Tensile >= b.Stress * 1.2f);
-                if (string.IsNullOrEmpty(target.Key)) target = strongestMat;
+                // ⭐ 싸게: 가성비 1순위부터 찾되, V/B/N 스트레스의 1.2배(안전마진) 이상을 버티는 재질 픽!
+                var target = cheapMats.FirstOrDefault(m => math.min(m.Value.Tensile, m.Value.Compressive) >= b.Stress * 1.2f);
+                if (string.IsNullOrEmpty(target.Key)) target = strongestMat; // 못 버티면 제일 쎈걸로 강제 배정
 
                 b.MatName = target.Key;
                 b.Tensile = target.Value.Tensile;
                 b.Compressive = target.Value.Compressive;
-                b.Price = target.Value.Density * 3375f;
+                b.Price = target.Value.Density * target.Value.PricePerKg * 3.375f;
                 totalCost += b.Price;
             }
         }
         else if (mode == "Expensive")
         {
+            // ⭐ 1단계: '싸게' 모드와 동일하게 기초 안전마진을 맞춰 기본 예산 베이스를 깝니다.
             foreach (var b in blocks)
             {
-                var target = allMats.FirstOrDefault(m => m.Value.Tensile >= b.Stress * 1.2f);
+                var target = cheapMats.FirstOrDefault(m => math.min(m.Value.Tensile, m.Value.Compressive) >= b.Stress * 1.2f);
                 if (string.IsNullOrEmpty(target.Key)) target = strongestMat;
 
                 b.MatName = target.Key;
                 b.Tensile = target.Value.Tensile;
                 b.Compressive = target.Value.Compressive;
-                b.Price = target.Value.Density * 3375f;
+                b.Price = target.Value.Density * target.Value.PricePerKg * 3.375f;
                 totalCost += b.Price;
             }
 
+            // ⭐ 2단계: 스트레스(위험도)를 가장 많이 받는 블록부터, 남은 예산 한도 내에서 초고강도 재질로 업그레이드!
             var sortedBlocks = blocks.OrderByDescending(b => b.Stress).ToList();
-            var expensiveMats = allMats.OrderByDescending(m => m.Value.Density).ToList();
-
+            
             foreach (var b in sortedBlocks)
             {
-                foreach (var expMat in expensiveMats)
+                foreach (var strongMat in strongestMats)
                 {
-                    float newPrice = expMat.Value.Density * 3375f;
-                    if (newPrice > b.Price && (totalCost - b.Price + newPrice) <= budget)
+                    float newPrice = strongMat.Value.Density * strongMat.Value.PricePerKg * 3.375f;
+                    
+                    // 기존 재료보다 강도가 더 뛰어나면서, 이걸로 교체해도 전체 예산(budget) 안쪽이라면 통과!
+                    if (math.min(strongMat.Value.Tensile, strongMat.Value.Compressive) > math.min(b.Tensile, b.Compressive) 
+                        && (totalCost - b.Price + newPrice) <= budget)
                     {
                         totalCost = totalCost - b.Price + newPrice;
-                        b.MatName = expMat.Key;
-                        b.Tensile = expMat.Value.Tensile;
-                        b.Compressive = expMat.Value.Compressive;
+                        b.MatName = strongMat.Key;
+                        b.Tensile = strongMat.Value.Tensile;
+                        b.Compressive = strongMat.Value.Compressive;
                         b.Price = newPrice;
-                        break;
+                        break; // 이 블록은 최고급으로 업그레이드 했으니 다음 블록으로 넘어갑니다.
                     }
                 }
             }
