@@ -161,22 +161,17 @@ public partial struct SpawnerSystem : ISystem
 
         if (!isBMode && !isNMode && !isAnySpecialMode)
         {
-            if (isHeightScrollEnabled && Input.mouseScrollDelta.y != 0f)
-            {
-                builderState.ValueRW.GuideHeight += Input.mouseScrollDelta.y;
-                if (builderState.ValueRW.GuideHeight < 1f) builderState.ValueRW.GuideHeight = 1f;
-            }
+            if (isHeightScrollEnabled && Input.mouseScrollDelta.y != 0f) { builderState.ValueRW.GuideHeight += Input.mouseScrollDelta.y; if (builderState.ValueRW.GuideHeight < 1f) builderState.ValueRW.GuideHeight = 1f; }
             if (Input.GetMouseButtonDown(0)) isCenterMoved = false;
-        }
 
-        // ★ 도면 모드가 켜져 있어도 1~5번 키는 작동하도록 밖으로 빼냄
-        if (!isBMode && !isNMode && isManualModeEnabled)
-        {
-            if (Input.GetKeyDown(KeyCode.Alpha1)) builderState.ValueRW.CurrentMode = 1;
-            if (Input.GetKeyDown(KeyCode.Alpha2)) builderState.ValueRW.CurrentMode = 2;
-            if (Input.GetKeyDown(KeyCode.Alpha3)) builderState.ValueRW.CurrentMode = 3;
-            if (Input.GetKeyDown(KeyCode.Alpha4)) builderState.ValueRW.CurrentMode = 4;
-            if (Input.GetKeyDown(KeyCode.Alpha5)) builderState.ValueRW.CurrentMode = 5;
+            if (isManualModeEnabled)
+            {
+                if (Input.GetKeyDown(KeyCode.Alpha1)) builderState.ValueRW.CurrentMode = 1;
+                if (Input.GetKeyDown(KeyCode.Alpha2)) builderState.ValueRW.CurrentMode = 2;
+                if (Input.GetKeyDown(KeyCode.Alpha3)) builderState.ValueRW.CurrentMode = 3;
+                if (Input.GetKeyDown(KeyCode.Alpha4)) builderState.ValueRW.CurrentMode = 4;
+                if (Input.GetKeyDown(KeyCode.Alpha5)) builderState.ValueRW.CurrentMode = 5;
+            }
         }
 
         if (Input.GetKeyDown(KeyCode.Return)) { if (LogManager.Instance != null) LogManager.Instance.SaveToMaster(); }
@@ -474,20 +469,12 @@ public partial struct SpawnerSystem : ISystem
                 float finalBuildY = math.round((math.max(highestY, actualStartPos.y) - 1.5f) / 3.0f) * 3.0f + 1.5f;
                 if (LogManager.Instance != null) { string toolName = GetToolName(currentBuildMode); string centerStr = $"[{(actualStartPos.x + actualEndPos.x) / 2f:F1}, {finalBuildY:F1}, {(actualStartPos.z + actualEndPos.z) / 2f:F1}]"; LogManager.Instance.AddLog(toolName, (int)math.round(guideHeight), isGhost ? "Key_F" : "Key_G", isGhost ? "Preview" : "Build", centerStr, 0f, 0f); }
                 ExecuteBuild(ref state, spawnerData, actualStartPos, actualEndPos, finalBuildY, hitEntity, isGhost);
+
                 if (!isGhost)
                 {
                     backupIDToQuery = 1f;
                     isGuideActive = false;
                     pendingJointCleanup = true;
-
-                    // ★ G키 타설 후 모든 도면/특수 모드 강제 해제 및 데이터 초기화
-                    isOMode = false;
-                    isLMode = false;
-                    isUMode = false;
-                    isYMode = false;
-                    ExternalBlueprintData.Clear();
-                    blueprintOffsets.Clear();
-                    blueprintMaterials.Clear();
                 }
             }
         }
