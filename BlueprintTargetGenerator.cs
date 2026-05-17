@@ -445,7 +445,7 @@ public class BlueprintTargetGenerator : MonoBehaviour
                     for (float y = 0f; y < 5f; y += 1f) list.Add(new float3(((int)(x / size)) * 3f + 1.5f, y * 3f + 1.5f, ((int)(z / size)) * 3f + 1.5f));
                 }
                 else if (blueCount > 0f) list.Add(new float3(((int)(x / size)) * 3f + 1.5f, 1.5f, ((int)(z / size)) * 3f + 1.5f));
-                else if (blackCount / area >= 0.3f)
+                else if (blackCount / area >= 0.1f)
                 {
                     for (float y = 0f; y < 5f; y += 1f) list.Add(new float3(((int)(x / size)) * 3f + 1.5f, y * 3f + 1.5f, ((int)(z / size)) * 3f + 1.5f));
                 }
