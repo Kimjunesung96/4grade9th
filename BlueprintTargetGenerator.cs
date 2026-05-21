@@ -98,6 +98,7 @@ public class BlueprintTargetGenerator : MonoBehaviour
         {
             showBlueprintUI = false;
             OpenAndCacheImage();
+            GUIUtility.ExitGUI(); // 🚀 파일 탐색기 호출 전 GUI 렌더링 안전 종료
         }
         GUI.color = Color.white;
         GUILayout.Space(10f);
@@ -201,18 +202,39 @@ public class BlueprintTargetGenerator : MonoBehaviour
 
         for (int i = 0; i < pixels.Length; i++)
         {
+            // 옅은 색은 1차로 무시 (파이썬 이진화 수치 150 동일 적용)
             binary[i] = (pixels[i].r + pixels[i].g + pixels[i].b) / 3f < 150 && pixels[i].a > 128;
         }
 
-        bool[] cleaned = Erode(binary, w, h, 5);//수치변경하는곳
-        cleaned = Dilate(cleaned, w, h, 5);
-        bool[] thickened = Dilate(cleaned, w, h, 5);
+        // ==========================================
+        // 🚀 사용자님 파이썬 파이프라인 완벽 재현
+        // ==========================================
+
+        // [1단계] 비거 (Bigger) 1회차
+        // 파이썬 5x5 커널 -> C# 반경 2 (뼈대에 살을 찌워서 삭제 대비)
+        bool[] process = Dilate(binary, w, h, 2);
+
+        // [2단계] 딜리터 (Deleter) 1회차
+        // 파이썬 15x15 커널 Opening(침식 후 팽창) -> C# 반경 7
+        process = Erode(process, w, h, 7);
+        process = Dilate(process, w, h, 7);
+
+        // [3단계] 비거 (Bigger) 2회차
+        // 다시 한 번 뼈대를 두껍게 팽창
+        process = Dilate(process, w, h, 2);
+
+        // [4단계] 딜리터 (Deleter) 2회차
+        // 마지막으로 잔여 노이즈를 싹 깎아내고 깔끔한 벽체만 남김
+        process = Erode(process, w, h, 7);
+        process = Dilate(process, w, h, 7);
+
+        // ==========================================
 
         Texture2D result = new Texture2D(w, h);
         Color32[] outPixels = new Color32[pixels.Length];
         for (int i = 0; i < outPixels.Length; i++)
         {
-            outPixels[i] = thickened[i] ? new Color32(0, 0, 0, 255) : new Color32(255, 255, 255, 255);
+            outPixels[i] = process[i] ? new Color32(0, 0, 0, 255) : new Color32(255, 255, 255, 255);
         }
         result.SetPixels32(outPixels);
         result.Apply();
@@ -252,6 +274,12 @@ public class BlueprintTargetGenerator : MonoBehaviour
         {
             for (int x = 0; x < w; x++)
             {
+                if (src[y * w + x])
+                {
+                    dst[y * w + x] = true;
+                    continue;
+                }
+
                 bool anyTrue = false;
                 for (int ky = -radius; ky <= radius; ky++)
                 {
@@ -260,7 +288,11 @@ public class BlueprintTargetGenerator : MonoBehaviour
                         int ny = y + ky, nx = x + kx;
                         if (ny >= 0 && ny < h && nx >= 0 && nx < w)
                         {
-                            if (src[ny * w + nx]) { anyTrue = true; break; }
+                            if (src[ny * w + nx]) 
+                            { 
+                                anyTrue = true; 
+                                break; 
+                            }
                         }
                     }
                     if (anyTrue) break;
@@ -317,7 +349,7 @@ public class BlueprintTargetGenerator : MonoBehaviour
         List<float3> finalStackedData = new List<float3>();
         for (int i = 0; i < selectedFloors.Count; i++)
         {
-            string path = selectedFloors.ElementAt(i);
+            string path = selectedFloors.Count > i ? selectedFloors.ElementAt(i) : "";
             if (File.Exists(path))
             {
                 List<float3> rawList = new List<float3>();
@@ -481,7 +513,6 @@ public class BlueprintTargetGenerator : MonoBehaviour
             for (float z = 0f; z <= h - size; z += size)
             {
                 float blackCount = 0f;
-                // --- 픽셀 반복문 복구 시작 ---
                 for (float i = 0f; i < size; i += 1f)
                 {
                     for (float j = 0f; j < size; j += 1f)
@@ -489,21 +520,17 @@ public class BlueprintTargetGenerator : MonoBehaviour
                         if (x + i < w && z + j < h)
                         {
                             Color32 p = pixels[(int)((z + j) * w + (x + i))];
-                            // 알파가 있고 검은색 계열이면 카운트
                             if (p.a > 128f && (p.r + p.g + p.b) / 3f < 128f) blackCount += 1f;
                         }
                     }
                 }
-                // --- 픽셀 반복문 복구 끝 ---
 
                 float area = size * size;
-                // 가공된 도면 최적화: 10% 이상이면 벽(Wall, 5층) 생성
                 if (blackCount / area >= 0.1f)
                 {
                     for (float y = 0f; y < 5f; y += 1f)
                         list.Add(new float3(((int)(x / size)) * 3f + 1.5f, y * 3f + 1.5f, ((int)(z / size)) * 3f + 1.5f));
                 }
-                // 아주 조금이라도 흔적이 있으면 바닥(Floor, 1층)
                 else if (blackCount > 0f)
                 {
                     list.Add(new float3(((int)(x / size)) * 3f + 1.5f, 1.5f, ((int)(z / size)) * 3f + 1.5f));

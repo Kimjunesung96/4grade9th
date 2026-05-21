@@ -36,7 +36,10 @@ public class SimulationDragController : MonoBehaviour
 
     void SyncWithDOTS()
     {
-        var em = World.DefaultGameObjectInjectionWorld.EntityManager;
+        // 🚀 [추가된 코드] DOTS 월드가 아직 안 만들어졌으면(Null) 동기화를 건너뜁니다!
+        if (Unity.Entities.World.DefaultGameObjectInjectionWorld == null) return;
+
+        var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
         var query = em.CreateEntityQuery(typeof(BuilderStateData));
         if (query.HasSingleton<BuilderStateData>())
         {
