@@ -65,7 +65,7 @@ public class BlueprintTargetGenerator : MonoBehaviour
 
         if (isWaitingForLimit) HandleNumericLimitInput();
 
-        if ((SpawnerSystem.isOMode || SpawnerSystem.isUMode) && currentScannedData.Count > 0f)
+        if ((SpawnerSystem.isOMode || SpawnerSystem.isUMode) && currentScannedData.Count > 0)
         {
             if (Input.GetKeyDown(KeyCode.Q)) RotateBlueprint(true);
             if (Input.GetKeyDown(KeyCode.E)) RotateBlueprint(false);
@@ -98,7 +98,7 @@ public class BlueprintTargetGenerator : MonoBehaviour
         {
             showBlueprintUI = false;
             OpenAndCacheImage();
-            GUIUtility.ExitGUI(); // 🚀 파일 탐색기 호출 전 GUI 렌더링 안전 종료
+            GUIUtility.ExitGUI();
         }
         GUI.color = Color.white;
         GUILayout.Space(10f);
@@ -107,10 +107,10 @@ public class BlueprintTargetGenerator : MonoBehaviour
         leftScrollPosition = GUILayout.BeginScrollView(leftScrollPosition, "box");
         for (int i = 0; i < availableCsvFiles.Count; i++)
         {
-            string fileName = Path.GetFileNameWithoutExtension(availableCsvFiles.ElementAt(i));
+            string fileName = Path.GetFileNameWithoutExtension(availableCsvFiles[i]);
             if (GUILayout.Button($"{i + 1}. {fileName}", GUILayout.Height(30f)))
             {
-                selectedFloors.Add(availableCsvFiles.ElementAt(i));
+                selectedFloors.Add(availableCsvFiles[i]);
             }
         }
         GUILayout.EndScrollView();
@@ -125,7 +125,7 @@ public class BlueprintTargetGenerator : MonoBehaviour
         for (int i = 0; i < selectedFloors.Count; i++)
         {
             GUILayout.BeginHorizontal();
-            GUILayout.Label($" [{i + 1}층] {Path.GetFileNameWithoutExtension(selectedFloors.ElementAt(i))}");
+            GUILayout.Label($" [{i + 1}층] {Path.GetFileNameWithoutExtension(selectedFloors[i])}");
             GUI.color = new Color(1f, 0.5f, 0.5f);
             if (GUILayout.Button("❌", GUILayout.Width(30f))) { selectedFloors.RemoveAt(i); }
             GUI.color = new Color(0.8f, 0.9f, 1f);
@@ -202,33 +202,15 @@ public class BlueprintTargetGenerator : MonoBehaviour
 
         for (int i = 0; i < pixels.Length; i++)
         {
-            // 옅은 색은 1차로 무시 (파이썬 이진화 수치 150 동일 적용)
             binary[i] = (pixels[i].r + pixels[i].g + pixels[i].b) / 3f < 150 && pixels[i].a > 128;
         }
 
-        // ==========================================
-        // 🚀 사용자님 파이썬 파이프라인 완벽 재현
-        // ==========================================
-
-        // [1단계] 비거 (Bigger) 1회차
-        // 파이썬 5x5 커널 -> C# 반경 2 (뼈대에 살을 찌워서 삭제 대비)
         bool[] process = Dilate(binary, w, h, 2);
-
-        // [2단계] 딜리터 (Deleter) 1회차
-        // 파이썬 15x15 커널 Opening(침식 후 팽창) -> C# 반경 7
         process = Erode(process, w, h, 7);
         process = Dilate(process, w, h, 7);
-
-        // [3단계] 비거 (Bigger) 2회차
-        // 다시 한 번 뼈대를 두껍게 팽창
         process = Dilate(process, w, h, 2);
-
-        // [4단계] 딜리터 (Deleter) 2회차
-        // 마지막으로 잔여 노이즈를 싹 깎아내고 깔끔한 벽체만 남김
         process = Erode(process, w, h, 7);
         process = Dilate(process, w, h, 7);
-
-        // ==========================================
 
         Texture2D result = new Texture2D(w, h);
         Color32[] outPixels = new Color32[pixels.Length];
@@ -274,12 +256,7 @@ public class BlueprintTargetGenerator : MonoBehaviour
         {
             for (int x = 0; x < w; x++)
             {
-                if (src[y * w + x])
-                {
-                    dst[y * w + x] = true;
-                    continue;
-                }
-
+                if (src[y * w + x]) { dst[y * w + x] = true; continue; }
                 bool anyTrue = false;
                 for (int ky = -radius; ky <= radius; ky++)
                 {
@@ -288,11 +265,7 @@ public class BlueprintTargetGenerator : MonoBehaviour
                         int ny = y + ky, nx = x + kx;
                         if (ny >= 0 && ny < h && nx >= 0 && nx < w)
                         {
-                            if (src[ny * w + nx]) 
-                            { 
-                                anyTrue = true; 
-                                break; 
-                            }
+                            if (src[ny * w + nx]) { anyTrue = true; break; }
                         }
                     }
                     if (anyTrue) break;
@@ -306,7 +279,6 @@ public class BlueprintTargetGenerator : MonoBehaviour
     private void HandleNumericLimitInput()
     {
         float targetLimit = -1f;
-
         if (Input.GetKeyDown(KeyCode.Alpha1)) targetLimit = 1000f;
         else if (Input.GetKeyDown(KeyCode.Alpha2)) targetLimit = 2000f;
         else if (Input.GetKeyDown(KeyCode.Alpha3)) targetLimit = 3000f;
@@ -321,25 +293,21 @@ public class BlueprintTargetGenerator : MonoBehaviour
         if (targetLimit > 0f)
         {
             isWaitingForLimit = false;
-            Debug.Log($"⚙️ 사이즈 [{targetLimit}개] 추출 및 저장 중...");
-
             var scanResult = SearchUnderLimit(currentPixels, texWidth, texHeight, targetLimit);
             float dupCount = 0f;
             List<float3> finalBlocks = RemoveDuplicates(scanResult, out dupCount);
-
             string newFileName = $"{pendingFileName}_사이즈{targetLimit}";
             string newCsvPath = Path.Combine(savedBlueprintsFolder, newFileName + ".csv");
-
             SaveListToCSV(finalBlocks, newCsvPath);
-
-            Debug.Log($"💾 [{newFileName}.csv] 저장 완료! 장바구니에 담깁니다.");
-
             selectedFloors.Add(newCsvPath);
             RefreshCsvList();
             showBlueprintUI = true;
         }
     }
 
+    /**
+     * 🏗️ [핵심] 복층 설계 시 CurrentStress.csv 마스터 장부 동기화
+     */
     private void LoadStackedFloors()
     {
         SpawnerSystem.isOMode = true;
@@ -347,58 +315,77 @@ public class BlueprintTargetGenerator : MonoBehaviour
         SpawnerSystem.isUMode = false;
 
         List<float3> finalStackedData = new List<float3>();
+        List<string> allLinesForMaster = new List<string>();
+        
+        // 1. 헤더 추가
+        allLinesForMaster.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
+
         for (int i = 0; i < selectedFloors.Count; i++)
         {
-            string path = selectedFloors.Count > i ? selectedFloors.ElementAt(i) : "";
+            string path = selectedFloors[i];
             if (File.Exists(path))
             {
-                List<float3> rawList = new List<float3>();
                 var lines = File.ReadAllLines(path).ToList();
-
-                for (int j = 1; j < lines.Count; j++)
+                for (int j = 1; j < lines.Count; j++) 
                 {
-                    var cols = lines.ElementAt(j).Split(',').ToList();
-                    if (cols.Count >= 4 && !cols.ElementAt(0).Contains("ID"))
-                    {
-                        float x = math.round((float.Parse(cols.ElementAt(1)) - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                        float y = math.round((float.Parse(cols.ElementAt(2)) - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                        float z = math.round((float.Parse(cols.ElementAt(3)) - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                        rawList.Add(new float3(x, y, z));
-                    }
-                }
+                    string[] cols = lines[j].Split(',');
+                    if (cols.Length < 4) continue;
 
-                List<float3> centeredList = CenterDataToOffset(rawList);
-                float floorYOffset = i * 15.0f;
-                foreach (var p in centeredList)
-                {
-                    finalStackedData.Add(new float3(p.x, p.y + floorYOffset, p.z));
+                    // 🎯 [정밀 파싱] 인덱스: 1=X, 2=Y, 3=Z
+                    float x = float.Parse(cols[1]);
+                    float yOffset = i * 15.0f; // 층당 15m 오프셋
+                    float y = float.Parse(cols[2]) + yOffset; 
+                    float z = float.Parse(cols[3]);
+
+                    // 2. Spawner 시스템 전송용 리스트에 저장
+                    finalStackedData.Add(new float3(x, y, z));
+
+                    // 3. [ID 및 Y값 동기화]
+                    string newId = GetBlockID(new float3(x, y, z)); 
+                    cols[0] = newId;            // ID 갱신
+                    cols[2] = y.ToString("F2"); // Y좌표 업데이트
+                    
+                    allLinesForMaster.Add(string.Join(",", cols));
                 }
             }
         }
 
+        // 🎯 [장부 복제] CurrentStress.csv에 덮어쓰기
+        string masterPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
+        File.WriteAllLines(masterPath, allLinesForMaster);
+        
+        Debug.Log($"📋 [장부 업데이트 완료] {selectedFloors.Count}층 도면이 CurrentStress.csv에 복사되었습니다.");
+
         currentScannedData = finalStackedData;
-        currentFloorCount = 1f;
         SpawnerSystem.ExternalBlueprintData = finalStackedData;
         selectedFloors.Clear();
+    }
+
+    /**
+     * 🆔 십장님 규격 ID 생성기 (10배수 정수 포맷)
+     */
+    private string GetBlockID(float3 pos)
+    {
+        float ix = math.round(pos.x * 10f);
+        float iy = math.round(pos.y * 10f);
+        float iz = math.round(pos.z * 10f);
+
+        string strX = (ix < 0 ? "-" : "0") + math.abs(ix).ToString("000");
+        string strZ = (iz < 0 ? "-" : "0") + math.abs(iz).ToString("000");
+        string strY = (iy < 0 ? "-" : "0") + math.abs(iy).ToString("000");
+
+        return $"{strX}_{strZ}_{strY}";
     }
 
     private void SaveListToCSV(List<float3> blocks, string path)
     {
         StringBuilder sb = new StringBuilder();
-        sb.AppendLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Dummy,Type");
-
+        sb.AppendLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
         foreach (var p in blocks)
         {
             string typeStr = p.y > 1.5f ? "Wall" : "Floor";
-            string id = $"{(int)math.round(p.x * 10f)}_{(int)math.round(p.z * 10f)}_{(int)math.round(p.y * 10f)}";
-
-            string lineData = id + "," +
-                              p.x.ToString("F2") + "," +
-                              p.y.ToString("F2") + "," +
-                              p.z.ToString("F2") + "," +
-                              "0.00,Safe,N,Concrete,0.0,0.0,0," + typeStr;
-
-            sb.AppendLine(lineData);
+            string id = GetBlockID(p);
+            sb.AppendLine($"{id},{p.x:F2},{p.y:F2},{p.z:F2},0.00,Safe,N,Concrete,0.0,0.0,0,{typeStr}");
         }
         File.WriteAllText(path, sb.ToString());
     }
@@ -410,15 +397,14 @@ public class BlueprintTargetGenerator : MonoBehaviour
         {
             List<float3> rawList = new List<float3>();
             var lines = File.ReadAllLines(path).ToList();
-
             for (int i = 1; i < lines.Count; i++)
             {
-                var cols = lines.ElementAt(i).Split(',').ToList();
-                if (cols.Count >= 4 && !cols.ElementAt(0).Contains("ID"))
+                var cols = lines[i].Split(',').ToList();
+                if (cols.Count >= 4 && !cols[0].Contains("ID"))
                 {
-                    float x = math.round((float.Parse(cols.ElementAt(1)) - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                    float y = math.round((float.Parse(cols.ElementAt(2)) - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                    float z = math.round((float.Parse(cols.ElementAt(3)) - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                    float x = math.round((float.Parse(cols[1]) - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                    float y = math.round((float.Parse(cols[2]) - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                    float z = math.round((float.Parse(cols[3]) - 1.5f) / 3.0f) * 3.0f + 1.5f;
                     rawList.Add(new float3(x, y, z));
                 }
             }
@@ -439,10 +425,8 @@ public class BlueprintTargetGenerator : MonoBehaviour
             if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
             if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
         }
-
         float centerX = math.round(((minX + maxX) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
         float centerZ = math.round(((minZ + maxZ) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
-
         List<float3> centeredData = new List<float3>();
         foreach (var p in rawData) centeredData.Add(new float3(p.x - centerX, p.y, p.z - centerZ));
         return centeredData;
@@ -468,8 +452,7 @@ public class BlueprintTargetGenerator : MonoBehaviour
         foreach (var p in centeredRawData) { if (p.y > maxY) maxY = p.y; }
         float heightStep = math.floor(maxY / 15.0f) * 15.0f + 15.0f;
         if (heightStep < 15.0f) heightStep = 15.0f;
-
-        for (float floor = 0f; floor < currentFloorCount; floor += 1f)
+        for (float floor = 0; floor < currentFloorCount; floor += 1f)
         {
             float floorYOffset = floor * heightStep;
             foreach (var pos in centeredRawData) stackedData.Add(new float3(pos.x, pos.y + floorYOffset, pos.z));
@@ -477,7 +460,7 @@ public class BlueprintTargetGenerator : MonoBehaviour
         SpawnerSystem.ExternalBlueprintData = stackedData;
     }
 
-    List<float3> RemoveDuplicates(List<float3> rawData, out float duplicateCount)
+    private List<float3> RemoveDuplicates(List<float3> rawData, out float duplicateCount)
     {
         HashSet<string> uniqueCheck = new HashSet<string>();
         List<float3> cleanList = new List<float3>();
@@ -485,17 +468,13 @@ public class BlueprintTargetGenerator : MonoBehaviour
         foreach (var pos in rawData)
         {
             string id = $"{pos.x}_{pos.y}_{pos.z}";
-            if (!uniqueCheck.Contains(id))
-            {
-                uniqueCheck.Add(id);
-                cleanList.Add(pos);
-            }
+            if (!uniqueCheck.Contains(id)) { uniqueCheck.Add(id); cleanList.Add(pos); }
             else duplicateCount += 1f;
         }
         return cleanList;
     }
 
-    List<float3> SearchUnderLimit(Color32[] pixels, float w, float h, float limit)
+    private List<float3> SearchUnderLimit(Color32[] pixels, float w, float h, float limit)
     {
         for (float size = 2f; size < 500f; size += 1f)
         {
@@ -505,7 +484,7 @@ public class BlueprintTargetGenerator : MonoBehaviour
         return new List<float3>();
     }
 
-    List<float3> Scan(Color32[] pixels, float w, float h, float size)
+    private List<float3> Scan(Color32[] pixels, float w, float h, float size)
     {
         List<float3> list = new List<float3>();
         for (float x = 0f; x <= w - size; x += size)
@@ -524,7 +503,6 @@ public class BlueprintTargetGenerator : MonoBehaviour
                         }
                     }
                 }
-
                 float area = size * size;
                 if (blackCount / area >= 0.1f)
                 {
