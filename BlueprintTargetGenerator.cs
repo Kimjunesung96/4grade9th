@@ -306,7 +306,7 @@ public class BlueprintTargetGenerator : MonoBehaviour
     }
 
     /**
-     * 🏗️ [핵심] 복층 설계 시 CurrentStress.csv 마스터 장부 동기화
+     * 🏗️ [핵심 수정] 복층 설계 시 CurrentStress.csv 마스터 장부 동기화
      */
     private void LoadStackedFloors()
     {
@@ -317,7 +317,6 @@ public class BlueprintTargetGenerator : MonoBehaviour
         List<float3> finalStackedData = new List<float3>();
         List<string> allLinesForMaster = new List<string>();
         
-        // 1. 헤더 추가
         allLinesForMaster.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
 
         for (int i = 0; i < selectedFloors.Count; i++)
@@ -331,30 +330,40 @@ public class BlueprintTargetGenerator : MonoBehaviour
                     string[] cols = lines[j].Split(',');
                     if (cols.Length < 4) continue;
 
-                    // 🎯 [정밀 파싱] 인덱스: 1=X, 2=Y, 3=Z
-                    float x = float.Parse(cols[1]);
-                    float yOffset = i * 15.0f; // 층당 15m 오프셋
-                    float y = float.Parse(cols[2]) + yOffset; 
-                    float z = float.Parse(cols[3]);
+                    // 🎯 [재질 방어 로직] 12칸 표준 규격을 강제로 맞추고 널값 체크
+                    string[] fixedCols = new string[12];
+                    for (int k = 0; k < 12; k++)
+                    {
+                        fixedCols[k] = (k < cols.Length) ? cols[k].Trim() : "";
+                    }
 
-                    // 2. Spawner 시스템 전송용 리스트에 저장
+                    // 7번 칸(Material)이 비어있거나 널이면 "Default"로 고정 (십장님 요청)
+                    if (string.IsNullOrEmpty(fixedCols[7]))
+                    {
+                        fixedCols[7] = "Default";
+                    }
+
+                    // 🎯 [좌표 계산] 1=X, 2=Y, 3=Z
+                    float x = float.Parse(fixedCols[1]);
+                    float yOffset = i * 15.0f; // 층당 오프셋
+                    float y = float.Parse(fixedCols[2]) + yOffset; 
+                    float z = float.Parse(fixedCols[3]);
+
                     finalStackedData.Add(new float3(x, y, z));
 
-                    // 3. [ID 및 Y값 동기화]
-                    string newId = GetBlockID(new float3(x, y, z)); 
-                    cols[0] = newId;            // ID 갱신
-                    cols[2] = y.ToString("F2"); // Y좌표 업데이트
+                    // 🎯 [장부 동기화] 0=ID, 2=PosY 업데이트 (인덱스 버그 수정 완료!)
+                    fixedCols[0] = GetBlockID(new float3(x, y, z)); 
+                    fixedCols[2] = y.ToString("F2");
                     
-                    allLinesForMaster.Add(string.Join(",", cols));
+                    allLinesForMaster.Add(string.Join(",", fixedCols));
                 }
             }
         }
 
-        // 🎯 [장부 복제] CurrentStress.csv에 덮어쓰기
         string masterPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
         File.WriteAllLines(masterPath, allLinesForMaster);
         
-        Debug.Log($"📋 [장부 업데이트 완료] {selectedFloors.Count}층 도면이 CurrentStress.csv에 복사되었습니다.");
+        Debug.Log($"📋 [장부 동기화 완료] 재질 미지정 항목은 'Default' 규격으로 자동 장전되었습니다.");
 
         currentScannedData = finalStackedData;
         SpawnerSystem.ExternalBlueprintData = finalStackedData;
@@ -399,8 +408,8 @@ public class BlueprintTargetGenerator : MonoBehaviour
             var lines = File.ReadAllLines(path).ToList();
             for (int i = 1; i < lines.Count; i++)
             {
-                var cols = lines[i].Split(',').ToList();
-                if (cols.Count >= 4 && !cols[0].Contains("ID"))
+                string[] cols = lines[i].Split(',').ToArray();
+                if (cols.Length >= 4 && !cols[0].Contains("ID"))
                 {
                     float x = math.round((float.Parse(cols[1]) - 1.5f) / 3.0f) * 3.0f + 1.5f;
                     float y = math.round((float.Parse(cols[2]) - 1.5f) / 3.0f) * 3.0f + 1.5f;
