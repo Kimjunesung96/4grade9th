@@ -82,8 +82,11 @@ public class BlueprintTargetGenerator : MonoBehaviour
                 ApplyOffsetAndLoad(currentScannedData);
             }
         }
+if (Input.GetKeyDown(KeyCode.P))
+    {
+        SaveProjectSnapshot();
     }
-
+}
     void OnGUI()
     {
         if (!showBlueprintUI) return;
@@ -194,35 +197,40 @@ public class BlueprintTargetGenerator : MonoBehaviour
     }
 
     private Texture2D ProcessImageInsideUnity(Texture2D src)
+{
+    int w = src.width; int h = src.height;
+    Color32[] pixels = src.GetPixels32();
+    bool[] binary = new bool[pixels.Length];
+
+    for (int i = 0; i < pixels.Length; i++)
     {
-        int w = src.width;
-        int h = src.height;
-        Color32[] pixels = src.GetPixels32();
-        bool[] binary = new bool[pixels.Length];
-
-        for (int i = 0; i < pixels.Length; i++)
-        {
-            binary[i] = (pixels[i].r + pixels[i].g + pixels[i].b) / 3f < 150 && pixels[i].a > 128;
-        }
-
-        bool[] process = Dilate(binary, w, h, 2);
-        process = Erode(process, w, h, 7);
-        process = Dilate(process, w, h, 7);
-        process = Dilate(process, w, h, 2);
-        process = Erode(process, w, h, 7);
-        process = Dilate(process, w, h, 7);
-
-        Texture2D result = new Texture2D(w, h);
-        Color32[] outPixels = new Color32[pixels.Length];
-        for (int i = 0; i < outPixels.Length; i++)
-        {
-            outPixels[i] = process[i] ? new Color32(0, 0, 0, 255) : new Color32(255, 255, 255, 255);
-        }
-        result.SetPixels32(outPixels);
-        result.Apply();
-        return result;
+        float avg = (pixels[i].r + pixels[i].g + pixels[i].b) / 3f;
+        // 🎯 [수정 1] 임계값 상향 (150 -> 240)
+        binary[i] = avg < 240f && pixels[i].a > 128;
     }
 
+    // 필터 공정 (Dilate/Erode)
+    bool[] process = Dilate(binary, w, h, 2);
+    process = Erode(process, w, h, 2); 
+    process = Dilate(process, w, h, 2);
+
+    Texture2D result = new Texture2D(w, h);
+    Color32[] outPixels = new Color32[pixels.Length];
+    for (int i = 0; i < outPixels.Length; i++)
+    {
+        if (process[i])
+        {
+            // 🎯 [수정 2] 원본 색상(회색/검정) 그대로 유지
+            outPixels[i] = pixels[i]; 
+        }
+        else 
+        {
+            outPixels[i] = new Color32(255, 255, 255, 255); // 배경은 흰색
+        }
+    }
+    result.SetPixels32(outPixels); result.Apply();
+    return result;
+}
     private bool[] Erode(bool[] src, int w, int h, int radius)
     {
         bool[] dst = new bool[src.Length];
@@ -493,37 +501,78 @@ public class BlueprintTargetGenerator : MonoBehaviour
         return new List<float3>();
     }
 
-    private List<float3> Scan(Color32[] pixels, float w, float h, float size)
+    // 🎯 십장님 요청: 검은색 5개, 회색 1개, 하얀색 없음 로직 반영
+private List<float3> Scan(Color32[] pixels, float w, float h, float size)
+{
+    List<float3> list = new List<float3>();
+    // size는 이제 10으로 들어와야 1:1 매칭이 됩니다.
+    for (float x = 0f; x <= w - size; x += size)
     {
-        List<float3> list = new List<float3>();
-        for (float x = 0f; x <= w - size; x += size)
+        for (float z = 0f; z <= h - size; z += size)
         {
-            for (float z = 0f; z <= h - size; z += size)
+            // 🎯 10x10 박스의 중앙 지점 픽셀 확인
+            int px = (int)(x + size / 2f);
+            int pz = (int)(z + size / 2f);
+            Color32 p = pixels[pz * (int)w + px];
+            float avg = (p.r + p.g + p.b) / 3f;
+
+            if (p.a > 128) // 투명하지 않은 데이터가 있다면
             {
-                float blackCount = 0f;
-                for (float i = 0f; i < size; i += 1f)
-                {
-                    for (float j = 0f; j < size; j += 1f)
-                    {
-                        if (x + i < w && z + j < h)
-                        {
-                            Color32 p = pixels[(int)((z + j) * w + (x + i))];
-                            if (p.a > 128f && (p.r + p.g + p.b) / 3f < 128f) blackCount += 1f;
-                        }
-                    }
-                }
-                float area = size * size;
-                if (blackCount / area >= 0.1f)
+                // 1️⃣ [벽] 제일 진한 거 (검정, avg < 100) -> 블록 5개 쌓기
+                if (avg < 100f) 
                 {
                     for (float y = 0f; y < 5f; y += 1f)
+                    {
                         list.Add(new float3(((int)(x / size)) * 3f + 1.5f, y * 3f + 1.5f, ((int)(z / size)) * 3f + 1.5f));
+                    }
                 }
-                else if (blackCount > 0f)
+                // 2️⃣ [바닥] 나머지 회색 (100 <= avg < 240) -> 블록 1개만 깔기
+                else if (avg < 240f)
                 {
                     list.Add(new float3(((int)(x / size)) * 3f + 1.5f, 1.5f, ((int)(z / size)) * 3f + 1.5f));
                 }
+                // 3️⃣ [빈 공간] 하얀색 (avg >= 240) -> 없음 (리스트에 추가 안 함)
             }
         }
-        return list;
     }
+    return list;
+}
+/**
+ * 💾 현재까지의 공정을 별도 파일로 복제하여 저장 (P 키 전용)
+ */
+/**
+ * 💾 현재까지의 공정을 별도 파일로 복제하여 저장 (P 키 전용)
+ */
+private void SaveProjectSnapshot() // 🎯 []를 ()로 수정
+{
+    string timestamp = System.DateTime.Now.ToString("yyyyMMdd_HHmmss");
+    string newFileName = "Blueprint_" + timestamp;
+
+    // 🎯 []를 (...)로 수정
+    string sourceCsv = Path.Combine(stressBlockFolder, "CurrentStress.csv");
+    string destCsv = Path.Combine(savedBlueprintsFolder, newFileName + ".csv");
+
+    if (File.Exists(sourceCsv))
+    {
+        File.Copy(sourceCsv, destCsv, true);
+        Debug.Log("📋 장부 복제 완료: " + destCsv);
+    }
+    else
+    {
+        Debug.LogWarning("⚠️ 복제할 CurrentStress.csv가 없습니다. 먼저 스캔을 진행해주세요!");
+        return;
+    }
+
+    // 🎯 함수 호출도 ()로 수정
+    CaptureSceneToFolder(newFileName, savedBlueprintsFolder);
+}
+
+/**
+ * 📸 저장용 전용 스크린샷 함수
+ */
+private void CaptureSceneToFolder(string fileName, string folderPath) // 🎯 ()로 수정
+{
+    string fullPath = Path.Combine(folderPath, fileName + "_Thumbnail.png");
+    ScreenCapture.CaptureScreenshot(fullPath);
+    Debug.Log("📸 현장 사진 저장 완료: " + fullPath);
 }
