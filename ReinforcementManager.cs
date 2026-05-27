@@ -79,8 +79,8 @@ public class ReinforcementManager : MonoBehaviour
             while (currentY >= 45f)
             {
                 currentY -= 30f;
-                float ix = Mathf.Round(cleanX * 10f);
-                float iz = Mathf.Round(cleanZ * 10f);
+                float ix = Mathf.Round((cleanX + 0.001f) * 10f);
+                float iz = Mathf.Round((cleanZ + 0.001f) * 10f);
                 float iy = currentY;
 
                 string strX = (ix < 0f ? "-" : "0") + Mathf.Abs(ix).ToString("000");
