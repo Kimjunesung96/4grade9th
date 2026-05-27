@@ -142,24 +142,26 @@ public partial struct StressVisualizationSystem : ISystem
     {
         scanTimer = 5.0f; isScanning = true; needsColorUpdate = false;
         var ecb = new EntityCommandBuffer(Allocator.Temp);
-        foreach (var (color, gravity, velocity, stress, transform, entity) in SystemAPI.Query<RefRW<URPMaterialPropertyBaseColor>, RefRW<PhysicsGravityFactor>, RefRW<PhysicsVelocity>, RefRW<BlockStress>, RefRO<LocalTransform>>().WithEntityAccess())
+
+        // ① 모든 블록에 OriginalPosition 등록 + 색상/스트레스 초기화
+        foreach (var (color, stress, transform, entity) in SystemAPI.Query<RefRW<URPMaterialPropertyBaseColor>, RefRW<BlockStress>, RefRO<LocalTransform>>().WithAll<BlockTag>().WithEntityAccess())
         {
             color.ValueRW.Value = new float4(1.0f, 1.0f, 1.0f, 1.0f);
             stress.ValueRW.SmoothedStress = 0.0f; stress.ValueRW.TargetStress = 0.0f;
             float3 p = transform.ValueRO.Position;
-            float3 perfectPos = new float3(math.round((p.x - 1.5f) / 3.0f) * 3.0f + 1.5f, math.round((p.y - 1.5f) / 3.0f) * 3.0f + 1.5f, math.round((p.z - 1.5f) / 3.0f) * 3.0f + 1.5f);
             if (!SystemAPI.HasComponent<OriginalPosition>(entity))
             {
-                // 새로 지은 블록: OriginalPosition만 등록, 중력/속도 건드리지 않음
-                ecb.AddComponent(entity, new OriginalPosition { Value = perfectPos });
-            }
-            else
-            {
-                // 기존 블록만 중력 ON + 살짝 아래로 밀어서 스트레스 측정
-                gravity.ValueRW.Value = 1.0f;
-                velocity.ValueRW.Linear.y -= 0.01f;
+                ecb.AddComponent(entity, new OriginalPosition { Value = p }); // 스냅 없이 현재 위치 그대로!
             }
         }
+
+        // ② PhysicsGravityFactor 있는 블록만 중력 ON
+        foreach (var (gravity, velocity) in SystemAPI.Query<RefRW<PhysicsGravityFactor>, RefRW<PhysicsVelocity>>().WithAll<BlockTag>())
+        {
+            gravity.ValueRW.Value = 1.0f;
+            velocity.ValueRW.Linear.y -= 0.01f;
+        }
+
         ecb.Playback(state.EntityManager); ecb.Dispose();
     }
 
@@ -168,9 +170,7 @@ public partial struct StressVisualizationSystem : ISystem
         foreach (var (transform, velocity, gravity, originalPos) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<PhysicsVelocity>, RefRW<PhysicsGravityFactor>, RefRO<OriginalPosition>>())
         {
             gravity.ValueRW.Value = 0.0f; velocity.ValueRW.Linear = float3.zero; velocity.ValueRW.Angular = float3.zero;
-            float3 safePos = originalPos.ValueRO.Value;
-            safePos.y = math.max(1.5f, safePos.y); // 절대 Y=1.5 아래로 안 내려감
-            transform.ValueRW.Position = safePos;
+            transform.ValueRW.Position = originalPos.ValueRO.Value;
             transform.ValueRW.Rotation = quaternion.identity;
         }
     }
@@ -253,7 +253,6 @@ public partial struct StressVisualizationSystem : ISystem
               RefRO<OriginalPosition>>())
             {
                 float3 p = pos.ValueRO.Value;
-                p.y = math.max(1.5f, p.y); // 땅 밑으로 꺼진 블록 보정
                 float ix = math.round(p.x * 10f); float iy = math.round(p.y * 10f); float iz = math.round(p.z * 10f);
 
                 string strX = (ix < 0f ? "-" : "0") + math.abs(ix).ToString("000");
