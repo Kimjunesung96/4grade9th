@@ -355,9 +355,9 @@ public partial struct SpawnerSystem : ISystem
                                 float px = float.Parse(idParts.ElementAt(0)) / 10f;
                                 float pz = float.Parse(idParts.ElementAt(1)) / 10f;
                                 float py = float.Parse(idParts.ElementAt(2)) / 10f;
-                                float x = math.round((px - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                                float z = math.round((pz - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                                float y = math.round((py - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                                float x = math.floor((px - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+                                float z = math.floor((pz - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+                                float y = math.floor((py - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
 
                                 string uniqueKey = x.ToString() + "_" + y.ToString() + "_" + z.ToString();
                                 if (loadedIDs.Contains(uniqueKey)) continue;
