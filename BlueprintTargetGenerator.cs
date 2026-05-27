@@ -82,11 +82,11 @@ public class BlueprintTargetGenerator : MonoBehaviour
                 ApplyOffsetAndLoad(currentScannedData);
             }
         }
-if (Input.GetKeyDown(KeyCode.P))
-    {
-        SaveProjectSnapshot();
+        if (Input.GetKeyDown(KeyCode.P))
+        {
+            SaveProjectSnapshot();
+        }
     }
-}
     void OnGUI()
     {
         if (!showBlueprintUI) return;
@@ -197,40 +197,40 @@ if (Input.GetKeyDown(KeyCode.P))
     }
 
     private Texture2D ProcessImageInsideUnity(Texture2D src)
-{
-    int w = src.width; int h = src.height;
-    Color32[] pixels = src.GetPixels32();
-    bool[] binary = new bool[pixels.Length];
-
-    for (int i = 0; i < pixels.Length; i++)
     {
-        float avg = (pixels[i].r + pixels[i].g + pixels[i].b) / 3f;
-        // 🎯 [수정 1] 임계값 상향 (150 -> 240)
-        binary[i] = avg < 240f && pixels[i].a > 128;
-    }
+        int w = src.width; int h = src.height;
+        Color32[] pixels = src.GetPixels32();
+        bool[] binary = new bool[pixels.Length];
 
-    // 필터 공정 (Dilate/Erode)
-    bool[] process = Dilate(binary, w, h, 2);
-    process = Erode(process, w, h, 2); 
-    process = Dilate(process, w, h, 2);
+        for (int i = 0; i < pixels.Length; i++)
+        {
+            float avg = (pixels[i].r + pixels[i].g + pixels[i].b) / 3f;
+            // 🎯 [수정 1] 임계값 상향 (150 -> 240)
+            binary[i] = avg < 240f && pixels[i].a > 128;
+        }
 
-    Texture2D result = new Texture2D(w, h);
-    Color32[] outPixels = new Color32[pixels.Length];
-    for (int i = 0; i < outPixels.Length; i++)
-    {
-        if (process[i])
+        // 필터 공정 (Dilate/Erode)
+        bool[] process = Dilate(binary, w, h, 2);
+        process = Erode(process, w, h, 2);
+        process = Dilate(process, w, h, 2);
+
+        Texture2D result = new Texture2D(w, h);
+        Color32[] outPixels = new Color32[pixels.Length];
+        for (int i = 0; i < outPixels.Length; i++)
         {
-            // 🎯 [수정 2] 원본 색상(회색/검정) 그대로 유지
-            outPixels[i] = pixels[i]; 
+            if (process[i])
+            {
+                // 🎯 [수정 2] 원본 색상(회색/검정) 그대로 유지
+                outPixels[i] = pixels[i];
+            }
+            else
+            {
+                outPixels[i] = new Color32(255, 255, 255, 255); // 배경은 흰색
+            }
         }
-        else 
-        {
-            outPixels[i] = new Color32(255, 255, 255, 255); // 배경은 흰색
-        }
+        result.SetPixels32(outPixels); result.Apply();
+        return result;
     }
-    result.SetPixels32(outPixels); result.Apply();
-    return result;
-}
     private bool[] Erode(bool[] src, int w, int h, int radius)
     {
         bool[] dst = new bool[src.Length];
@@ -286,25 +286,20 @@ if (Input.GetKeyDown(KeyCode.P))
 
     private void HandleNumericLimitInput()
     {
-        float targetLimit = -1f;
-        if (Input.GetKeyDown(KeyCode.Alpha1)) targetLimit = 1000f;
-        else if (Input.GetKeyDown(KeyCode.Alpha2)) targetLimit = 2000f;
-        else if (Input.GetKeyDown(KeyCode.Alpha3)) targetLimit = 3000f;
-        else if (Input.GetKeyDown(KeyCode.Alpha4)) targetLimit = 4000f;
-        else if (Input.GetKeyDown(KeyCode.Alpha5)) targetLimit = 5000f;
-        else if (Input.GetKeyDown(KeyCode.Alpha6)) targetLimit = 6000f;
-        else if (Input.GetKeyDown(KeyCode.Alpha7)) targetLimit = 7000f;
-        else if (Input.GetKeyDown(KeyCode.Alpha8)) targetLimit = 8000f;
-        else if (Input.GetKeyDown(KeyCode.Alpha9)) targetLimit = 9000f;
-        else if (Input.GetKeyDown(KeyCode.Alpha0)) targetLimit = 10000f;
+        float targetSize = -1f;
+        if (Input.GetKeyDown(KeyCode.Alpha1)) targetSize = 50f; // 10x10
+        if (Input.GetKeyDown(KeyCode.Alpha2)) targetSize = 25f; // 20x20
+        if (Input.GetKeyDown(KeyCode.Alpha3)) targetSize = 17f; // 30x30
+        if (Input.GetKeyDown(KeyCode.Alpha4)) targetSize = 13f; // 40x40
+        if (Input.GetKeyDown(KeyCode.Alpha5)) targetSize = 10f; // 50x50 원본
 
-        if (targetLimit > 0f)
+        if (targetSize > 0f)
         {
             isWaitingForLimit = false;
-            var scanResult = SearchUnderLimit(currentPixels, texWidth, texHeight, targetLimit);
+            var scanResult = Scan(currentPixels, texWidth, texHeight, targetSize);
             float dupCount = 0f;
             List<float3> finalBlocks = RemoveDuplicates(scanResult, out dupCount);
-            string newFileName = $"{pendingFileName}_사이즈{targetLimit}";
+            string newFileName = $"{pendingFileName}_{(int)(500f / targetSize)}x{(int)(500f / targetSize)}";
             string newCsvPath = Path.Combine(savedBlueprintsFolder, newFileName + ".csv");
             SaveListToCSV(finalBlocks, newCsvPath);
             selectedFloors.Add(newCsvPath);
@@ -324,7 +319,7 @@ if (Input.GetKeyDown(KeyCode.P))
 
         List<float3> finalStackedData = new List<float3>();
         List<string> allLinesForMaster = new List<string>();
-        
+
         allLinesForMaster.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
 
         for (int i = 0; i < selectedFloors.Count; i++)
@@ -333,7 +328,7 @@ if (Input.GetKeyDown(KeyCode.P))
             if (File.Exists(path))
             {
                 var lines = File.ReadAllLines(path).ToList();
-                for (int j = 1; j < lines.Count; j++) 
+                for (int j = 1; j < lines.Count; j++)
                 {
                     string[] cols = lines[j].Split(',');
                     if (cols.Length < 4) continue;
@@ -354,15 +349,15 @@ if (Input.GetKeyDown(KeyCode.P))
                     // 🎯 [좌표 계산] 1=X, 2=Y, 3=Z
                     float x = float.Parse(fixedCols[1]);
                     float yOffset = i * 15.0f; // 층당 오프셋
-                    float y = float.Parse(fixedCols[2]) + yOffset; 
+                    float y = float.Parse(fixedCols[2]) + yOffset;
                     float z = float.Parse(fixedCols[3]);
 
                     finalStackedData.Add(new float3(x, y, z));
 
                     // 🎯 [장부 동기화] 0=ID, 2=PosY 업데이트 (인덱스 버그 수정 완료!)
-                    fixedCols[0] = GetBlockID(new float3(x, y, z)); 
+                    fixedCols[0] = GetBlockID(new float3(x, y, z));
                     fixedCols[2] = y.ToString("F2");
-                    
+
                     allLinesForMaster.Add(string.Join(",", fixedCols));
                 }
             }
@@ -370,7 +365,7 @@ if (Input.GetKeyDown(KeyCode.P))
 
         string masterPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
         File.WriteAllLines(masterPath, allLinesForMaster);
-        
+
         Debug.Log($"📋 [장부 동기화 완료] 재질 미지정 항목은 'Default' 규격으로 자동 장전되었습니다.");
 
         currentScannedData = finalStackedData;
@@ -502,77 +497,78 @@ if (Input.GetKeyDown(KeyCode.P))
     }
 
     // 🎯 십장님 요청: 검은색 5개, 회색 1개, 하얀색 없음 로직 반영
-private List<float3> Scan(Color32[] pixels, float w, float h, float size)
-{
-    List<float3> list = new List<float3>();
-    // size는 이제 10으로 들어와야 1:1 매칭이 됩니다.
-    for (float x = 0f; x <= w - size; x += size)
+    private List<float3> Scan(Color32[] pixels, float w, float h, float size)
     {
-        for (float z = 0f; z <= h - size; z += size)
+        List<float3> list = new List<float3>();
+        // size는 이제 10으로 들어와야 1:1 매칭이 됩니다.
+        for (float x = 0f; x <= w - size; x += size)
         {
-            // 🎯 10x10 박스의 중앙 지점 픽셀 확인
-            int px = (int)(x + size / 2f);
-            int pz = (int)(z + size / 2f);
-            Color32 p = pixels[pz * (int)w + px];
-            float avg = (p.r + p.g + p.b) / 3f;
-
-            if (p.a > 128) // 투명하지 않은 데이터가 있다면
+            for (float z = 0f; z <= h - size; z += size)
             {
-                // 1️⃣ [벽] 제일 진한 거 (검정, avg < 100) -> 블록 5개 쌓기
-                if (avg < 100f) 
+                // 🎯 10x10 박스의 중앙 지점 픽셀 확인
+                int px = (int)(x + size / 2f);
+                int pz = (int)(z + size / 2f);
+                Color32 p = pixels[pz * (int)w + px];
+                float avg = (p.r + p.g + p.b) / 3f;
+
+                if (p.a > 128) // 투명하지 않은 데이터가 있다면
                 {
-                    for (float y = 0f; y < 5f; y += 1f)
+                    // 1️⃣ [벽] 제일 진한 거 (검정, avg < 100) -> 블록 5개 쌓기
+                    if (avg < 100f)
                     {
-                        list.Add(new float3(((int)(x / size)) * 3f + 1.5f, y * 3f + 1.5f, ((int)(z / size)) * 3f + 1.5f));
+                        for (float y = 0f; y < 5f; y += 1f)
+                        {
+                            list.Add(new float3(((int)(x / size)) * 3f + 1.5f, y * 3f + 1.5f, ((int)(z / size)) * 3f + 1.5f));
+                        }
                     }
+                    // 2️⃣ [바닥] 나머지 회색 (100 <= avg < 240) -> 블록 1개만 깔기
+                    else if (avg < 240f)
+                    {
+                        list.Add(new float3(((int)(x / size)) * 3f + 1.5f, 1.5f, ((int)(z / size)) * 3f + 1.5f));
+                    }
+                    // 3️⃣ [빈 공간] 하얀색 (avg >= 240) -> 없음 (리스트에 추가 안 함)
                 }
-                // 2️⃣ [바닥] 나머지 회색 (100 <= avg < 240) -> 블록 1개만 깔기
-                else if (avg < 240f)
-                {
-                    list.Add(new float3(((int)(x / size)) * 3f + 1.5f, 1.5f, ((int)(z / size)) * 3f + 1.5f));
-                }
-                // 3️⃣ [빈 공간] 하얀색 (avg >= 240) -> 없음 (리스트에 추가 안 함)
             }
         }
+        return list;
     }
-    return list;
-}
-/**
- * 💾 현재까지의 공정을 별도 파일로 복제하여 저장 (P 키 전용)
- */
-/**
- * 💾 현재까지의 공정을 별도 파일로 복제하여 저장 (P 키 전용)
- */
-private void SaveProjectSnapshot() // 🎯 []를 ()로 수정
-{
-    string timestamp = System.DateTime.Now.ToString("yyyyMMdd_HHmmss");
-    string newFileName = "Blueprint_" + timestamp;
-
-    // 🎯 []를 (...)로 수정
-    string sourceCsv = Path.Combine(stressBlockFolder, "CurrentStress.csv");
-    string destCsv = Path.Combine(savedBlueprintsFolder, newFileName + ".csv");
-
-    if (File.Exists(sourceCsv))
+    /**
+     * 💾 현재까지의 공정을 별도 파일로 복제하여 저장 (P 키 전용)
+     */
+    /**
+     * 💾 현재까지의 공정을 별도 파일로 복제하여 저장 (P 키 전용)
+     */
+    private void SaveProjectSnapshot() // 🎯 []를 ()로 수정
     {
-        File.Copy(sourceCsv, destCsv, true);
-        Debug.Log("📋 장부 복제 완료: " + destCsv);
+        string timestamp = System.DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        string newFileName = "Blueprint_" + timestamp;
+
+        // 🎯 []를 (...)로 수정
+        string sourceCsv = Path.Combine(stressBlockFolder, "CurrentStress.csv");
+        string destCsv = Path.Combine(savedBlueprintsFolder, newFileName + ".csv");
+
+        if (File.Exists(sourceCsv))
+        {
+            File.Copy(sourceCsv, destCsv, true);
+            Debug.Log("📋 장부 복제 완료: " + destCsv);
+        }
+        else
+        {
+            Debug.LogWarning("⚠️ 복제할 CurrentStress.csv가 없습니다. 먼저 스캔을 진행해주세요!");
+            return;
+        }
+
+        // 🎯 함수 호출도 ()로 수정
+        CaptureSceneToFolder(newFileName, savedBlueprintsFolder);
     }
-    else
+
+    /**
+     * 📸 저장용 전용 스크린샷 함수
+     */
+    private void CaptureSceneToFolder(string fileName, string folderPath) // 🎯 ()로 수정
     {
-        Debug.LogWarning("⚠️ 복제할 CurrentStress.csv가 없습니다. 먼저 스캔을 진행해주세요!");
-        return;
+        string fullPath = Path.Combine(folderPath, fileName + "_Thumbnail.png");
+        ScreenCapture.CaptureScreenshot(fullPath);
+        Debug.Log("📸 현장 사진 저장 완료: " + fullPath);
     }
-
-    // 🎯 함수 호출도 ()로 수정
-    CaptureSceneToFolder(newFileName, savedBlueprintsFolder);
-}
-
-/**
- * 📸 저장용 전용 스크린샷 함수
- */
-private void CaptureSceneToFolder(string fileName, string folderPath) // 🎯 ()로 수정
-{
-    string fullPath = Path.Combine(folderPath, fileName + "_Thumbnail.png");
-    ScreenCapture.CaptureScreenshot(fullPath);
-    Debug.Log("📸 현장 사진 저장 완료: " + fullPath);
 }
