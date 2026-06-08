@@ -6,7 +6,6 @@
 ---
 
 ## 📺 프로젝트 시연 동영상
-> **교수님 채점용 시연 영상입니다. 아래 이미지 또는 링크를 클릭하면 시연 페이지(YouTube)로 이동합니다.**
 
 [![Virtual Construct 시연 영상](https://img.youtube.com/vi/aH3odFUrHu4/0.jpg)](https://youtu.be/aH3odFUrHu4)
 
@@ -15,7 +14,6 @@
 ---
 
 ## 📊 프로젝트 보고서 및 발표 자료 (PPT)
-> **교수님 채점용 발표 자료 리스트입니다. 링크를 클릭하면 해당 발표 파일로 이동합니다.**
 
 * 📂 **[프로젝트 제안서 및 중간발표 PPT 자료 바로가기](https://github.com/Kimjunesung96/4grade9th/blob/main/20263600김준성.pptx)**
 * 📂 **[프로젝트 최종 보고서 및 기말발표 PPT 자료 바로가기](https://github.com/Kimjunesung96/4grade9th/blob/main/버츄얼건축.pptx)**
