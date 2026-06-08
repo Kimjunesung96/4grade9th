@@ -1,0 +1,861 @@
+// Project: 20260509_200301 Code Summary (Part c)
+// Total Lines: 858
+
+// FILE: LogManager.cs
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
+using UnityEngine;
+
+// 1. 단일 기록 (십장님 특허 3합축 기술 적용!)
+[Serializable]
+public class ActionLog
+{
+    public string time;
+    public string tool;
+    public string sizeXZH;
+    public string centerXYZ;
+    public string action;
+    public string status;
+    public string pivotXYZ;
+}
+
+[Serializable]
+public class ProjectAttempt
+{
+    public int Attempt;
+    public string Start_Time;
+    public string End_Time;
+    public string Status;
+    public List<ActionLog> Actions = new List<ActionLog>();
+}
+
+[Serializable]
+public class DailyRawLog
+{
+    public string Date;
+    public int Total_Attempts;
+    public List<string> Reset_Timestamps = new List<string>();
+    public List<ProjectAttempt> Projects_Details = new List<ProjectAttempt>();
+}
+
+[Serializable]
+public class TempLog
+{
+    public string Notice = "현재 타설 중인 블록입니다. (R키 누르면 날아감)";
+    public List<ActionLog> Current_Blocks = new List<ActionLog>();
+}
+
+[Serializable]
+public class Blueprint
+{
+    public int Blueprint_ID;
+    public string Saved_Time;
+    public List<ActionLog> Blocks = new List<ActionLog>();
+}
+
+[Serializable]
+public class MasterBlueprintLog
+{
+    public string Date;
+    public int Total_Masterpieces;
+    public List<Blueprint> Blueprints = new List<Blueprint>();
+}
+
+public class LogManager : MonoBehaviour
+{
+    public static LogManager Instance;
+
+    private DailyRawLog rawDailyLog;
+    private TempLog tempLogData;
+    private MasterBlueprintLog masterLogData;
+    private ProjectAttempt currentAttempt;
+
+    private string rawFilePath;
+    private string tempFilePath;
+    private string masterFilePath;
+
+    private Transform simulationPivot;
+
+    void Awake()
+    {
+        if (Instance == null) Instance = this;
+        else Destroy(gameObject);
+    }
+
+    void Start()
+    {
+        string dateStr = DateTime.Now.ToString("yyyyMMdd");
+
+        // 🚨 [에러 대참사 완벽 해결!] 
+        // Application.dataPath(Assets 폴더)에 저장하면 유니티가 실시간으로 임포트하려다 DOTS와 충돌합니다!
+        // Assets 폴더 바깥인 "프로젝트루트경로/BuildingLogs" 폴더로 장부 보관소를 아예 이사시킵니다!
+        string basePath = Path.Combine(Application.dataPath, "../BuildingLogs");
+
+        string historyDir = Path.Combine(basePath, "history");
+        string tempDir = Path.Combine(basePath, "temp");
+        string architectDir = Path.Combine(basePath, "architecture");
+
+        if (!Directory.Exists(historyDir)) Directory.CreateDirectory(historyDir);
+        if (!Directory.Exists(tempDir)) Directory.CreateDirectory(tempDir);
+        if (!Directory.Exists(architectDir)) Directory.CreateDirectory(architectDir);
+
+        rawFilePath = Path.Combine(historyDir, $"Log_Raw_{dateStr}.json");
+        tempFilePath = Path.Combine(tempDir, "Temp_Current_Building.json");
+        masterFilePath = Path.Combine(architectDir, $"Master_Blueprint_{dateStr}.json");
+
+        LoadOrCreateLogs();
+    }
+
+    void Update()
+    {
+        if (simulationPivot == null)
+        {
+            GameObject pivotObj = GameObject.Find("SimulationPivot");
+            if (pivotObj != null) simulationPivot = pivotObj.transform;
+        }
+    }
+
+    void LoadOrCreateLogs()
+    {
+        if (File.Exists(rawFilePath)) rawDailyLog = JsonUtility.FromJson<DailyRawLog>(File.ReadAllText(rawFilePath));
+        else rawDailyLog = new DailyRawLog { Date = DateTime.Now.ToString("yyyy-MM-dd") };
+
+        if (File.Exists(masterFilePath)) masterLogData = JsonUtility.FromJson<MasterBlueprintLog>(File.ReadAllText(masterFilePath));
+        else masterLogData = new MasterBlueprintLog { Date = DateTime.Now.ToString("yyyy-MM-dd") };
+
+        tempLogData = new TempLog();
+        SaveTempLog();
+
+        if (rawDailyLog.Projects_Details.Count == 0 || rawDailyLog.Projects_Details[rawDailyLog.Projects_Details.Count - 1].Status != "In_Progress")
+        {
+            StartNewAttempt();
+        }
+        else
+        {
+            currentAttempt = rawDailyLog.Projects_Details[rawDailyLog.Projects_Details.Count - 1];
+        }
+    }
+
+    void StartNewAttempt()
+    {
+        rawDailyLog.Total_Attempts++;
+        currentAttempt = new ProjectAttempt { Attempt = rawDailyLog.Total_Attempts, Start_Time = DateTime.Now.ToString("HH:mm:ss"), Status = "In_Progress" };
+        rawDailyLog.Projects_Details.Add(currentAttempt);
+        SaveRawLog();
+    }
+
+    public void AddLog(string tool, int heightCount, string action, string status, string centerStr, float sizeX, float sizeZ)
+    {
+        string pivotStr = "Center_Fixed";
+        if (simulationPivot != null)
+        {
+            pivotStr = $"[{simulationPivot.position.x:F2}, {simulationPivot.position.y:F2}, {simulationPivot.position.z:F2}]";
+        }
+
+        ActionLog newLog = new ActionLog
+        {
+            time = DateTime.Now.ToString("HH:mm:ss"),
+            tool = tool,
+            sizeXZH = $"[{sizeX:F1}, {sizeZ:F1}, {heightCount}]",
+            centerXYZ = centerStr,
+            action = action,
+            status = status,
+            pivotXYZ = pivotStr
+        };
+
+        currentAttempt.Actions.Add(newLog);
+        SaveRawLog();
+
+        if (action == "Key_G" || status == "Build_Complete")
+        {
+            tempLogData.Current_Blocks.Add(newLog);
+            SaveTempLog();
+            Debug.Log($"[현장보고] 타설 완료! (타설중앙: {centerStr} / 바닥코어: {pivotStr})");
+        }
+    }
+
+    public void OnPressRKey()
+    {
+        string nowTime = DateTime.Now.ToString("HH:mm:ss");
+        currentAttempt.End_Time = nowTime;
+        currentAttempt.Status = "Reset";
+        rawDailyLog.Reset_Timestamps.Add($"Attempt {currentAttempt.Attempt}: {nowTime} (Reset)");
+        SaveRawLog();
+        StartNewAttempt();
+
+        tempLogData.Current_Blocks.Clear();
+        SaveTempLog();
+    }
+
+    public void SaveToMaster()
+    {
+        if (tempLogData.Current_Blocks.Count == 0) return;
+        string nowTime = DateTime.Now.ToString("HH:mm:ss");
+        masterLogData.Total_Masterpieces++;
+        Blueprint newBlueprint = new Blueprint { Blueprint_ID = masterLogData.Total_Masterpieces, Saved_Time = nowTime, Blocks = new List<ActionLog>(tempLogData.Current_Blocks) };
+        masterLogData.Blueprints.Add(newBlueprint);
+        SaveMasterLog();
+
+        currentAttempt.End_Time = nowTime;
+        currentAttempt.Status = "Success";
+        rawDailyLog.Reset_Timestamps.Add($"Attempt {currentAttempt.Attempt}: {nowTime} (Success)");
+        SaveRawLog();
+        StartNewAttempt();
+
+        Debug.Log("🎉 마스터 도면집에 십장님 특허 장부 도장 쾅! (Temp 장부 기록은 계속 유지됩니다)");
+    }
+
+    private void SaveRawLog() { try { File.WriteAllText(rawFilePath, JsonUtility.ToJson(rawDailyLog, true)); } catch (Exception e) { Debug.LogWarning("Raw Log 저장 실패: " + e.Message); } }
+    private void SaveTempLog() { try { File.WriteAllText(tempFilePath, JsonUtility.ToJson(tempLogData, true)); } catch (Exception e) { Debug.LogWarning("Temp Log 저장 실패: " + e.Message); } }
+    private void SaveMasterLog() { try { File.WriteAllText(masterFilePath, JsonUtility.ToJson(masterLogData, true)); } catch (Exception e) { Debug.LogWarning("Master Log 저장 실패: " + e.Message); } }
+}
+
+==================================================
+// FILE: F1HelpManual.cs
+using UnityEngine;
+
+public class F1HelpManual : MonoBehaviour
+{
+    [Header("여기에 아까 만든 HelpPanel을 끌어다 넣으세요")]
+    public GameObject helpUI;
+
+    void Update()
+    {
+        // UI가 연결되어 있지 않으면 무시
+        if (helpUI == null) return;
+
+        // F1 키를 '누르고 있는 동안만' UI를 켜고, 떼면 끕니다! (오버워치 방식)
+        if (Input.GetKeyDown(KeyCode.F1))
+        {
+            helpUI.SetActive(true);
+        }
+        else if (Input.GetKeyUp(KeyCode.F1))
+        {
+            helpUI.SetActive(false);
+        }
+    }
+}
+
+==================================================
+// FILE: ObjectColorAuthoring.cs
+using UnityEngine;
+using Unity.Entities;
+using Unity.Mathematics;
+
+// 이 클래스 이름이 파일명과 반드시 같아야 합니다!
+public class ObjectColorAuthoring : MonoBehaviour
+{
+    public Color initialColor = Color.white;
+
+    // Baker 클래스는 Authoring 클래스 안에 포함되어 있어야 합니다.
+    public class ObjectColorBaker : Baker<ObjectColorAuthoring>
+    {
+        public override void Bake(ObjectColorAuthoring authoring)
+        {
+            var entity = GetEntity(TransformUsageFlags.Dynamic);
+            AddComponent(entity, new ObjectColorData
+            {
+                Value = new float4(
+                    authoring.initialColor.r,
+                    authoring.initialColor.g,
+                    authoring.initialColor.b,
+                    authoring.initialColor.a
+                )
+            });
+        }
+    }
+}
+
+==================================================
+// FILE: ObjectColorData.cs
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.Rendering;
+
+[MaterialProperty("_BaseColor")]
+public struct ObjectColorData : IComponentData
+{
+    public float4 Value;
+}
+
+==================================================
+// FILE: OptimizedColorSystem.cs
+using Unity.Entities;
+using Unity.Burst;
+using Unity.Mathematics;
+using Unity.Transforms;
+
+[BurstCompile]
+public partial struct OptimizedColorSystem : ISystem
+{
+    [BurstCompile]
+    public void OnUpdate(ref SystemState state)
+    {
+        var time = (float)SystemAPI.Time.ElapsedTime;
+
+        // 모든 ObjectColorData를 가진 엔티티를 병렬로 업데이트
+        new ColorUpdateJob { Time = time }.ScheduleParallel();
+    }
+}
+
+[BurstCompile]
+public partial struct ColorUpdateJob : IJobEntity
+{
+    public float Time;
+
+    public void Execute(ref ObjectColorData colorData, in LocalTransform transform)
+    {
+        // 위치(position) 값에 따라 색상이 다르게 변하도록 오프셋 추가
+        colorData.Value = new float4(
+            math.sin(Time + transform.Position.x) * 0.5f + 0.5f,
+            math.cos(Time + transform.Position.y) * 0.5f + 0.5f,
+            math.sin(Time + transform.Position.z) * 0.5f + 0.5f,
+            1.0f
+        );
+    }
+}
+
+==================================================
+// FILE: PlayerAuthoring.cs
+using Unity.Entities;
+using Unity.Mathematics;
+using UnityEngine;
+
+public class PlayerAuthoring : MonoBehaviour
+{
+    public float MoveSpeed = 10f;
+    public float JetpackForce = 25f; // 제트팩 상승 기류의 세기
+    public float MaxFallSpeed = -20f; // 너무 빨리 추락하지 않게 제한
+
+    class Baker : Baker<PlayerAuthoring>
+    {
+        public override void Bake(PlayerAuthoring authoring)
+        {
+            var entity = GetEntity(TransformUsageFlags.Dynamic);
+            AddComponent(entity, new PlayerData
+            {
+                MoveSpeed = authoring.MoveSpeed,
+                JetpackForce = authoring.JetpackForce,
+                MaxFallSpeed = authoring.MaxFallSpeed
+            });
+        }
+    }
+}
+
+public struct PlayerData : IComponentData
+{
+    public float MoveSpeed;
+    public float JetpackForce;
+    public float MaxFallSpeed;
+}
+
+==================================================
+// FILE: PlayerMovementSystem.cs
+using Unity.Entities;
+using Unity.Transforms;
+using Unity.Mathematics;
+using Unity.Physics;
+using UnityEngine;
+
+// ISystem(구조체) 대신 SystemBase(클래스)를 사용하면
+// 키보드 입력(Input)이나 Debug.Log 같은 기존 유니티 기능을 훨씬 안정적으로 쓸 수 있습니다.
+public partial class PlayerMovementSystem : SystemBase
+{
+    protected override void OnUpdate()
+    {
+        // 1. 키보드 입력 받기
+        float moveX = Input.GetAxisRaw("Horizontal");
+        float moveZ = Input.GetAxisRaw("Vertical");
+        float3 moveInput = new float3(moveX, 0, moveZ);
+        bool isJetpackActive = Input.GetKey(KeyCode.Space);
+        float deltaTime = SystemAPI.Time.DeltaTime;
+
+        bool foundPlayer = false; // 플레이어를 찾았는지 확인하는 스위치
+
+        // 2. 물리 속도(PhysicsVelocity)와 플레이어 데이터(PlayerData)가 있는 놈을 찾아서 움직입니다.
+        foreach (var (velocity, mass, player) in
+                 SystemAPI.Query<RefRW<PhysicsVelocity>, RefRW<PhysicsMass>, RefRO<PlayerData>>())
+        {
+            foundPlayer = true; // 오! 찾았다!
+
+            // 회전 잠금 (오뚝이 유지)
+            mass.ValueRW.InverseInertia = float3.zero;
+            velocity.ValueRW.Angular = float3.zero;
+
+            // 기존 y축 속도(중력/제트팩)는 그대로 두고, x와 z축(수평) 이동만 덮어씌웁니다.
+            float currentY = velocity.ValueRO.Linear.y;
+            velocity.ValueRW.Linear = new float3(moveInput.x * player.ValueRO.MoveSpeed, currentY, moveInput.z * player.ValueRO.MoveSpeed);
+
+            // 제트팩 상승 (스페이스바)
+            if (isJetpackActive)
+            {
+                velocity.ValueRW.Linear.y += player.ValueRO.JetpackForce * deltaTime;
+            }
+
+            // 추락 속도 제한
+            if (velocity.ValueRW.Linear.y < player.ValueRO.MaxFallSpeed)
+            {
+                velocity.ValueRW.Linear.y = player.ValueRO.MaxFallSpeed;
+            }
+        }
+
+        // 3. 디버그: 만약 씬에 캐릭터가 없다면 콘솔창에 빨간불을 띄워줍니다.
+        if (!foundPlayer)
+        {
+            // 이 경고가 뜬다면, 유니티가 캡슐을 엔티티로 제대로 변환(Baking)하지 못한 겁니다!
+            // Debug.LogWarning("플레이어 엔티티를 찾지 못했습니다! 서브 씬을 껐다 켜보세요.");
+        }
+    }
+}
+
+==================================================
+// FILE: SimulationDragController.cs
+﻿using UnityEngine;
+using Unity.Mathematics;
+using Unity.Entities;
+
+public class SimulationDragController : MonoBehaviour
+{
+    public float blockSize = 3.0f;
+    public LayerMask groundLayer = ~0;
+    public Material coreMaterial;
+    public Material previewMaterial;
+
+    private Transform simulationPivot;
+    private bool isSimulationActive = false;
+    private float3 definedStart;
+    private float3 definedEnd;
+
+    void Start()
+    {
+        simulationPivot = new GameObject("SimulationPivot").transform;
+        simulationPivot.gameObject.SetActive(false);
+        // ... ( Start 내부 GameObject 생성 로직 기존과 동일하게 유지 ) ...
+    }
+
+    void Update()
+    {
+        Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
+        if (!Physics.Raycast(ray, out RaycastHit hit, 1000f, groundLayer)) return;
+        float3 hitPoint = hit.point;
+
+        if (Input.GetMouseButtonDown(0)) { definedStart = SnapToGrid(hitPoint); definedEnd = definedStart; isSimulationActive = true; simulationPivot.gameObject.SetActive(true); SyncWithDOTS(); }
+        if (Input.GetMouseButton(0) && isSimulationActive) { definedEnd = SnapToGrid(hitPoint); SyncWithDOTS(); }
+        if (Input.GetMouseButtonUp(0) && math.distance(definedStart, definedEnd) < 0.1f) { CancelDrag(); }
+    }
+
+    float3 SnapToGrid(float3 pos) { return math.floor(pos / blockSize) * blockSize; }
+
+    void SyncWithDOTS()
+    {
+        var em = World.DefaultGameObjectInjectionWorld.EntityManager;
+        var query = em.CreateEntityQuery(typeof(BuilderStateData));
+        if (query.HasSingleton<BuilderStateData>())
+        {
+            var data = query.GetSingleton<BuilderStateData>();
+            data.GuideStartPos = definedStart; data.GuideEndPos = definedEnd;
+            query.SetSingleton(data);
+        }
+    }
+
+    // 📡 [최종 보강] R, L 키 눌렀을 때 초록색 선까지 싹 지워버리는 유배 무전기
+    public void CancelDrag()
+    {
+        isSimulationActive = false;
+        if (simulationPivot) simulationPivot.gameObject.SetActive(false);
+
+        // 좌표를 -9999로 멀리 보내서 초록색 가이드를 화면에서 치워버립니다.
+        definedStart = new float3(-9999f, -9999f, -9999f);
+        definedEnd = new float3(-9999f, -9999f, -9999f);
+        SyncWithDOTS();
+    }
+}
+
+==================================================
+// FILE: SpawnerAuthoring.cs
+using UnityEngine;
+using Unity.Entities;
+using Unity.Mathematics;
+
+public class SpawnerAuthoring : MonoBehaviour
+{
+    public GameObject Prefab;
+    public int2 Count;
+
+    public class SpawnerBaker : Baker<SpawnerAuthoring>
+    {
+        public override void Bake(SpawnerAuthoring authoring)
+        {
+            var entity = GetEntity(TransformUsageFlags.None);
+            AddComponent(entity, new SpawnerData
+            {
+                Prefab = GetEntity(authoring.Prefab, TransformUsageFlags.Dynamic),
+                Count = authoring.Count
+            });
+        }
+    }
+}
+
+==================================================
+// FILE: SpawnerData.cs
+using Unity.Entities;
+using Unity.Mathematics;
+
+public struct SpawnerData : IComponentData
+{
+    public Entity Prefab;
+    public int2 Count;
+}
+
+==================================================
+// FILE: SpawnerSystem.cs
+﻿// SpawnerSystem 내부 백업 로직
+if (backupIDToQuery > -1f)
+{
+    string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+    string header = "BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tool";
+
+    Dictionary<string, string> masterData = new Dictionary<string, string>();
+    if (File.Exists(path))
+    {
+        string[] existingLines = File.ReadAllLines(path);
+        for (int i = 1; i < existingLines.Length; i++)
+        {
+            string[] cols = existingLines[i].Split(',');
+            if (cols.Length > 0) masterData[cols[0]] = existingLines[i];
+        }
+    }
+
+    bool found = false;
+    foreach (var (transform, mat, entity) in SystemAPI.Query<RefRO<LocalTransform>, RefRO<BlockMaterial>>().WithAll<BlockTag>().WithEntityAccess())
+    {
+        float3 p = transform.ValueRO.Position;
+        string realId = ((int)math.round(p.x * 10f)).ToString() + "_" + ((int)math.round(p.z * 10f)).ToString() + "_" + ((int)math.round(p.y * 10f)).ToString();
+        string matName = mat.ValueRO.MaterialName.ToString();
+        string toolType = p.y > 1.5f ? "Wall" : "Floor";
+
+        string row = realId + "," + p.x.ToString("F2") + "," + p.y.ToString("F2") + "," + p.z.ToString("F2") + ",0.00,SAFE,N," + matName + "," + toolType;
+        masterData[realId] = row;
+        found = true;
+    }
+
+    if (found)
+    {
+        if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
+
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        sb.AppendLine(header);
+        foreach (var line in masterData.Values) sb.AppendLine(line);
+
+        File.WriteAllText(path, sb.ToString());
+        Debug.Log("한글 주석: 건축 스냅샷 백업 완료");
+    }
+    backupIDToQuery = -1f;
+}
+
+==================================================
+// FILE: SpawnerSystem_Cone.cs
+﻿using Unity.Entities;
+using Unity.Transforms;
+using Unity.Mathematics;
+using UnityEngine;
+using Unity.Collections;
+using Unity.Rendering;
+using Unity.Physics;
+
+public partial struct SpawnerSystem
+{
+    private void BuildCone(ref SystemState state, SpawnerData data, float3 startPos, float3 endPos, float targetY, Entity hitEntity, float3 hitEntityPos, int structureID, bool isGhost)
+    {
+        var ecb = SystemAPI.GetSingleton<BeginSimulationEntityCommandBufferSystem.Singleton>().CreateCommandBuffer(state.WorldUnmanaged);
+        float blockSize = 3.0f;
+        float margin = 0.05f;
+
+        float3 startXZ = new float3(startPos.x, 0, startPos.z);
+        float3 endXZ = new float3(endPos.x, 0, endPos.z);
+        float radius = math.distance(startXZ, endXZ) / 2.0f;
+        // ⭐ 원뿔도 동일하게 Voxel 격자 정중앙으로 스냅!
+        float3 rawCenter = (startXZ + endXZ) / 2.0f;
+        float3 center = new float3(
+            math.floor(rawCenter.x / blockSize) * blockSize + (blockSize / 2f),
+            0,
+            math.floor(rawCenter.z / blockSize) * blockSize + (blockSize / 2f)
+        );
+
+        int baseRadiusCount = (int)math.floor(radius / blockSize);
+        int floors = Mathf.Max(1, Mathf.RoundToInt(guideHeight));
+        int maxGridSize = (baseRadiusCount * 2) + 1;
+
+        var physicsWorld = SystemAPI.GetSingleton<Unity.Physics.PhysicsWorldSingleton>().PhysicsWorld;
+        float highestHitY = -9999f;
+        NativeArray<Unity.Physics.RaycastHit> floorHits = new NativeArray<Unity.Physics.RaycastHit>(maxGridSize * maxGridSize, Allocator.Temp);
+
+        for (int x = -baseRadiusCount; x <= baseRadiusCount; x++)
+        {
+            for (int z = -baseRadiusCount; z <= baseRadiusCount; z++)
+            {
+                int hitIndex = (x + baseRadiusCount) + ((z + baseRadiusCount) * maxGridSize);
+                float3 rayStart = center + new float3(x * blockSize, targetY + 100f, z * blockSize);
+                Unity.Physics.RaycastInput input = new Unity.Physics.RaycastInput { Start = rayStart, End = rayStart - new float3(0, 200f, 0), Filter = Unity.Physics.CollisionFilter.Default };
+                if (physicsWorld.CastRay(input, out Unity.Physics.RaycastHit hit))
+                {
+                    floorHits[hitIndex] = hit;
+                    float snappedY = math.round(hit.Position.y / blockSize) * blockSize;
+                    if (snappedY > highestHitY) highestHitY = snappedY;
+                }
+                else
+                {
+                    floorHits[hitIndex] = new Unity.Physics.RaycastHit { Entity = Entity.Null, Position = new float3(0, -9999f, 0) };
+                }
+            }
+        }
+        if (highestHitY > -9999f) targetY = highestHitY;
+
+        NativeArray<Entity> grid = new NativeArray<Entity>(maxGridSize * floors * maxGridSize, Allocator.Temp);
+        for (int i = 0; i < grid.Length; i++) grid[i] = Entity.Null;
+        int GetIndex(int px, int ph, int pz) => px + (ph * maxGridSize * maxGridSize) + (pz * maxGridSize);
+
+        for (int h = 0; h < floors; h++)
+        {
+            float currentLayerRadius = math.max(0, (float)baseRadiusCount * (1.0f - (float)h / (float)floors));
+
+            for (int x = -baseRadiusCount; x <= baseRadiusCount; x++)
+            {
+                for (int z = -baseRadiusCount; z <= baseRadiusCount; z++)
+                {
+                    float dist = math.sqrt(x * x + z * z);
+                    if (dist <= currentLayerRadius + 0.5f)
+                    {
+                        float3 pos = center + new float3(x * blockSize, targetY + (h * blockSize) + (blockSize / 2f), z * blockSize);
+                        var instance = ecb.Instantiate(data.Prefab);
+                        ecb.SetComponent(instance, LocalTransform.FromPositionRotationScale(pos, quaternion.identity, blockSize - margin));
+
+                        if (isGhost)
+                        {
+                            ecb.AddComponent<GhostBlockTag>(instance);
+                            ecb.RemoveComponent<PhysicsCollider>(instance);
+                            ecb.RemoveComponent<PhysicsVelocity>(instance);
+                            ecb.RemoveComponent<PhysicsMass>(instance);
+                            ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(0, 1, 1, 0.5f) });
+                        }
+                        else
+                        {
+                            ecb.AddComponent<BlockTag>(instance);
+                            ecb.AddComponent<BlockStress>(instance);
+                            ecb.AddComponent(instance, new StructureID { Value = structureID });
+                            ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(1, 1, 1, 1) });
+                        }
+
+                        grid[GetIndex(x + baseRadiusCount, h, z + baseRadiusCount)] = instance;
+
+                        if (!isGhost && h == 0)
+                        {
+                            int hitIndex = (x + baseRadiusCount) + ((z + baseRadiusCount) * maxGridSize);
+                            var hit = floorHits[hitIndex];
+                            float snappedHitY = hit.Entity != Entity.Null ? math.round(hit.Position.y / blockSize) * blockSize : -9999f;
+
+                            if (hit.Entity != Entity.Null && math.abs(snappedHitY - highestHitY) < 0.1f && SystemAPI.HasComponent<PhysicsVelocity>(hit.Entity))
+                            {
+                                float3 adjPos = SystemAPI.GetComponent<LocalTransform>(hit.Entity).Position;
+                                CreateIndestructibleJoint(ref ecb, hit.Entity, instance, pos - adjPos);
+                            }
+                            else if (pos.y <= 2.0f)
+                            {
+                                PhysicsMass prefabMass = SystemAPI.GetComponent<PhysicsMass>(data.Prefab);
+                                prefabMass.InverseMass = 0; prefabMass.InverseInertia = float3.zero;
+                                ecb.SetComponent(instance, prefabMass);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 🛠️ [복구] 원뿔 내부 블록 간 조인트 (수평/수직)
+        if (!isGhost)
+        {
+            for (int h = 0; h < floors; h++)
+            {
+                for (int x = 0; x < maxGridSize; x++)
+                {
+                    for (int z = 0; z < maxGridSize; z++)
+                    {
+                        Entity current = grid[GetIndex(x, h, z)];
+                        if (current == Entity.Null) continue;
+                        if (x < maxGridSize - 1 && grid[GetIndex(x + 1, h, z)] != Entity.Null) CreateIndestructibleJoint(ref ecb, current, grid[GetIndex(x + 1, h, z)], new float3(blockSize, 0, 0));
+                        if (z < maxGridSize - 1 && grid[GetIndex(x, h, z + 1)] != Entity.Null) CreateIndestructibleJoint(ref ecb, current, grid[GetIndex(x, h, z + 1)], new float3(0, 0, blockSize));
+                        if (h < floors - 1 && grid[GetIndex(x, h + 1, z)] != Entity.Null) CreateIndestructibleJoint(ref ecb, current, grid[GetIndex(x, h + 1, z)], new float3(0, blockSize, 0));
+                    }
+                }
+            }
+        }
+        grid.Dispose();
+        floorHits.Dispose();
+    }
+}
+
+==================================================
+// FILE: SpawnerSystem_Cylinder.cs
+﻿using Unity.Entities;
+using Unity.Transforms;
+using Unity.Mathematics;
+using UnityEngine;
+using Unity.Physics;
+using Unity.Collections;
+using Unity.Rendering;
+
+public partial struct SpawnerSystem
+{
+    private void BuildCircularPattern(ref SystemState state, SpawnerData data, float3 startPos, float3 endPos, float targetY, Entity hitEntity, float3 hitEntityPos, int structureID, bool isGhost)
+    {
+        var ecb = SystemAPI.GetSingleton<BeginSimulationEntityCommandBufferSystem.Singleton>().CreateCommandBuffer(state.WorldUnmanaged);
+        float blockSize = 3.0f;
+        float margin = 0.05f;
+
+        float3 startXZ = new float3(startPos.x, 0, startPos.z);
+        float3 endXZ = new float3(endPos.x, 0, endPos.z);
+        float radius = math.distance(startXZ, endXZ) / 2.0f;
+        // ⭐ 중심점을 Voxel 격자 정중앙(1.5, 4.5 등)에 완벽하게 스냅 시킵니다!
+        float3 rawCenter = (startXZ + endXZ) / 2.0f;
+        float3 center = new float3(
+            math.floor(rawCenter.x / blockSize) * blockSize + (blockSize / 2f),
+            0,
+            math.floor(rawCenter.z / blockSize) * blockSize + (blockSize / 2f)
+        );
+
+        int baseRadiusCount = (int)math.floor(radius / blockSize);
+        int floors = Mathf.Max(1, Mathf.RoundToInt(guideHeight));
+        if (baseRadiusCount < 1) return;
+
+        int maxGridSize = (baseRadiusCount * 2) + 1;
+
+        var physicsWorld = SystemAPI.GetSingleton<Unity.Physics.PhysicsWorldSingleton>().PhysicsWorld;
+        float highestHitY = -9999f;
+        NativeArray<Unity.Physics.RaycastHit> floorHits = new NativeArray<Unity.Physics.RaycastHit>(maxGridSize * maxGridSize, Allocator.Temp);
+
+        // ==========================================================
+        // 1구역: 레이저로 바닥 높이 재기
+        // ==========================================================
+        for (int x = -baseRadiusCount; x <= baseRadiusCount; x++)
+        {
+            for (int z = -baseRadiusCount; z <= baseRadiusCount; z++)
+            {
+                int hitIndex = (x + baseRadiusCount) + ((z + baseRadiusCount) * maxGridSize);
+                float dist = math.sqrt(x * x + z * z);
+                if (dist <= baseRadiusCount + 0.5f)
+                {
+                    float3 rayStart = center + new float3(x * blockSize, targetY + 100f, z * blockSize);
+                    Unity.Physics.RaycastInput input = new Unity.Physics.RaycastInput { Start = rayStart, End = rayStart - new float3(0, 200f, 0), Filter = Unity.Physics.CollisionFilter.Default };
+                    if (physicsWorld.CastRay(input, out Unity.Physics.RaycastHit hit))
+                    {
+                        floorHits[hitIndex] = hit; // 🛠️ [복구 완료] 십장님이 실수로 지워버린 레이저 맞은 위치 저장!
+                        float snappedY = math.round(hit.Position.y / blockSize) * blockSize;
+                        if (snappedY > highestHitY) highestHitY = snappedY;
+                    }
+                    else
+                    {
+                        floorHits[hitIndex] = new Unity.Physics.RaycastHit { Entity = Entity.Null, Position = new float3(0, -9999f, 0) };
+                    }
+                }
+            }
+        }
+        if (highestHitY > -9999f) targetY = highestHitY;
+
+        NativeArray<Entity> grid = new NativeArray<Entity>(maxGridSize * floors * maxGridSize, Allocator.Temp);
+        for (int i = 0; i < grid.Length; i++) grid[i] = Entity.Null;
+        int GetIndex(int px, int py, int pz) => px + (py * maxGridSize * maxGridSize) + (pz * maxGridSize);
+
+        // ==========================================================
+        // 2구역: 콘크리트 붓고 용접하기
+        // ==========================================================
+        for (int y = 0; y < floors; y++)
+        {
+            for (int x = -baseRadiusCount; x <= baseRadiusCount; x++)
+            {
+                for (int z = -baseRadiusCount; z <= baseRadiusCount; z++)
+                {
+                    float dist = math.sqrt(x * x + z * z);
+                    bool insideShape = y == 0 ? (dist <= baseRadiusCount + 0.5f) : (dist <= baseRadiusCount + 0.5f && dist >= baseRadiusCount - 0.5f);
+
+                    if (insideShape)
+                    {
+                        float3 pos = center + new float3(x * blockSize, targetY + (y * blockSize) + (blockSize / 2f), z * blockSize);
+                        var instance = ecb.Instantiate(data.Prefab);
+                        ecb.SetComponent(instance, LocalTransform.FromPositionRotationScale(pos, quaternion.identity, blockSize - margin));
+
+                        if (isGhost)
+                        {
+                            ecb.AddComponent<GhostBlockTag>(instance);
+                            ecb.RemoveComponent<PhysicsCollider>(instance);
+                            ecb.RemoveComponent<PhysicsVelocity>(instance);
+                            ecb.RemoveComponent<PhysicsMass>(instance);
+                            ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(0, 1, 1, 0.5f) });
+                        }
+                        else
+                        {
+                            ecb.AddComponent<BlockTag>(instance);
+                            ecb.AddComponent<BlockStress>(instance);
+                            ecb.AddComponent(instance, new StructureID { Value = structureID });
+                            ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(1, 1, 1, 1) });
+                        }
+
+                        grid[GetIndex(x + baseRadiusCount, y, z + baseRadiusCount)] = instance;
+
+                        // ⭐ 용접은 진짜 시공일 때만
+                        if (!isGhost && y == 0)
+                        {
+                            int hitIndex = (x + baseRadiusCount) + ((z + baseRadiusCount) * maxGridSize);
+                            var hit = floorHits[hitIndex];
+
+                            // 🛠️ 대상 블록의 완벽한 격자 높이 계산 (안 파고들게!)
+                            float snappedHitY = hit.Entity != Entity.Null ? math.round(hit.Position.y / blockSize) * blockSize : -9999f;
+
+                            if (hit.Entity != Entity.Null && math.abs(snappedHitY - highestHitY) < 0.1f && SystemAPI.HasComponent<PhysicsVelocity>(hit.Entity))
+                            {
+                                // 🛠️ [백신 2호 완료] 껍데기(Position) 싹 무시! 상대 블록의 '진짜 중심점(adjPos)'을 캐내서 용접!
+                                float3 adjPos = SystemAPI.GetComponent<LocalTransform>(hit.Entity).Position;
+                                CreateIndestructibleJoint(ref ecb, hit.Entity, instance, pos - adjPos);
+                            }
+                            else
+                            {
+                                // 🛠️ [중력 부활 완료] 허공에 뜬 처마는 냅두고, 진짜 맨땅(Y=2.0 이하)일 때만 얼려라!
+                                if (pos.y <= 2.0f)
+                                {
+                                    PhysicsMass prefabMass = SystemAPI.GetComponent<PhysicsMass>(data.Prefab);
+                                    prefabMass.InverseMass = 0; prefabMass.InverseInertia = float3.zero;
+                                    ecb.SetComponent(instance, prefabMass);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!isGhost)
+        {
+            for (int y = 0; y < floors; y++)
+            {
+                for (int x = 0; x < maxGridSize; x++)
+                {
+                    for (int z = 0; z < maxGridSize; z++)
+                    {
+                        Entity current = grid[GetIndex(x, y, z)];
+                        if (current == Entity.Null) continue;
+                        if (x < maxGridSize - 1 && grid[GetIndex(x + 1, y, z)] != Entity.Null) CreateIndestructibleJoint(ref ecb, current, grid[GetIndex(x + 1, y, z)], new float3(blockSize, 0, 0));
+                        if (z < maxGridSize - 1 && grid[GetIndex(x, y, z + 1)] != Entity.Null) CreateIndestructibleJoint(ref ecb, current, grid[GetIndex(x, y, z + 1)], new float3(0, 0, blockSize));
+                        if (x < maxGridSize - 1 && z < maxGridSize - 1 && grid[GetIndex(x + 1, y, z + 1)] != Entity.Null) CreateIndestructibleJoint(ref ecb, current, grid[GetIndex(x + 1, y, z + 1)], new float3(blockSize, 0, blockSize));
+                        if (x > 0 && z < maxGridSize - 1 && grid[GetIndex(x - 1, y, z + 1)] != Entity.Null) CreateIndestructibleJoint(ref ecb, current, grid[GetIndex(x - 1, y, z + 1)], new float3(-blockSize, 0, blockSize));
+                        if (y < floors - 1 && grid[GetIndex(x, y + 1, z)] != Entity.Null) CreateIndestructibleJoint(ref ecb, current, grid[GetIndex(x, y + 1, z)], new float3(0, blockSize, 0));
+                    }
+                }
+            }
+        }
+        grid.Dispose();
+        floorHits.Dispose();
+    }
+}
+
+
+==================================================
