@@ -33,7 +33,15 @@ public class BlueprintTargetGenerator : MonoBehaviour
     private string processedSavePath;
 
     private List<string> selectedFloors = new List<string>();
-
+    // cadUtils.js의 FLOOR_COLORS와 1:1 매칭되는 기준 RGB (최근접 거리 매칭용)
+    private static readonly (float r, float g, float b, float h)[] WallColorTable = new (float r, float g, float b, float h)[]
+    {
+        (156f, 163f, 175f, 1f), // #9CA3AF 1층
+        (239f, 68f,  68f,  2f), // #EF4444 2층
+        (249f, 115f, 22f,  3f), // #F97316 3층
+        (234f, 179f, 8f,   4f), // #EAB308 4층
+        (0f,   0f,   0f,   5f), // #000000 5층
+    };
     void Start()
     {
         string projectPath = Directory.GetParent(Application.dataPath).FullName;
@@ -598,46 +606,46 @@ public class BlueprintTargetGenerator : MonoBehaviour
     }
 
     private List<float3> Scan(Color32[] pixels, float w, float h, float size)
+{
+    List<float3> list = new List<float3>();
+    
+    for (float x = 0f; x <= w - size; x += size)
     {
-        List<float3> list = new List<float3>();
-        for (float x = 0f; x <= w - size; x += size)
+        for (float z = 0f; z <= h - size; z += size)
         {
-            for (float z = 0f; z <= h - size; z += size)
-            {
-                int px = (int)(x + size / 2f);
-                int pz = (int)(z + size / 2f);
-                Color32 p = pixels[pz * (int)w + px];
+            int px = (int)(x + size / 2f);
+            int pz = (int)(z + size / 2f);
+            Color32 p = pixels[pz * (int)w + px];
 
-                if (p.a > 128)
+           if (p.a > 128) // 투명하지 않은 픽셀만 처리
+{
+    float r = p.r; float g = p.g; float b = p.b;
+float heightCount = 0f;
+
+// 흰색(빈칸) 배경은 매칭 자체를 시도하지 않음 — 안 그러면 가장 가까운 색(보통 회색/1층)으로 잘못 스냅됨
+if (!(r > 240f && g > 240f && b > 240f))
+{
+    float bestDist = float.MaxValue;
+    foreach (var entry in WallColorTable)
+    {
+        float d = (r - entry.r) * (r - entry.r) + (g - entry.g) * (g - entry.g) + (b - entry.b) * (b - entry.b);
+        if (d < bestDist) { bestDist = d; heightCount = entry.h; }
+    }
+}
+
+                // 판정된 층수만큼 유니티 3D 블록 적층 생성
+                if (heightCount > 0f)
                 {
-                    float floors = 0f;
-
-                    if (isMbsFormat)
-                    {
-                        if (p.r > 200 && p.g > 200 && p.b > 200) continue; 
-                        else if (p.r < 100 && p.g < 100 && p.b < 100) floors = 5f; 
-                        else if (p.r > 150 && p.g > 150 && p.b < 100) floors = 4f; 
-                        else if (p.r > 150 && p.g >= 80 && p.g <= 180 && p.b < 100) floors = 3f; 
-                        else if (p.r > 150 && p.g < 80 && p.b < 80) floors = 2f; 
-                        else floors = 1f; 
-                    }
-                    else
-                    {
-                        float avg = (p.r + p.g + p.b) / 3f;
-                        if (avg < 100f) floors = 5f;
-                        else if (avg < 240f) floors = 1f;
-                    }
-
-                    for (float y = 0f; y < floors; y += 1f)
+                    for (float y = 0f; y < heightCount; y += 1f)
                     {
                         list.Add(new float3(((int)(x / size)) * 3f + 1.5f, y * 3f + 1.5f, ((int)(z / size)) * 3f + 1.5f));
                     }
                 }
             }
         }
-        return list;
     }
-
+    return list;
+}
     private void SaveProjectSnapshot()
     {
         string timestamp = System.DateTime.Now.ToString("yyyyMMdd_HHmmss");
