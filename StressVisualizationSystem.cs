@@ -138,31 +138,97 @@ public partial struct StressVisualizationSystem : ISystem
         if (needsColorUpdate) { UpdateResults(ref state); }
     }
 
-    private void StartScan(ref SystemState state)
+private void StartScan(ref SystemState state)
     {
         scanTimer = 5.0f; isScanning = true; needsColorUpdate = false;
         var ecb = new EntityCommandBuffer(Allocator.Temp);
 
-        // ① 모든 블록에 OriginalPosition 등록 + 색상/스트레스 초기화
-        foreach (var (color, stress, transform, entity) in SystemAPI.Query<RefRW<URPMaterialPropertyBaseColor>, RefRW<BlockStress>, RefRO<LocalTransform>>().WithAll<BlockTag>().WithEntityAccess())
+        NativeList<Entity> allEntities = new NativeList<Entity>(Allocator.Temp);
+        NativeList<float3> allPositions = new NativeList<float3>(Allocator.Temp);
+
+        // 1. 씬에 존재하는 모든 블록 수집
+        foreach (var (transform, entity) in SystemAPI.Query<RefRO<LocalTransform>>().WithAll<BlockTag>().WithEntityAccess())
         {
-            color.ValueRW.Value = new float4(1.0f, 1.0f, 1.0f, 1.0f);
-            stress.ValueRW.SmoothedStress = 0.0f; stress.ValueRW.TargetStress = 0.0f;
-            float3 p = transform.ValueRO.Position;
-            if (!SystemAPI.HasComponent<OriginalPosition>(entity))
+            allEntities.Add(entity);
+            allPositions.Add(transform.ValueRO.Position);
+        }
+
+        // 🔥 빠른 검색과 안전한 중복 방지를 위해 NativeHashSet 사용
+        NativeHashSet<Entity> badEntities = new NativeHashSet<Entity>(allEntities.Length, Allocator.Temp);
+        int badCount = 0;
+
+        // 2. 불량 블록(겹침, 파편) 판별
+        for (int i = 0; i < allEntities.Length; i++)
+        {
+            float3 myPos = allPositions[i];
+            float minDiff = float.MaxValue;
+
+            for (int j = 0; j < allEntities.Length; j++)
             {
-                ecb.AddComponent(entity, new OriginalPosition { Value = p }); // 스냅 없이 현재 위치 그대로!
+                if (i == j) continue;
+                float3 otherPos = allPositions[j];
+                float diff = math.abs(myPos.x - otherPos.x) + math.abs(myPos.y - otherPos.y) + math.abs(myPos.z - otherPos.z);
+                if (diff < minDiff) minDiff = diff;
+            }
+
+            float diffSum = minDiff * 10.0f;
+
+            // 🚫 조건: 파고든 겹침 블록이거나, 건물 밖 허공의 파편인 경우
+            if (diffSum <= 29.5f || diffSum >= 69.5f)
+            {
+                if (badEntities.Add(allEntities[i]))
+                {
+                    badCount++;
+                    ecb.DestroyEntity(allEntities[i]); // 블록 파괴 예약
+                }
             }
         }
 
-        // ② PhysicsGravityFactor 있는 블록만 중력 ON
-        foreach (var (gravity, velocity) in SystemAPI.Query<RefRW<PhysicsGravityFactor>, RefRW<PhysicsVelocity>>().WithAll<BlockTag>())
+        // 3. ⭐ [핵심 추가] 파괴될 블록과 연결된 '조인트(Joint)'도 함께 찾아서 파괴! (물리엔진 에러 원천 차단)
+        foreach (var (jointPair, entity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
         {
+            // 이 조인트가 연결한 두 블록(EntityA, EntityB) 중 하나라도 삭제 예정이라면 이 조인트도 쓸모없으므로 파괴
+            if (badEntities.Contains(jointPair.ValueRO.EntityA) || badEntities.Contains(jointPair.ValueRO.EntityB))
+            {
+                ecb.DestroyEntity(entity);
+            }
+        }
+
+        if (badCount > 0)
+        {
+            UnityEngine.Debug.LogWarning($"[안전 스폰] 진단 시작: 폭발 유발 블록 및 고립된 파편 {badCount}개 (및 관련 조인트) 자동 삭제 완료!");
+        }
+
+        // 4. 살아남은 정상 블록에만 안전하게 컴포넌트 추가 및 중력 활성화
+        foreach (var (color, stress, transform, entity) in SystemAPI.Query<RefRW<URPMaterialPropertyBaseColor>, RefRW<BlockStress>, RefRO<LocalTransform>>().WithAll<BlockTag>().WithEntityAccess())
+        {
+            // 삭제 예정인 블록은 건너뛰어 AddComponent 오류를 방지합니다.
+            if (badEntities.Contains(entity)) continue;
+
+            color.ValueRW.Value = new float4(1.0f, 1.0f, 1.0f, 1.0f);
+            stress.ValueRW.SmoothedStress = 0.0f; stress.ValueRW.TargetStress = 0.0f;
+            
+            if (!SystemAPI.HasComponent<OriginalPosition>(entity))
+            {
+                ecb.AddComponent(entity, new OriginalPosition { Value = transform.ValueRO.Position });
+            }
+        }
+
+        foreach (var (gravity, velocity, entity) in SystemAPI.Query<RefRW<PhysicsGravityFactor>, RefRW<PhysicsVelocity>>().WithAll<BlockTag>().WithEntityAccess())
+        {
+            if (badEntities.Contains(entity)) continue;
+
             gravity.ValueRW.Value = 1.0f;
             velocity.ValueRW.Linear.y -= 0.01f;
         }
 
-        ecb.Playback(state.EntityManager); ecb.Dispose();
+        ecb.Playback(state.EntityManager); 
+        
+        // 메모리 정리
+        ecb.Dispose();
+        allEntities.Dispose();
+        allPositions.Dispose();
+        badEntities.Dispose();
     }
 
     private void StopPhysics(ref SystemState state)
