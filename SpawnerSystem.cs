@@ -265,7 +265,7 @@ public partial struct SpawnerSystem : ISystem
                         ecb.AddComponent<BlockStress>(instance);
                         ecb.AddComponent(instance, new StructureID { Value = (int)nextStructureID });
 
-                        ecb.AddComponent(instance, new BlockHealth { MaxHP = hp, CurrentHP = hp, Defense = def });
+                    
                         ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = bColor });
 
                         if (finalPos.y <= 2.0f) { PhysicsMass m = SystemAPI.GetComponent<PhysicsMass>(spawnerData.Prefab); m.InverseMass = 0f; m.InverseInertia = float3.zero; ecb.SetComponent(instance, m); }
