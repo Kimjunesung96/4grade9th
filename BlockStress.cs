@@ -5,7 +5,11 @@ using Unity.Mathematics; // ⭐ math 에러 해결을 위해 필수 포함!
 
 public struct BlockStress : IComponentData { public float TargetStress; public float SmoothedStress; }
 
-public struct BlockHealth : IComponentData { public float MaxHP; public float CurrentHP; public float Defense; }
+// ⭐ 스캔 도중 원래 위치에서 가장 멀리 밀려난 지점을 기록 (CSV PosX/Y/Z에 최종 반영됨)
+public struct BlockDisplacement : IComponentData { public float3 MaxPos; public float MaxDist; }
+
+// ⭐ 조인트가 처음 만들어졌을 때의 "자연 길이". 이보다 늘어나면 그만큼 당겨진(인장) 것으로 판정
+public struct JointRestLength : IComponentData { public float Value; }
 
 public struct BlockMaterial : IComponentData
 {
@@ -27,8 +31,6 @@ public partial struct DefaultMaterialInitSystem : ISystem
         foreach (var (tag, entity) in SystemAPI.Query<RefRO<BlockTag>>().WithNone<BlockMaterial>().WithEntityAccess())
         {
             ecb.AddComponent(entity, new BlockMaterial { MaterialName = "Default" });
-            // ⭐ 디폴트 방어력 400 셋팅
-            ecb.AddComponent(entity, new BlockHealth { MaxHP = 999999.0f, CurrentHP = 999999.0f, Defense = 400.0f });
         }
         ecb.Playback(state.EntityManager);
         ecb.Dispose();
@@ -44,7 +46,7 @@ public partial class MaterialPropertyInitSystem : SystemBase
         var matManager = MaterialDataManager.Instance;
         if (matManager == null || matManager.MaterialDict.Count == 0) return;
 
-        foreach (var (mat, health, entity) in SystemAPI.Query<RefRW<BlockMaterial>, RefRW<BlockHealth>>().WithAll<BlockTag>().WithEntityAccess())
+        foreach (var (mat, entity) in SystemAPI.Query<RefRW<BlockMaterial>>().WithAll<BlockTag>().WithEntityAccess())
         {
             if (mat.ValueRO.TensileStiffness == 0.0f)
             {
@@ -59,12 +61,6 @@ public partial class MaterialPropertyInitSystem : SystemBase
                 mat.ValueRW.ShearStiffness = spec.Shear;
                 mat.ValueRW.BendingStiffness = spec.Bending;
                 mat.ValueRW.TorsionStiffness = spec.Torsion;
-
-                health.ValueRW.MaxHP = spec.BaseHP;
-                health.ValueRW.CurrentHP = spec.BaseHP;
-
-                // ⭐ 방어력을 인장/압축 중 더 약한 쪽(최솟값)으로 자동 세팅
-                health.ValueRW.Defense = math.min(spec.Tensile, spec.Compressive);
 
                 if (SystemAPI.HasComponent<PhysicsMass>(entity))
                 {
