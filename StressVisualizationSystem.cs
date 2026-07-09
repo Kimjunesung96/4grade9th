@@ -19,7 +19,6 @@ public partial struct ResetStressJob : IJobEntity
     public void Execute(ref BlockStress stress) { stress.TargetStress = 0.0f; }
 }
 
-// ⭐ 자체하중/진동 → 블록이 직접 받는 압축성 스트레스 (조인트 당김과는 별개로 관리)
 [BurstCompile]
 public partial struct ApplyExternalLoadJob : IJobEntity
 {
@@ -59,7 +58,6 @@ public partial struct SmoothStressJob : IJobEntity
     }
 }
 
-// ⭐ 매 프레임 "원래 위치 대비 가장 멀리 밀려난 지점"을 갱신. StopPhysics가 리셋하기 전에 값이 확보되어야 함.
 [BurstCompile]
 public partial struct TrackMaxDisplacementJob : IJobEntity
 {
@@ -84,14 +82,12 @@ public partial struct StressVisualizationSystem : ISystem
     private bool isWeightScanMode;
     private EntityQuery jointQuery;
 
-    // ⭐ 1/3초(초당 3회)마다 인장/압축 파괴 판정
     private float failureTickTimer;
     private const float FailureTickInterval = 1.0f / 3.0f;
 
-    // ⭐ 조인트가 늘어난 거리를 "인장 스트레스" 숫자로 바꾸는 배율 (튜닝 가능한 값)
-    private const float TensionStressScale = 100.0f;
+    // ⭐ 조인트 인장 배율 50,000으로 적용 (단단한 고정 조인트 환경에 맞춤!)
+    private const float TensionStressScale = 10000.0f;
 
-    // 스캔 도중 압축 파괴된 블록들을 최종 CSV에 기록하기 위한 스냅샷
     private NativeList<FixedString512Bytes> destroyedLines;
 
     public void OnCreate(ref SystemState state)
@@ -130,11 +126,8 @@ public partial struct StressVisualizationSystem : ISystem
             }.ScheduleParallel(state.Dependency);
 
             state.Dependency = new SmoothStressJob { DeltaTime = SystemAPI.Time.DeltaTime, SmoothSpeed = 3.0f }.ScheduleParallel(state.Dependency);
-
-            // ⭐ 리셋 전에 최대 변위 지점을 계속 갱신
             state.Dependency = new TrackMaxDisplacementJob().ScheduleParallel(state.Dependency);
 
-            // ⭐ 1/3초마다 인장(조인트 절단)/압축(블록 파괴) 즉시 판정
             failureTickTimer -= SystemAPI.Time.DeltaTime;
             if (failureTickTimer <= 0.0f)
             {
@@ -157,18 +150,15 @@ public partial struct StressVisualizationSystem : ISystem
         NativeList<Entity> allEntities = new NativeList<Entity>(Allocator.Temp);
         NativeList<float3> allPositions = new NativeList<float3>(Allocator.Temp);
 
-        // 1. 씬에 존재하는 모든 블록 수집
         foreach (var (transform, entity) in SystemAPI.Query<RefRO<LocalTransform>>().WithAll<BlockTag>().WithEntityAccess())
         {
             allEntities.Add(entity);
             allPositions.Add(transform.ValueRO.Position);
         }
 
-        // 🔥 빠른 검색과 안전한 중복 방지를 위해 NativeHashSet 사용
         NativeHashSet<Entity> badEntities = new NativeHashSet<Entity>(allEntities.Length, Allocator.Temp);
         int badCount = 0;
 
-        // 2. 불량 블록(겹침, 파편) 판별
         for (int i = 0; i < allEntities.Length; i++)
         {
             float3 myPos = allPositions[i];
@@ -184,21 +174,18 @@ public partial struct StressVisualizationSystem : ISystem
 
             float diffSum = minDiff * 10.0f;
 
-            // 🚫 조건: 파고든 겹침 블록이거나, 건물 밖 허공의 파편인 경우
             if (diffSum <= 29.5f || diffSum >= 69.5f)
             {
                 if (badEntities.Add(allEntities[i]))
                 {
                     badCount++;
-                    ecb.DestroyEntity(allEntities[i]); // 블록 파괴 예약
+                    ecb.DestroyEntity(allEntities[i]);
                 }
             }
         }
 
-        // 3. ⭐ [핵심 추가] 파괴될 블록과 연결된 '조인트(Joint)'도 함께 찾아서 파괴! (물리엔진 에러 원천 차단)
         foreach (var (jointPair, entity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
         {
-            // 이 조인트가 연결한 두 블록(EntityA, EntityB) 중 하나라도 삭제 예정이라면 이 조인트도 쓸모없으므로 파괴
             if (badEntities.Contains(jointPair.ValueRO.EntityA) || badEntities.Contains(jointPair.ValueRO.EntityB))
             {
                 ecb.DestroyEntity(entity);
@@ -210,8 +197,6 @@ public partial struct StressVisualizationSystem : ISystem
             UnityEngine.Debug.LogWarning($"[안전 스폰] 진단 시작: 폭발 유발 블록 및 고립된 파편 {badCount}개 (및 관련 조인트) 자동 삭제 완료!");
         }
 
-        // 3.5. ⭐ 살아있는 조인트 중 "원래 길이(자연 길이)"가 아직 없는 것에만 최초 1회 부여
-        //      (이후 스캔에서는 절대 덮어쓰지 않음 — 자연 길이는 구조물이 변형되기 전 상태여야 하므로)
         foreach (var (jointPair, joint, entity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>, RefRO<PhysicsJoint>>().WithAll<JointTag>().WithEntityAccess())
         {
             if (SystemAPI.HasComponent<JointRestLength>(entity)) continue;
@@ -229,21 +214,19 @@ public partial struct StressVisualizationSystem : ISystem
             ecb.AddComponent(entity, new JointRestLength { Value = restDist });
         }
 
-        // 4. 살아남은 정상 블록에만 안전하게 컴포넌트 추가 및 중력 활성화
         foreach (var (color, stress, transform, entity) in SystemAPI.Query<RefRW<URPMaterialPropertyBaseColor>, RefRW<BlockStress>, RefRO<LocalTransform>>().WithAll<BlockTag>().WithEntityAccess())
         {
-            // 삭제 예정인 블록은 건너뛰어 AddComponent 오류를 방지합니다.
             if (badEntities.Contains(entity)) continue;
 
             color.ValueRW.Value = new float4(1.0f, 1.0f, 1.0f, 1.0f);
             stress.ValueRW.SmoothedStress = 0.0f; stress.ValueRW.TargetStress = 0.0f;
-
+            stress.ValueRW.MaxTensileRatio = 0.0f; // ⭐ 매 스캔 시작 시 초기화
+            
             if (!SystemAPI.HasComponent<OriginalPosition>(entity))
             {
                 ecb.AddComponent(entity, new OriginalPosition { Value = transform.ValueRO.Position });
             }
 
-            // ⭐ 이번 스캔의 최대 변위 기록을 원래 위치로 초기화 (매 스캔마다 리셋)
             float3 originForDisp = SystemAPI.HasComponent<OriginalPosition>(entity)
                 ? SystemAPI.GetComponent<OriginalPosition>(entity).Value
                 : transform.ValueRO.Position;
@@ -268,7 +251,6 @@ public partial struct StressVisualizationSystem : ISystem
 
         ecb.Playback(state.EntityManager);
 
-        // 메모리 정리
         ecb.Dispose();
         allEntities.Dispose();
         allPositions.Dispose();
@@ -285,12 +267,10 @@ public partial struct StressVisualizationSystem : ISystem
         }
     }
 
-    // ⭐ 1/3초마다 호출: 인장 초과 → 조인트만 절단 / 압축 초과 → 블록 통째로 파괴
     private void ApplyFailureCheck(ref SystemState state)
     {
         var ecb = new EntityCommandBuffer(Allocator.Temp);
 
-        // 1) 인장 파괴: 조인트가 늘어난 만큼(스트레스)이 두 블록 평균 Tensile(방어력)을 넘으면 그 조인트만 끊음
         foreach (var (jointPair, joint, rest, jointEntity) in SystemAPI.Query<
           RefRO<PhysicsConstrainedBodyPair>, RefRO<PhysicsJoint>, RefRO<JointRestLength>>().WithAll<JointTag>().WithEntityAccess())
         {
@@ -304,6 +284,7 @@ public partial struct StressVisualizationSystem : ISystem
             float3 pivotB = math.transform(new RigidTransform(transB.Rotation, transB.Position), joint.ValueRO.BodyBFromJoint.Position);
             float dist = math.distance(pivotA, pivotB);
             float stretch = math.max(0.0f, dist - rest.ValueRO.Value);
+            
             if (stretch <= 0.0f) continue;
 
             var matA = SystemAPI.GetComponent<BlockMaterial>(eA);
@@ -311,14 +292,27 @@ public partial struct StressVisualizationSystem : ISystem
             float tensileStress = stretch * TensionStressScale;
             float tensileDefense = (matA.TensileStiffness + matB.TensileStiffness) * 0.5f;
 
+            // ⭐ 인장 스트레스 비율 계산
+            float ratio = tensileStress / math.max(1.0f, tensileDefense);
+
+            // ⭐ 조인트 양끝 블록 장부에 가장 팽팽했던 순간의 인장 비율 갱신 기록
+            if (SystemAPI.HasComponent<BlockStress>(eA)) 
+            {
+                var stressA = SystemAPI.GetComponentRW<BlockStress>(eA);
+                stressA.ValueRW.MaxTensileRatio = math.max(stressA.ValueRO.MaxTensileRatio, ratio);
+            }
+            if (SystemAPI.HasComponent<BlockStress>(eB)) 
+            {
+                var stressB = SystemAPI.GetComponentRW<BlockStress>(eB);
+                stressB.ValueRW.MaxTensileRatio = math.max(stressB.ValueRO.MaxTensileRatio, ratio);
+            }
+
             if (tensileStress > tensileDefense)
             {
-                // ⭐ 블록은 그대로 두고 연결만 끊음 → 중력으로 떨어지거나 기울기 시작
                 ecb.DestroyEntity(jointEntity);
             }
         }
 
-        // 2) 압축 파괴: 블록 자체 스트레스(자체하중/진동)가 Compressive(방어력)를 넘으면 블록 통째로 파괴
         var toDestroy = new NativeList<Entity>(Allocator.Temp);
         foreach (var (stress, mat, pos, entity) in SystemAPI.Query<
           RefRO<BlockStress>, RefRO<BlockMaterial>, RefRO<OriginalPosition>>().WithEntityAccess())
@@ -344,7 +338,6 @@ public partial struct StressVisualizationSystem : ISystem
             toDestroy.Add(entity);
         }
 
-        // 압축 파괴된 블록에 연결된 조인트도 정리 (물리엔진이 죽은 참조 밟지 않도록)
         foreach (var (jointPair, jointEntity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
         {
             for (int i = 0; i < toDestroy.Length; i++)
@@ -380,7 +373,6 @@ public partial struct StressVisualizationSystem : ISystem
         var tensileMap = new Dictionary<string, string>();
         var compMap = new Dictionary<string, string>();
 
-        // ① 기존 CurrentStress 읽기 (Y키에서 수정한 재질 데이터 완벽 보존)
         if (File.Exists(path))
         {
             var oldLines = File.ReadAllLines(path).ToList();
@@ -392,14 +384,13 @@ public partial struct StressVisualizationSystem : ISystem
                     string k = c.ElementAt(0);
                     toolMap[k] = c.ElementAt(10);
                     typeMap[k] = c.ElementAt(11);
-                    matMap[k] = c.ElementAt(7);      // 재질 이름 보존
-                    tensileMap[k] = c.ElementAt(8);  // 인장 강도 보존
-                    compMap[k] = c.ElementAt(9);     // 압축 강도 보존
+                    matMap[k] = c.ElementAt(7);      
+                    tensileMap[k] = c.ElementAt(8);  
+                    compMap[k] = c.ElementAt(9);     
                 }
             }
         }
 
-        // ② Reinforcement_Plan 읽기 (최신 보강 철근 데이터 덮어쓰기)
         if (File.Exists(reinforcePath))
         {
             var rLines = File.ReadAllLines(reinforcePath).ToList();
@@ -417,7 +408,6 @@ public partial struct StressVisualizationSystem : ISystem
             }
         }
 
-        // ③ Last_Building 읽기
         if (File.Exists(lastBuildPath))
         {
             var lLines = File.ReadAllLines(lastBuildPath).ToList();
@@ -433,7 +423,6 @@ public partial struct StressVisualizationSystem : ISystem
             }
         }
 
-        // ④ 보존된 데이터를 바탕으로 스트레스만 업데이트하여 CSV 작성
         using (StreamWriter writer = new StreamWriter(path, false))
         {
             writer.WriteLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
@@ -445,7 +434,6 @@ public partial struct StressVisualizationSystem : ISystem
               RefRO<OriginalPosition>,
               RefRO<BlockDisplacement>>())
             {
-                // ⭐ ID는 반드시 "원래 위치" 기준으로 생성 (자재 lookup 키/보강 로직과의 연결고리 유지)
                 float3 originPos = pos.ValueRO.Value;
                 float ix = math.round(originPos.x * 10f); float iy = math.round(originPos.y * 10f); float iz = math.round(originPos.z * 10f);
 
@@ -454,58 +442,68 @@ public partial struct StressVisualizationSystem : ISystem
                 string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
                 string id = strX + "_" + strZ + "_" + strY;
 
-                // ⭐ PosX/Y/Z에는 이번 스캔에서 가장 멀리 밀려난 지점을 기록
                 float3 p = disp.ValueRO.MaxDist > 0.0f ? disp.ValueRO.MaxPos : originPos;
 
-                // ⭐ 기존 CSV의 재료 데이터가 있으면 그것을 최우선으로 가져옴! (V키가 재질을 엎어버리는 현상 해결)
                 string mName = matMap.ContainsKey(id) ? matMap[id] : mat.ValueRO.MaterialName.ToString().Replace("\0", "").Trim();
                 string tStr = tensileMap.ContainsKey(id) ? tensileMap[id] : mat.ValueRO.TensileStiffness.ToString("F1");
                 string cStr = compMap.ContainsKey(id) ? compMap[id] : mat.ValueRO.CompressiveStiffness.ToString("F1");
 
-                // 강도 문자열을 숫자로 안전하게 변환
                 float tensile = 100f; float compressive = 100f;
                 float.TryParse(tStr, out tensile);
                 float.TryParse(cStr, out compressive);
                 if (tensile <= 0.1f) tensile = mat.ValueRO.TensileStiffness;
                 if (compressive <= 0.1f) compressive = mat.ValueRO.CompressiveStiffness;
 
-                float curStress = stress.ValueRO.SmoothedStress; // 자체하중/진동에 의한 압축성 스트레스
-                float t = math.clamp(curStress / math.max(1.0f, compressive), 0.0f, 1.0f);
+                float curStress = stress.ValueRO.SmoothedStress;
+                
+                // ⭐ 1. 압축 스트레스 비율
+                float compRatio = math.clamp(curStress / math.max(1.0f, compressive), 0.0f, 1.0f);
+                // ⭐ 2. 인장 스트레스 비율
+                float tensRatio = math.clamp(stress.ValueRO.MaxTensileRatio, 0.0f, 1.0f);
 
-                // ⭐ 재질별 고유 색상 매핑
-                float4 baseCol = new float4(0.7f, 0.7f, 0.7f, 1.0f); // 콘크리트 회색
-                if (mName.Contains("Steel")) baseCol = new float4(0.2f, 0.5f, 1.0f, 1.0f); // 파란색
-                else if (mName.Contains("Wood") || mName.Contains("Timber")) baseCol = new float4(0.6f, 0.4f, 0.2f, 1.0f); // 갈색
-                else if (mName.Contains("Brick")) baseCol = new float4(0.8f, 0.3f, 0.2f, 1.0f); // 진홍색
+                // ⭐ 3. 둘 중 더 위험한 비율로 t값 산정
+                float t = math.max(compRatio, tensRatio);
+                
+                // ⭐ 엑셀에 들어갈 최종 스트레스 값도 가장 큰 데미지 기준으로
+                float finalStressRecord = math.max(curStress, stress.ValueRO.MaxTensileRatio * tensile);
+
+                // ⭐ 재질별 고유 기본 색상
+                float4 baseCol = new float4(0.7f, 0.7f, 0.7f, 1.0f);
+                if (mName.Contains("Steel")) baseCol = new float4(0.2f, 0.5f, 1.0f, 1.0f);
+                else if (mName.Contains("Wood") || mName.Contains("Timber")) baseCol = new float4(0.6f, 0.4f, 0.2f, 1.0f);
+                else if (mName.Contains("Brick")) baseCol = new float4(0.8f, 0.3f, 0.2f, 1.0f);
 
                 string risk = "Safe";
                 string pres = "N";
 
-                if (t >= 0.8f)
+                // ⭐ 그라데이션: 안전색에서 빨간색으로 t만큼 섞음!
+                color.ValueRW.Value = math.lerp(baseCol, new float4(1.0f, 0.0f, 0.0f, 1.0f), t);
+
+                if (t >= 0.99f)
                 {
-                    color.ValueRW.Value = new float4(1.0f, 0.0f, 0.0f, 1.0f); // 위험(빨강)
-                    risk = "Danger";
-                    pres = "Y";
+                    risk = "Danger"; pres = "Y";
                 }
-                else if (t >= 0.5f)
+                else if (t >= 0.66f)
                 {
-                    color.ValueRW.Value = new float4(1.0f, 1.0f, 0.0f, 1.0f); // 경고(노랑)
-                    risk = "Warning";
+                    risk = "Danger"; pres = "Y";
+                }
+                else if (t >= 0.33f)
+                {
+                    risk = "Warning"; pres = "N";
                 }
                 else
                 {
-                    color.ValueRW.Value = baseCol; // 안전(재질 본연의 색상)
+                    risk = "Safe"; pres = "N";
                 }
 
                 string tool = toolMap.ContainsKey(id) ? toolMap[id] : "Existing";
                 string type = typeMap.ContainsKey(id) ? typeMap[id] : (originPos.y > 1.5f ? "Wall" : "Floor");
 
-                // 최종적으로 업데이트된 스트레스와 보존된 재질 정보를 엑셀로 저장
                 string lineData = id + "," +
                                   p.x.ToString("F2") + "," +
                                   p.y.ToString("F2") + "," +
                                   p.z.ToString("F2") + "," +
-                                  curStress.ToString("F2") + "," +
+                                  finalStressRecord.ToString("F2") + "," + 
                                   risk + "," +
                                   pres + "," +
                                   mName + "," +
@@ -517,7 +515,6 @@ public partial struct StressVisualizationSystem : ISystem
                 writer.WriteLine(lineData);
             }
 
-            // ⭐ 스캔 도중(1/3초 틱) 압축 파괴로 이미 사라진 블록들도 마저 기록
             foreach (var line in destroyedLines)
             {
                 writer.WriteLine(line.ToString());

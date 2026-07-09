@@ -1,7 +1,7 @@
 ﻿using UnityEngine;
 using System.IO;
 using System.Collections.Generic;
-using System.Linq; // ⭐ 이 줄이 빠져서 생긴 에러들을 해결합니다!
+using System.Linq;
 
 public class ReinforcementManager : MonoBehaviour
 {
@@ -33,20 +33,30 @@ public class ReinforcementManager : MonoBehaviour
             string currentLine = lines.ElementAt(i);
             var cols = currentLine.Split(',').ToList();
 
-            // ⭐ 12칸 데이터를 모두 읽어오도록 안전망 수정
             if (cols.Count < 12) continue;
 
             string id = cols.ElementAt(0);
-            existingBlocks.Add(id);
+            
+            // ⭐ [버그 예방추가] 블록이 완전히 파괴(DESTROYED)된 데이터가 아닐 때만 기존 블록 장부에 등록!
+            if (cols.ElementAt(1) != "DESTROYED")
+            {
+                existingBlocks.Add(id);
+            }
 
-            float posY = float.Parse(cols.ElementAt(2));
+            // 💥 [수정됨] 엑셀 칸이 "DESTROYED"일 수 있으므로...
+            // 💥 [수정됨] 엑셀 칸이 "DESTROYED"일 수 있으므로, 무조건 안전한 ID에서 Y좌표를 추출!
+            float posY = float.Parse(id.Split('_')[2]) / 10f;
             string typeStr = posY > 1.5f ? "Wall" : "Floor";
 
-            // ⭐ 하드코딩된 Concrete 제거! CurrentStress.csv의 재질과 강도를 그대로 읽어서 보존
+            // 💥 [수정됨] 새 도면에 "DESTROYED"라는 글자가 옮겨가는 것을 막고, ID에서 원래 좌표를 복구
+            string safeX = cols.ElementAt(1) == "DESTROYED" ? (float.Parse(id.Split('_')[0]) / 10f).ToString("F2") : cols.ElementAt(1);
+            string safeY = cols.ElementAt(2) == "DESTROYED" ? (float.Parse(id.Split('_')[2]) / 10f).ToString("F2") : cols.ElementAt(2);
+            string safeZ = cols.ElementAt(3) == "DESTROYED" ? (float.Parse(id.Split('_')[1]) / 10f).ToString("F2") : cols.ElementAt(3);
+
             string lineData = id + "," +
-                              cols.ElementAt(1) + "," +
-                              cols.ElementAt(2) + "," +
-                              cols.ElementAt(3) + "," +
+                              safeX + "," +
+                              safeY + "," +
+                              safeZ + "," +
                               "0.00" + "," +
                               "Safe" + "," +
                               "N" + "," +
@@ -56,64 +66,75 @@ public class ReinforcementManager : MonoBehaviour
                               "Existing" + "," +
                               typeStr;
 
-            planLines.Add(lineData);
+           planLines.Add(lineData);
         }
 
-        for (int i = 1; i < lines.Count; i++)
+        // ⭐ [여기 추가!] UI에서 보강 옵션을 켰는지 확인
+        bool shouldReinforce = true;
+        if (BudgetUIManager.Instance != null)
         {
-            string currentLine = lines.ElementAt(i);
-            var cols = currentLine.Split(',').ToList();
-            if (cols.Count < 12) continue;
+            shouldReinforce = BudgetUIManager.Instance.wantsReinforcement;
+        }
 
-            // 처방전(Prescription)이 Y인 블록만 보강
-            if (cols.ElementAt(6) != "Y") continue;
-
-            string id = cols.ElementAt(0);
-            var parts = id.Split('_').ToList();
-            if (parts.Count != 3) continue;
-
-            float cleanX = float.Parse(cols.ElementAt(1));
-            float cleanZ = float.Parse(cols.ElementAt(3));
-            float currentY = float.Parse(parts.ElementAt(2));
-
-            while (currentY >= 45f)
+        // ⭐ UI에서 체크했을 때만 아래의 보강 루프를 실행!
+        if (shouldReinforce)
+        {
+            for (int i = 1; i < lines.Count; i++)
             {
-                currentY -= 30f;
-                float ix = Mathf.Round((cleanX + 0.001f) * 10f);
-                float iz = Mathf.Round((cleanZ + 0.001f) * 10f);
-                float iy = currentY;
+                string currentLine = lines.ElementAt(i);
+                var cols = currentLine.Split(',').ToList();
+                if (cols.Count < 12) continue;
 
-                string strX = (ix < 0f ? "-" : "0") + Mathf.Abs(ix).ToString("000");
-                string strZ = (iz < 0f ? "-" : "0") + Mathf.Abs(iz).ToString("000");
-                string strY = (iy < 0f ? "-" : "0") + Mathf.Abs(iy).ToString("000");
-                string targetId = strX + "_" + strZ + "_" + strY;
+                // 처방전(Prescription)이 Y인 블록만 보강 (파괴된 블록도 Y로 기록되어 있음)
+                if (cols.ElementAt(6) != "Y") continue;
+                string id = cols.ElementAt(0);
+                var parts = id.Split('_').ToList();
+                if (parts.Count != 3) continue;
 
-                if (!existingBlocks.Contains(targetId))
+                // 엑셀 칸 무시하고 무조건 ID에서 안전하게 좌표 추출
+                float cleanX = float.Parse(parts.ElementAt(0)) / 10f;
+                float cleanZ = float.Parse(parts.ElementAt(1)) / 10f;
+                float currentY = float.Parse(parts.ElementAt(2));
+
+                while (currentY >= 45f)
                 {
-                    float exactY = currentY / 10f;
-                    string typeStr = exactY > 1.5f ? "Wall" : "Floor";
+                    currentY -= 30f;
+                    float ix = Mathf.Round((cleanX + 0.001f) * 10f);
+                    float iz = Mathf.Round((cleanZ + 0.001f) * 10f);
+                    float iy = currentY;
 
-                    // 보강 철근은 무조건 Steel
-                    string newLineData = targetId + "," +
-                                         cleanX.ToString("F2") + "," +
-                                         exactY.ToString("F2") + "," +
-                                         cleanZ.ToString("F2") + "," +
-                                         "0.00" + "," +
-                                         "Safe" + "," +
-                                         "N" + "," +
-                                         "Steel" + "," +
-                                         "0.0" + "," +
-                                         "0.0" + "," +
-                                         "Reinforcement" + "," +
-                                         typeStr;
+                    string strX = (ix < 0f ? "-" : "0") + Mathf.Abs(ix).ToString("000");
+                    string strZ = (iz < 0f ? "-" : "0") + Mathf.Abs(iz).ToString("000");
+                    string strY = (iy < 0f ? "-" : "0") + Mathf.Abs(iy).ToString("000");
+                    string targetId = strX + "_" + strZ + "_" + strY;
 
-                    planLines.Add(newLineData);
-                    existingBlocks.Add(targetId);
+                    if (!existingBlocks.Contains(targetId))
+                    {
+                        float exactY = currentY / 10f;
+                        string typeStr = exactY > 1.5f ? "Wall" : "Floor";
+
+                        // 보강 철근은 무조건 Steel
+                        string newLineData = targetId + "," +
+                                             cleanX.ToString("F2") + "," +
+                                             exactY.ToString("F2") + "," +
+                                             cleanZ.ToString("F2") + "," +
+                                             "0.00" + "," +
+                                             "Safe" + "," +
+                                             "N" + "," +
+                                             "Steel" + "," +
+                                             "0.0" + "," +
+                                             "0.0" + "," +
+                                             "Reinforcement" + "," +
+                                             typeStr;
+
+                        planLines.Add(newLineData);
+                        existingBlocks.Add(targetId);
+                    }
                 }
             }
-        }
+        } // ⭐ if (shouldReinforce) 끝나는 괄호
 
         File.WriteAllLines(planCsvPath, planLines);
-        Debug.Log("📄 [ReinforcementManager] 12칸 표준 도면 작성 완료 (기존 재질 완벽 보존)!");
+        Debug.Log("📄 [ReinforcementManager] 12칸 표준 도면 작성 완료 (UI 보강 옵션 연동 완벽 적용)!");
     }
 }

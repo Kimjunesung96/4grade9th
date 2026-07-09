@@ -22,7 +22,7 @@ public class BudgetUIManager : MonoBehaviour
 
     private string budgetInput = "500000";
     private string floorCountInput = "1";
-    private bool wantsReinforcement = false;
+    public bool wantsReinforcement = false;
 
     private bool isCheapON = false;
     private bool isExpensiveON = false;
