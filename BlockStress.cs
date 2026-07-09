@@ -3,7 +3,11 @@ using Unity.Collections;
 using Unity.Physics;
 using Unity.Mathematics; // ⭐ math 에러 해결을 위해 필수 포함!
 
-public struct BlockStress : IComponentData { public float TargetStress; public float SmoothedStress; }
+public struct BlockStress : IComponentData { 
+    public float TargetStress; 
+    public float SmoothedStress;
+    public float MaxTensileRatio; // ⭐ 5초 동안 조인트가 당겨진 최대 비율을 기억할 공간 추가!
+}
 
 // ⭐ 스캔 도중 원래 위치에서 가장 멀리 밀려난 지점을 기록 (CSV PosX/Y/Z에 최종 반영됨)
 public struct BlockDisplacement : IComponentData { public float3 MaxPos; public float MaxDist; }
