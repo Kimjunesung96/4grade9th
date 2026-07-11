@@ -24,8 +24,6 @@ public class ReinforcementManager : MonoBehaviour
         if (lines.Count <= 1) return;
 
         HashSet<string> existingBlocks = new HashSet<string>();
-
-        // 12칸 표준 규격으로 헤더 교체
         List<string> planLines = new List<string> { "BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type" };
 
         for (int i = 1; i < lines.Count; i++)
@@ -37,18 +35,14 @@ public class ReinforcementManager : MonoBehaviour
 
             string id = cols.ElementAt(0);
             
-            // ⭐ [버그 예방추가] 블록이 완전히 파괴(DESTROYED)된 데이터가 아닐 때만 기존 블록 장부에 등록!
             if (cols.ElementAt(1) != "DESTROYED")
             {
                 existingBlocks.Add(id);
             }
 
-            // 💥 [수정됨] 엑셀 칸이 "DESTROYED"일 수 있으므로...
-            // 💥 [수정됨] 엑셀 칸이 "DESTROYED"일 수 있으므로, 무조건 안전한 ID에서 Y좌표를 추출!
             float posY = float.Parse(id.Split('_')[2]) / 10f;
             string typeStr = posY > 1.5f ? "Wall" : "Floor";
 
-            // 💥 [수정됨] 새 도면에 "DESTROYED"라는 글자가 옮겨가는 것을 막고, ID에서 원래 좌표를 복구
             string safeX = cols.ElementAt(1) == "DESTROYED" ? (float.Parse(id.Split('_')[0]) / 10f).ToString("F2") : cols.ElementAt(1);
             string safeY = cols.ElementAt(2) == "DESTROYED" ? (float.Parse(id.Split('_')[2]) / 10f).ToString("F2") : cols.ElementAt(2);
             string safeZ = cols.ElementAt(3) == "DESTROYED" ? (float.Parse(id.Split('_')[1]) / 10f).ToString("F2") : cols.ElementAt(3);
@@ -60,81 +54,196 @@ public class ReinforcementManager : MonoBehaviour
                               "0.00" + "," +
                               "Safe" + "," +
                               "N" + "," +
-                              cols.ElementAt(7) + "," +  // 재질 이름 유지
-                              cols.ElementAt(8) + "," +  // 인장 강도 유지
-                              cols.ElementAt(9) + "," +  // 압축 강도 유지
+                              cols.ElementAt(7) + "," +
+                              cols.ElementAt(8) + "," +
+                              cols.ElementAt(9) + "," +
                               "Existing" + "," +
                               typeStr;
 
            planLines.Add(lineData);
         }
 
-        // ⭐ [여기 추가!] UI에서 보강 옵션을 켰는지 확인
         bool shouldReinforce = true;
         if (BudgetUIManager.Instance != null)
         {
             shouldReinforce = BudgetUIManager.Instance.wantsReinforcement;
         }
 
-        // ⭐ UI에서 체크했을 때만 아래의 보강 루프를 실행!
         if (shouldReinforce)
         {
+            List<(Vector3 pos, bool isDanger)> flaggedPoints = new List<(Vector3 pos, bool isDanger)>();
+
             for (int i = 1; i < lines.Count; i++)
             {
-                string currentLine = lines.ElementAt(i);
-                var cols = currentLine.Split(',').ToList();
-                if (cols.Count < 12) continue;
+                var cols = lines[i].Split(',').ToList();
+                if (cols.Count < 12 || cols[5] != "Danger") continue; 
 
-                // 처방전(Prescription)이 Y인 블록만 보강 (파괴된 블록도 Y로 기록되어 있음)
-                if (cols.ElementAt(6) != "Y") continue;
-                string id = cols.ElementAt(0);
+                string id = cols[0];
                 var parts = id.Split('_').ToList();
                 if (parts.Count != 3) continue;
 
-                // 엑셀 칸 무시하고 무조건 ID에서 안전하게 좌표 추출
-                float cleanX = float.Parse(parts.ElementAt(0)) / 10f;
-                float cleanZ = float.Parse(parts.ElementAt(1)) / 10f;
-                float currentY = float.Parse(parts.ElementAt(2));
+                float cleanX = float.Parse(parts[0]) / 10f;
+                float cleanZ = float.Parse(parts[1]) / 10f;
+                float currentY = float.Parse(parts[2]); 
 
-                while (currentY >= 45f)
+                flaggedPoints.Add((new Vector3(cleanX, currentY, cleanZ), true));
+            }
+
+            if (flaggedPoints.Count > 0)
+            {
+                flaggedPoints = flaggedPoints.OrderBy(p => Vector2.Distance(new Vector2(p.pos.x, p.pos.z), Vector2.zero)).ToList();
+
+                List<Vector2> builtColumnsXZ = new List<Vector2>();
+                Dictionary<Vector2, float> columnStartHeight = new Dictionary<Vector2, float>();
+
+                foreach (var p in flaggedPoints)
                 {
-                    currentY -= 30f;
-                    float ix = Mathf.Round((cleanX + 0.001f) * 10f);
-                    float iz = Mathf.Round((cleanZ + 0.001f) * 10f);
-                    float iy = currentY;
+                    Vector2 currentXZ = new Vector2(p.pos.x, p.pos.z);
+                    bool inForbiddenZone = false;
 
-                    string strX = (ix < 0f ? "-" : "0") + Mathf.Abs(ix).ToString("000");
-                    string strZ = (iz < 0f ? "-" : "0") + Mathf.Abs(iz).ToString("000");
-                    string strY = (iy < 0f ? "-" : "0") + Mathf.Abs(iy).ToString("000");
-                    string targetId = strX + "_" + strZ + "_" + strY;
-
-                    if (!existingBlocks.Contains(targetId))
+                    // ⭐ 12.0f(4칸) 간격 격자. 팔(arm) 사이에 딱 1칸이 남게 됨.
+                    foreach (var built in builtColumnsXZ)
                     {
+                        float dx = Mathf.Abs(currentXZ.x - built.x);
+                        float dz = Mathf.Abs(currentXZ.y - built.y);
+                        
+                        if (dx < 11.9f && dz < 11.9f)
+                        {
+                            inForbiddenZone = true;
+                            break;
+                        }
+                    }
+
+                    if (inForbiddenZone) continue; 
+
+                    builtColumnsXZ.Add(currentXZ);
+                    columnStartHeight[currentXZ] = p.pos.y;
+
+                    float cleanX = p.pos.x;
+                    float cleanZ = p.pos.z;
+                    float currentY = p.pos.y;
+
+                    while (currentY >= 45f)
+                    {
+                        currentY -= 30f;
                         float exactY = currentY / 10f;
-                        string typeStr = exactY > 1.5f ? "Wall" : "Floor";
+                        string typeStr = "Reinforcement";
 
-                        // 보강 철근은 무조건 Steel
-                        string newLineData = targetId + "," +
-                                             cleanX.ToString("F2") + "," +
-                                             exactY.ToString("F2") + "," +
-                                             cleanZ.ToString("F2") + "," +
-                                             "0.00" + "," +
-                                             "Safe" + "," +
-                                             "N" + "," +
-                                             "Steel" + "," +
-                                             "0.0" + "," +
-                                             "0.0" + "," +
-                                             "Reinforcement" + "," +
-                                             typeStr;
+                        List<Vector3> crossOffsets = new List<Vector3>()
+                        {
+                            new Vector3(0, 0, 0),       
+                            new Vector3(3.0f, 0, 0),    
+                            new Vector3(-3.0f, 0, 0),   
+                            new Vector3(0, 0, 3.0f),    
+                            new Vector3(0, 0, -3.0f)    
+                        };
 
-                        planLines.Add(newLineData);
-                        existingBlocks.Add(targetId);
+                        foreach (var offset in crossOffsets)
+                        {
+                            float targetX = cleanX + offset.x;
+                            float targetZ = cleanZ + offset.z;
+
+                            float ix = Mathf.Round((targetX + 0.001f) * 10f);
+                            float iz = Mathf.Round((targetZ + 0.001f) * 10f);
+                            float iy = currentY;
+
+                            string strX = (ix < 0f ? "-" : "0") + Mathf.Abs(ix).ToString("000");
+                            string strZ = (iz < 0f ? "-" : "0") + Mathf.Abs(iz).ToString("000");
+                            string strY = (iy < 0f ? "-" : "0") + Mathf.Abs(iy).ToString("000");
+                            string targetId = strX + "_" + strZ + "_" + strY;
+
+                            if (!existingBlocks.Contains(targetId))
+                            {
+                                string newLineData = targetId + "," +
+                                                     targetX.ToString("F2") + "," +
+                                                     exactY.ToString("F2") + "," +
+                                                     targetZ.ToString("F2") + "," +
+                                                     "0.00" + "," +
+                                                     "Safe" + "," +
+                                                     "N" + "," +
+                                                     "Steel" + "," +
+                                                     "0.0" + "," +
+                                                     "0.0" + "," +
+                                                     "Reinforcement" + "," +
+                                                     typeStr;
+
+                                planLines.Add(newLineData);
+                                existingBlocks.Add(targetId);
+                            }
+                        }
+                    }
+                }
+
+                for (int i = 0; i < builtColumnsXZ.Count; i++)
+                {
+                    for (int j = i + 1; j < builtColumnsXZ.Count; j++)
+                    {
+                        Vector2 colA = builtColumnsXZ[i];
+                        Vector2 colB = builtColumnsXZ[j];
+
+                        float dx = Mathf.Abs(colA.x - colB.x);
+                        float dz = Mathf.Abs(colA.y - colB.y);
+
+                        // ⭐ 12.0f(4칸) 거리에 있는 이웃 기둥 찾기
+                        bool isHorizontalNeighbor = (dx > 11.9f && dx < 12.1f) && dz < 0.1f;
+                        bool isVerticalNeighbor   = (dz > 11.9f && dz < 12.1f) && dx < 0.1f;
+
+                        if (isHorizontalNeighbor || isVerticalNeighbor)
+                        {
+                            float meshY = Mathf.Max(columnStartHeight[colA], columnStartHeight[colB]);
+                            
+                            while (meshY >= 45f)
+                            {
+                                float exactY = meshY / 10f;
+                                string typeStr = "Reinforcement";
+
+                                // ⭐ 12.0 / 3.0 = 4스텝! (징검다리는 1~3번째 블록 위치를 계산)
+                                // s=1 지점(3.0f)은 기둥 팔과 겹치고, s=3 지점(9.0f)도 상대 기둥 팔과 겹쳐서 건너뜀.
+                                // s=2 지점(6.0f)만 비어있으므로 딱 이어지는 블록 1개가 생성됨.
+                                int steps = 4; 
+                                for (int s = 1; s < steps; s++) 
+                                {
+                                    float t = (float)s / steps;
+                                    Vector2 interpXZ = Vector2.Lerp(colA, colB, t);
+
+                                    float ix = Mathf.Round((interpXZ.x + 0.001f) * 10f);
+                                    float iz = Mathf.Round((interpXZ.y + 0.001f) * 10f); 
+                                    float iy = meshY;
+
+                                    string strX = (ix < 0f ? "-" : "0") + Mathf.Abs(ix).ToString("000");
+                                    string strZ = (iz < 0f ? "-" : "0") + Mathf.Abs(iz).ToString("000");
+                                    string strY = (iy < 0f ? "-" : "0") + Mathf.Abs(iy).ToString("000");
+                                    string targetId = strX + "_" + strZ + "_" + strY;
+
+                                    if (!existingBlocks.Contains(targetId))
+                                    {
+                                        string newLineData = targetId + "," +
+                                                             interpXZ.x.ToString("F2") + "," +
+                                                             exactY.ToString("F2") + "," +
+                                                             interpXZ.y.ToString("F2") + "," +
+                                                             "0.00" + "," +
+                                                             "Safe" + "," +
+                                                             "N" + "," +
+                                                             "Steel" + "," +
+                                                             "0.0" + "," +
+                                                             "0.0" + "," +
+                                                             "Reinforcement" + "," +
+                                                             typeStr;
+
+                                        planLines.Add(newLineData);
+                                        existingBlocks.Add(targetId);
+                                    }
+                                }
+                                // ⭐ 3층(90.0f) 간격으로 수평 보 연결
+                                meshY -= 90f; 
+                            }
+                        }
                     }
                 }
             }
-        } // ⭐ if (shouldReinforce) 끝나는 괄호
+        }
 
         File.WriteAllLines(planCsvPath, planLines);
-        Debug.Log("📄 [ReinforcementManager] 12칸 표준 도면 작성 완료 (UI 보강 옵션 연동 완벽 적용)!");
+        Debug.Log("📄 [ReinforcementManager] 4칸(12.0f) 격자, 1칸 빈틈 3층 간격 보강 적용 완료!");
     }
 }
