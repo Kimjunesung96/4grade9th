@@ -85,8 +85,7 @@ public partial struct StressVisualizationSystem : ISystem
     private float failureTickTimer;
     private const float FailureTickInterval = 1.0f / 3.0f;
 
-    // ⭐ 조인트 인장 배율 50,000으로 적용 (단단한 고정 조인트 환경에 맞춤!)
-    private const float TensionStressScale = 10000.0f;
+    private const float TensionStressScale = 5000.0f;
 
     private NativeList<FixedString512Bytes> destroyedLines;
 
@@ -220,7 +219,7 @@ public partial struct StressVisualizationSystem : ISystem
 
             color.ValueRW.Value = new float4(1.0f, 1.0f, 1.0f, 1.0f);
             stress.ValueRW.SmoothedStress = 0.0f; stress.ValueRW.TargetStress = 0.0f;
-            stress.ValueRW.MaxTensileRatio = 0.0f; // ⭐ 매 스캔 시작 시 초기화
+            stress.ValueRW.MaxTensileRatio = 0.0f; 
             
             if (!SystemAPI.HasComponent<OriginalPosition>(entity))
             {
@@ -292,10 +291,8 @@ public partial struct StressVisualizationSystem : ISystem
             float tensileStress = stretch * TensionStressScale;
             float tensileDefense = (matA.TensileStiffness + matB.TensileStiffness) * 0.5f;
 
-            // ⭐ 인장 스트레스 비율 계산
             float ratio = tensileStress / math.max(1.0f, tensileDefense);
 
-            // ⭐ 조인트 양끝 블록 장부에 가장 팽팽했던 순간의 인장 비율 갱신 기록
             if (SystemAPI.HasComponent<BlockStress>(eA)) 
             {
                 var stressA = SystemAPI.GetComponentRW<BlockStress>(eA);
@@ -327,12 +324,16 @@ public partial struct StressVisualizationSystem : ISystem
             string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
             string id = strX + "_" + strZ + "_" + strY;
             string mName = mat.ValueRO.MaterialName.ToString().Replace("\0", "").Trim();
-            string type = originPos.y > 1.5f ? "Wall" : "Floor";
-
-            string destroyedLineStr = id + ",DESTROYED,DESTROYED,DESTROYED," +
-                                compStress.ToString("F2") + ",Destroyed,Y," +
-                                mName + "," + mat.ValueRO.TensileStiffness.ToString("F1") + "," +
-                                mat.ValueRO.CompressiveStiffness.ToString("F1") + "," + "Existing" + "," + type;
+            
+            // ⭐ [핵심 수정] 무작정 Wall로 덮어씌우지 않기 위해, 데이터를 조각내어 '|' 기호로 포장해둡니다.
+            // 나중에 UpdateResults에서 딕셔너리와 결합하여 정확한 꼬리표를 찾아줄 거예요.
+            string destroyedLineStr = id + "|" +
+                                      compStress.ToString("F2") + "|" +
+                                      mName + "|" +
+                                      mat.ValueRO.TensileStiffness.ToString("F1") + "|" +
+                                      mat.ValueRO.CompressiveStiffness.ToString("F1") + "|" +
+                                      originPos.y.ToString("F2");
+                                      
             destroyedLines.Add(new FixedString512Bytes(destroyedLineStr));
 
             toDestroy.Add(entity);
@@ -401,6 +402,7 @@ public partial struct StressVisualizationSystem : ISystem
                 {
                     string k = c.ElementAt(0);
                     toolMap[k] = c.ElementAt(10);
+                    typeMap[k] = c.ElementAt(11); // ⭐ [핵심 수정] 여기서 Type(Reinforcement) 정보도 확실히 읽어옵니다!
                     matMap[k] = c.ElementAt(7);
                     tensileMap[k] = c.ElementAt(8);
                     compMap[k] = c.ElementAt(9);
@@ -417,8 +419,9 @@ public partial struct StressVisualizationSystem : ISystem
                 if (c.Count >= 12)
                 {
                     string k = c.ElementAt(0);
-                    if (typeMap.ContainsKey(k)) typeMap.Remove(k);
-                    typeMap.Add(k, c.ElementAt(11));
+                    typeMap[k] = c.ElementAt(11); 
+                    toolMap[k] = c.ElementAt(10); // ⭐ 도구 이름도 확실히 갱신!
+                    matMap[k] = c.ElementAt(7);   // ⭐ 재질도 최신으로 갱신!
                 }
             }
         }
@@ -455,19 +458,11 @@ public partial struct StressVisualizationSystem : ISystem
                 if (compressive <= 0.1f) compressive = mat.ValueRO.CompressiveStiffness;
 
                 float curStress = stress.ValueRO.SmoothedStress;
-                
-                // ⭐ 1. 압축 스트레스 비율
                 float compRatio = math.clamp(curStress / math.max(1.0f, compressive), 0.0f, 1.0f);
-                // ⭐ 2. 인장 스트레스 비율
                 float tensRatio = math.clamp(stress.ValueRO.MaxTensileRatio, 0.0f, 1.0f);
-
-                // ⭐ 3. 둘 중 더 위험한 비율로 t값 산정
                 float t = math.max(compRatio, tensRatio);
-                
-                // ⭐ 엑셀에 들어갈 최종 스트레스 값도 가장 큰 데미지 기준으로
                 float finalStressRecord = math.max(curStress, stress.ValueRO.MaxTensileRatio * tensile);
 
-                // ⭐ 재질별 고유 기본 색상
                 float4 baseCol = new float4(0.7f, 0.7f, 0.7f, 1.0f);
                 if (mName.Contains("Steel")) baseCol = new float4(0.2f, 0.5f, 1.0f, 1.0f);
                 else if (mName.Contains("Wood") || mName.Contains("Timber")) baseCol = new float4(0.6f, 0.4f, 0.2f, 1.0f);
@@ -476,25 +471,12 @@ public partial struct StressVisualizationSystem : ISystem
                 string risk = "Safe";
                 string pres = "N";
 
-                // ⭐ 그라데이션: 안전색에서 빨간색으로 t만큼 섞음!
                 color.ValueRW.Value = math.lerp(baseCol, new float4(1.0f, 0.0f, 0.0f, 1.0f), t);
 
-                if (t >= 0.99f)
-                {
-                    risk = "Danger"; pres = "Y";
-                }
-                else if (t >= 0.66f)
-                {
-                    risk = "Danger"; pres = "Y";
-                }
-                else if (t >= 0.33f)
-                {
-                    risk = "Warning"; pres = "N";
-                }
-                else
-                {
-                    risk = "Safe"; pres = "N";
-                }
+                if (t >= 0.99f) { risk = "Danger"; pres = "Y"; }
+                else if (t >= 0.66f) { risk = "Danger"; pres = "Y"; }
+                else if (t >= 0.33f) { risk = "Warning"; pres = "N"; }
+                else { risk = "Safe"; pres = "N"; }
 
                 string tool = toolMap.ContainsKey(id) ? toolMap[id] : "Existing";
                 string type = typeMap.ContainsKey(id) ? typeMap[id] : (originPos.y > 1.5f ? "Wall" : "Floor");
@@ -515,13 +497,33 @@ public partial struct StressVisualizationSystem : ISystem
                 writer.WriteLine(lineData);
             }
 
+            // ⭐ [핵심 수정] 무너진 블록들도 마지막에 딕셔너리 검사를 거쳐 영원히 원래 꼬리표를 유지하도록 출력합니다!
             foreach (var line in destroyedLines)
             {
-                writer.WriteLine(line.ToString());
+                var parts = line.ToString().Split('|');
+                if (parts.Length < 6) continue;
+                
+                string dId = parts[0];
+                string dCompStress = parts[1];
+                string dMatName = parts[2];
+                string dTensile = parts[3];
+                string dComp = parts[4];
+                float dPosY = float.Parse(parts[5]);
+                
+                // 파괴된 녀석들도 족보(map)를 뒤져서 본래 자기 도구와 타입을 찾아냄!
+                string dTool = toolMap.ContainsKey(dId) ? toolMap[dId] : "Existing";
+                string dType = typeMap.ContainsKey(dId) ? typeMap[dId] : (dPosY > 1.5f ? "Wall" : "Floor");
+                
+                string finalDestroyedLine = dId + ",DESTROYED,DESTROYED,DESTROYED," +
+                                            dCompStress + ",Destroyed,Y," +
+                                            dMatName + "," + dTensile + "," + dComp + "," +
+                                            dTool + "," + dType;
+                                            
+                writer.WriteLine(finalDestroyedLine);
             }
         }
 
         needsColorUpdate = false;
-        UnityEngine.Debug.Log("📊 [통합 CSV] 스트레스 업데이트 완료! (Y키의 재질 데이터 완벽 보존)");
+        UnityEngine.Debug.Log("📊 [통합 CSV] 스트레스 업데이트 완료! (Y키의 재질 및 보강재 꼬리표 완벽 보존)");
     }
 }
