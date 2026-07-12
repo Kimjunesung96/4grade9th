@@ -107,6 +107,28 @@ public class BudgetUIManager : MonoBehaviour
         }
     }
 
+
+
+
+
+// 변수 선언하는 곳(클래스 상단)에 아래 변수 추가
+public int reinforcementMode = 1; // 1: 많이(바둑판 격자), 2: 적게(가성비 우산)
+
+// 클래스 안쪽 맨 아래 등 빈 공간에 아래 두 함수 추가
+public void SetReinforcementModeMany()
+{
+    reinforcementMode = 1;
+    UnityEngine.Debug.Log("보강 모드: 많이 (바둑판 물량 공세)");
+}
+
+public void SetReinforcementModeFew()
+{
+    reinforcementMode = 2;
+    UnityEngine.Debug.Log("보강 모드: 적게 (가성비 핀포인트)");
+}
+
+
+
     void OnGUI()
     {
         if (!showPanel) return;
@@ -140,15 +162,59 @@ public class BudgetUIManager : MonoBehaviour
         floorCountInput = GUILayout.TextField(floorCountInput, GUILayout.Width(60));
         GUILayout.Label("(스크롤 복사)", GUILayout.Width(100));
         GUILayout.Space(20);
-        GUILayout.Label("보강재", GUILayout.Width(60));
-        GUI.backgroundColor = wantsReinforcement ? Color.cyan : Color.gray;
-        if (GUILayout.Button("YES", GUILayout.Width(70))) wantsReinforcement = true;
-        GUI.backgroundColor = !wantsReinforcement ? Color.cyan : Color.gray;
-        if (GUILayout.Button("NO", GUILayout.Width(70))) wantsReinforcement = false;
-        GUI.backgroundColor = Color.white;
-        GUILayout.EndHorizontal();
+         GUILayout.Label("보강재", GUILayout.Width(60));
 
-        GUILayout.FlexibleSpace();
+        GUI.backgroundColor = wantsReinforcement ? Color.cyan : Color.gray;
+
+        if (GUILayout.Button("YES", GUILayout.Width(70))) wantsReinforcement = true;
+
+        GUI.backgroundColor = !wantsReinforcement ? Color.cyan : Color.gray;
+
+        if (GUILayout.Button("NO", GUILayout.Width(70))) wantsReinforcement = false;
+
+        GUI.backgroundColor = Color.white;
+
+        GUILayout.EndHorizontal(); // <--- 기존 코드의 이 부분 바로 밑에 추가!
+
+        // 👇👇 여기서부터 복사해서 붙여넣기 👇👇
+
+        if (wantsReinforcement)
+
+        {
+
+            GUILayout.Space(4);
+
+            GUILayout.BeginHorizontal();
+
+            GUILayout.Space(230); // 줄 맞추기 위한 여백
+
+            GUILayout.Label("보강 모드", GUILayout.Width(65));
+
+            
+
+            GUI.backgroundColor = (reinforcementMode == 1) ? new Color(1f, 0.6f, 0.6f) : Color.gray;
+
+            if (GUILayout.Button("많이 [격자]", GUILayout.Width(80))) reinforcementMode = 1;
+
+            
+
+            GUI.backgroundColor = (reinforcementMode == 2) ? new Color(0.6f, 0.8f, 1f) : Color.gray;
+
+            if (GUILayout.Button("적게 [우산]", GUILayout.Width(80))) reinforcementMode = 2;
+
+            
+
+            GUI.backgroundColor = Color.white;
+
+            GUILayout.EndHorizontal();
+
+        }
+
+        // 👆👆 여기까지 👆👆
+
+        
+
+        GUILayout.FlexibleSpace(); 
 
         GUILayout.BeginHorizontal();
 
