@@ -91,37 +91,31 @@ public class ReinforcementManager : MonoBehaviour
 
             if (flaggedPoints.Count > 0)
             {
-                flaggedPoints = flaggedPoints.OrderBy(p => Vector2.Distance(new Vector2(p.pos.x, p.pos.z), Vector2.zero)).ToList();
-
-                List<Vector2> builtColumnsXZ = new List<Vector2>();
-                Dictionary<Vector2, float> columnStartHeight = new Dictionary<Vector2, float>();
+                // ⭐ 바둑판 교차점(절대 격자)을 기록할 딕셔너리
+                Dictionary<Vector2, float> gridColumns = new Dictionary<Vector2, float>();
 
                 foreach (var p in flaggedPoints)
                 {
-                    Vector2 currentXZ = new Vector2(p.pos.x, p.pos.z);
-                    bool inForbiddenZone = false;
+                    // ⭐ 핵심 로직: 위험 구역의 좌표를 12.0f 단위의 바둑판 교차점으로 강제 스냅(Snap)!
+                    float gridX = Mathf.Round(p.pos.x / 12.0f) * 12.0f;
+                    float gridZ = Mathf.Round(p.pos.z / 12.0f) * 12.0f;
+                    Vector2 gPos = new Vector2(gridX, gridZ);
 
-                    // ⭐ 12.0f(4칸) 간격 격자. 팔(arm) 사이에 딱 1칸이 남게 됨.
-                    foreach (var built in builtColumnsXZ)
+                    // 해당 바둑판 교차점에서 가장 높은 위치를 기록
+                    if (!gridColumns.ContainsKey(gPos) || p.pos.y > gridColumns[gPos])
                     {
-                        float dx = Mathf.Abs(currentXZ.x - built.x);
-                        float dz = Mathf.Abs(currentXZ.y - built.y);
-                        
-                        if (dx < 11.9f && dz < 11.9f)
-                        {
-                            inForbiddenZone = true;
-                            break;
-                        }
+                        gridColumns[gPos] = p.pos.y;
                     }
+                }
 
-                    if (inForbiddenZone) continue; 
+                List<Vector2> builtColumnsXZ = gridColumns.Keys.ToList();
 
-                    builtColumnsXZ.Add(currentXZ);
-                    columnStartHeight[currentXZ] = p.pos.y;
-
-                    float cleanX = p.pos.x;
-                    float cleanZ = p.pos.z;
-                    float currentY = p.pos.y;
+                // 1. 바둑판 교차점에 기둥(보강중심 + 팔) 세우기
+                foreach (var col in builtColumnsXZ)
+                {
+                    float cleanX = col.x;
+                    float cleanZ = col.y;
+                    float currentY = gridColumns[col];
 
                     while (currentY >= 45f)
                     {
@@ -174,6 +168,7 @@ public class ReinforcementManager : MonoBehaviour
                     }
                 }
 
+                // 2. 바둑판 선(수평 보) 연결하기
                 for (int i = 0; i < builtColumnsXZ.Count; i++)
                 {
                     for (int j = i + 1; j < builtColumnsXZ.Count; j++)
@@ -184,22 +179,20 @@ public class ReinforcementManager : MonoBehaviour
                         float dx = Mathf.Abs(colA.x - colB.x);
                         float dz = Mathf.Abs(colA.y - colB.y);
 
-                        // ⭐ 12.0f(4칸) 거리에 있는 이웃 기둥 찾기
+                        // 바둑판의 직선으로 인접한(12.0f 거리) 교차점들만 연결
                         bool isHorizontalNeighbor = (dx > 11.9f && dx < 12.1f) && dz < 0.1f;
                         bool isVerticalNeighbor   = (dz > 11.9f && dz < 12.1f) && dx < 0.1f;
 
                         if (isHorizontalNeighbor || isVerticalNeighbor)
                         {
-                            float meshY = Mathf.Max(columnStartHeight[colA], columnStartHeight[colB]);
+                            float meshY = Mathf.Max(gridColumns[colA], gridColumns[colB]);
                             
                             while (meshY >= 45f)
                             {
                                 float exactY = meshY / 10f;
                                 string typeStr = "Reinforcement";
 
-                                // ⭐ 12.0 / 3.0 = 4스텝! (징검다리는 1~3번째 블록 위치를 계산)
-                                // s=1 지점(3.0f)은 기둥 팔과 겹치고, s=3 지점(9.0f)도 상대 기둥 팔과 겹쳐서 건너뜀.
-                                // s=2 지점(6.0f)만 비어있으므로 딱 이어지는 블록 1개가 생성됨.
+                                // 4스텝으로 나누어 정중앙(s=2)에만 징검다리 놓기
                                 int steps = 4; 
                                 for (int s = 1; s < steps; s++) 
                                 {
@@ -234,7 +227,7 @@ public class ReinforcementManager : MonoBehaviour
                                         existingBlocks.Add(targetId);
                                     }
                                 }
-                                // ⭐ 3층(90.0f) 간격으로 수평 보 연결
+                                // 3층마다 수평 보 연결
                                 meshY -= 90f; 
                             }
                         }
@@ -244,6 +237,6 @@ public class ReinforcementManager : MonoBehaviour
         }
 
         File.WriteAllLines(planCsvPath, planLines);
-        Debug.Log("📄 [ReinforcementManager] 4칸(12.0f) 격자, 1칸 빈틈 3층 간격 보강 적용 완료!");
+        Debug.Log("📄 [ReinforcementManager] 절대 격자(바둑판) 스냅 및 3층 간격 징검다리 보강 완료!");
     }
 }
