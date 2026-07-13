@@ -426,104 +426,91 @@ public partial struct StressVisualizationSystem : ISystem
             }
         }
 
-        using (StreamWriter writer = new StreamWriter(path, false))
+        // ⭐ 최적화 1: 메인 스레드에서는 파일에 직접 쓰지 않고 메모리(List)에 줄 텍스트만 차곡차곡 모아둡니다.
+        System.Collections.Generic.List<string> linesToWrite = new System.Collections.Generic.List<string>();
+        linesToWrite.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
+
+        foreach (var (stress, color, mat, pos, disp) in SystemAPI.Query<
+          RefRO<BlockStress>,
+          RefRW<URPMaterialPropertyBaseColor>,
+          RefRO<BlockMaterial>,
+          RefRO<OriginalPosition>,
+          RefRO<BlockDisplacement>>())
         {
-            writer.WriteLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
+            float3 originPos = pos.ValueRO.Value;
+            float ix = math.round(originPos.x * 10f); float iy = math.round(originPos.y * 10f); float iz = math.round(originPos.z * 10f);
+            string strX = (ix < 0f ? "-" : "0") + math.abs(ix).ToString("000");
+            string strZ = (iz < 0f ? "-" : "0") + math.abs(iz).ToString("000");
+            string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
+            string id = strX + "_" + strZ + "_" + strY;
+            float3 p = disp.ValueRO.MaxDist > 0.0f ? disp.ValueRO.MaxPos : originPos;
 
-            foreach (var (stress, color, mat, pos, disp) in SystemAPI.Query<
-              RefRO<BlockStress>,
-              RefRW<URPMaterialPropertyBaseColor>,
-              RefRO<BlockMaterial>,
-              RefRO<OriginalPosition>,
-              RefRO<BlockDisplacement>>())
-            {
-                float3 originPos = pos.ValueRO.Value;
-                float ix = math.round(originPos.x * 10f); float iy = math.round(originPos.y * 10f); float iz = math.round(originPos.z * 10f);
+            string mName = matMap.ContainsKey(id) ? matMap[id] : mat.ValueRO.MaterialName.ToString().Replace("\0", "").Trim();
+            string tStr = tensileMap.ContainsKey(id) ? tensileMap[id] : mat.ValueRO.TensileStiffness.ToString("F1");
+            string cStr = compMap.ContainsKey(id) ? compMap[id] : mat.ValueRO.CompressiveStiffness.ToString("F1");
 
-                string strX = (ix < 0f ? "-" : "0") + math.abs(ix).ToString("000");
-                string strZ = (iz < 0f ? "-" : "0") + math.abs(iz).ToString("000");
-                string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
-                string id = strX + "_" + strZ + "_" + strY;
+            float tensile = 100f; float compressive = 100f;
+            float.TryParse(tStr, out tensile);
+            float.TryParse(cStr, out compressive);
+            if (tensile <= 0.1f) tensile = mat.ValueRO.TensileStiffness;
+            if (compressive <= 0.1f) compressive = mat.ValueRO.CompressiveStiffness;
 
-                float3 p = disp.ValueRO.MaxDist > 0.0f ? disp.ValueRO.MaxPos : originPos;
+            float curStress = stress.ValueRO.SmoothedStress;
+            float compRatio = math.clamp(curStress / math.max(1.0f, compressive), 0.0f, 1.0f);
+            float tensRatio = math.clamp(stress.ValueRO.MaxTensileRatio, 0.0f, 1.0f);
+            float t = math.max(compRatio, tensRatio);
+            float finalStressRecord = math.max(curStress, stress.ValueRO.MaxTensileRatio * tensile);
 
-                string mName = matMap.ContainsKey(id) ? matMap[id] : mat.ValueRO.MaterialName.ToString().Replace("\0", "").Trim();
-                string tStr = tensileMap.ContainsKey(id) ? tensileMap[id] : mat.ValueRO.TensileStiffness.ToString("F1");
-                string cStr = compMap.ContainsKey(id) ? compMap[id] : mat.ValueRO.CompressiveStiffness.ToString("F1");
+            float4 baseCol = new float4(0.7f, 0.7f, 0.7f, 1.0f);
+            if (mName.Contains("Steel")) baseCol = new float4(0.2f, 0.5f, 1.0f, 1.0f);
+            else if (mName.Contains("Wood") || mName.Contains("Timber")) baseCol = new float4(0.6f, 0.4f, 0.2f, 1.0f);
+            else if (mName.Contains("Brick")) baseCol = new float4(0.8f, 0.3f, 0.2f, 1.0f);
 
-                float tensile = 100f; float compressive = 100f;
-                float.TryParse(tStr, out tensile);
-                float.TryParse(cStr, out compressive);
-                if (tensile <= 0.1f) tensile = mat.ValueRO.TensileStiffness;
-                if (compressive <= 0.1f) compressive = mat.ValueRO.CompressiveStiffness;
+            string risk = "Safe";
+            string pres = "N";
+            color.ValueRW.Value = math.lerp(baseCol, new float4(1.0f, 0.0f, 0.0f, 1.0f), t);
 
-                float curStress = stress.ValueRO.SmoothedStress;
-                float compRatio = math.clamp(curStress / math.max(1.0f, compressive), 0.0f, 1.0f);
-                float tensRatio = math.clamp(stress.ValueRO.MaxTensileRatio, 0.0f, 1.0f);
-                float t = math.max(compRatio, tensRatio);
-                float finalStressRecord = math.max(curStress, stress.ValueRO.MaxTensileRatio * tensile);
+            if (t >= 0.99f) { risk = "Danger"; pres = "Y"; }
+            else if (t >= 0.66f) { risk = "Danger"; pres = "Y"; }
+            else if (t >= 0.33f) { risk = "Warning"; pres = "N"; }
+            else { risk = "Safe"; pres = "N"; }
 
-                float4 baseCol = new float4(0.7f, 0.7f, 0.7f, 1.0f);
-                if (mName.Contains("Steel")) baseCol = new float4(0.2f, 0.5f, 1.0f, 1.0f);
-                else if (mName.Contains("Wood") || mName.Contains("Timber")) baseCol = new float4(0.6f, 0.4f, 0.2f, 1.0f);
-                else if (mName.Contains("Brick")) baseCol = new float4(0.8f, 0.3f, 0.2f, 1.0f);
+            string tool = toolMap.ContainsKey(id) ? toolMap[id] : "Existing";
+            string type = typeMap.ContainsKey(id) ? typeMap[id] : (originPos.y > 1.5f ? "Wall" : "Floor");
 
-                string risk = "Safe";
-                string pres = "N";
+            string lineData = id + "," + p.x.ToString("F2") + "," + p.y.ToString("F2") + "," + p.z.ToString("F2") + "," +
+                              finalStressRecord.ToString("F2") + "," + risk + "," + pres + "," + mName + "," +
+                              tStr + "," + cStr + "," + tool + "," + type;
 
-                color.ValueRW.Value = math.lerp(baseCol, new float4(1.0f, 0.0f, 0.0f, 1.0f), t);
-
-                if (t >= 0.99f) { risk = "Danger"; pres = "Y"; }
-                else if (t >= 0.66f) { risk = "Danger"; pres = "Y"; }
-                else if (t >= 0.33f) { risk = "Warning"; pres = "N"; }
-                else { risk = "Safe"; pres = "N"; }
-
-                string tool = toolMap.ContainsKey(id) ? toolMap[id] : "Existing";
-                string type = typeMap.ContainsKey(id) ? typeMap[id] : (originPos.y > 1.5f ? "Wall" : "Floor");
-
-                string lineData = id + "," +
-                                  p.x.ToString("F2") + "," +
-                                  p.y.ToString("F2") + "," +
-                                  p.z.ToString("F2") + "," +
-                                  finalStressRecord.ToString("F2") + "," + 
-                                  risk + "," +
-                                  pres + "," +
-                                  mName + "," +
-                                  tStr + "," +
-                                  cStr + "," +
-                                  tool + "," +
-                                  type;
-
-                writer.WriteLine(lineData);
-            }
-
-            // ⭐ [핵심 수정] 무너진 블록들도 마지막에 딕셔너리 검사를 거쳐 영원히 원래 꼬리표를 유지하도록 출력합니다!
-            foreach (var line in destroyedLines)
-            {
-                var parts = line.ToString().Split('|');
-                if (parts.Length < 6) continue;
-                
-                string dId = parts[0];
-                string dCompStress = parts[1];
-                string dMatName = parts[2];
-                string dTensile = parts[3];
-                string dComp = parts[4];
-                float dPosY = float.Parse(parts[5]);
-                
-                // 파괴된 녀석들도 족보(map)를 뒤져서 본래 자기 도구와 타입을 찾아냄!
-                string dTool = toolMap.ContainsKey(dId) ? toolMap[dId] : "Existing";
-                string dType = typeMap.ContainsKey(dId) ? typeMap[dId] : (dPosY > 1.5f ? "Wall" : "Floor");
-                
-                string finalDestroyedLine = dId + ",DESTROYED,DESTROYED,DESTROYED," +
-                                            dCompStress + ",Destroyed,Y," +
-                                            dMatName + "," + dTensile + "," + dComp + "," +
-                                            dTool + "," + dType;
-                                            
-                writer.WriteLine(finalDestroyedLine);
-            }
+            linesToWrite.Add(lineData); // 파일 대신 메모리 리스트에 추가
         }
 
+        foreach (var line in destroyedLines)
+        {
+            var parts = line.ToString().Split('|');
+            if (parts.Length < 6) continue;
+            
+            string dId = parts[0]; string dCompStress = parts[1]; string dMatName = parts[2];
+            string dTensile = parts[3]; string dComp = parts[4]; float dPosY = float.Parse(parts[5]);
+            
+            string dTool = toolMap.ContainsKey(dId) ? toolMap[dId] : "Existing";
+            string dType = typeMap.ContainsKey(dId) ? typeMap[dId] : (dPosY > 1.5f ? "Wall" : "Floor");
+            
+            string finalDestroyedLine = dId + ",DESTROYED,DESTROYED,DESTROYED," + dCompStress + ",Destroyed,Y," +
+                                        dMatName + "," + dTensile + "," + dComp + "," + dTool + "," + dType;
+                                        
+            linesToWrite.Add(finalDestroyedLine); // 리스트에 추가
+        }
+
+        string savePath = path; // 클로저용 캡처
+        
+        // ⭐ 최적화 2: 문자열 조립이 끝난 리스트를 통째로 백그라운드 스레드에 던져서 저장시킵니다.
+        System.Threading.Tasks.Task.Run(() => 
+        {
+            File.WriteAllLines(savePath, linesToWrite);
+            UnityEngine.Debug.Log("📊 [통합 CSV] 비동기 스트레스 업데이트 완료! (프리징 완벽 제거)");
+        });
+
         needsColorUpdate = false;
-        UnityEngine.Debug.Log("📊 [통합 CSV] 스트레스 업데이트 완료! (Y키의 재질 및 보강재 꼬리표 완벽 보존)");
     }
 }
