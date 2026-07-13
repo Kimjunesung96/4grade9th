@@ -101,16 +101,15 @@ public class BlueprintManager : MonoBehaviour
         // 🚨 십장님 특명! 렉 방지 위해 개별 저장과 콘솔 스팸을 삭제했습니다! 스포너가 다 짓고 한 번에 저장합니다.
     }
 
-    public void SaveBlueprint()
+ public void SaveBlueprint()
     {
         string json = JsonUtility.ToJson(currentBlueprint, true);
-        string savePath = FilePath; // 백그라운드 스레드로 넘기기 위해 경로 미리 캡처
+        string savePath = FilePath; // 백그라운드로 보낼 경로 캡처
         
-        // ⭐ 최적화: 메인 스레드를 멈추지 않고 백그라운드에서 파일 쓰기 진행
+        // ⭐ 최적화: 대용량 JSON 쓰기 작업을 백그라운드로 완전히 밀어버립니다.
         System.Threading.Tasks.Task.Run(() => 
         {
             File.WriteAllText(savePath, json);
-            UnityEngine.Debug.Log("💾 [BlueprintManager] 비동기 JSON 도면 최종 기록 완료! (렉 제거)");
         });
     }
 

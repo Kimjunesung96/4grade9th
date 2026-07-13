@@ -73,7 +73,7 @@ public partial struct TrackMaxDisplacementJob : IJobEntity
 }
 
 [UpdateInGroup(typeof(SimulationSystemGroup))]
-[UpdateAfter(typeof(FixedStepSimulationSystemGroup))]
+
 public partial struct StressVisualizationSystem : ISystem
 {
     private float scanTimer;
@@ -83,7 +83,7 @@ public partial struct StressVisualizationSystem : ISystem
     private EntityQuery jointQuery;
 
     private float failureTickTimer;
-    private const float FailureTickInterval = 1.0f / 3.0f;
+    private const float FailureTickInterval = 1.0f;
 
     private const float TensionStressScale = 5000.0f;
 
@@ -158,22 +158,46 @@ public partial struct StressVisualizationSystem : ISystem
         NativeHashSet<Entity> badEntities = new NativeHashSet<Entity>(allEntities.Length, Allocator.Temp);
         int badCount = 0;
 
+        // ==========================================================
+        // ⭐ 최적화: O(N^2) 이중 루프 → 공간 해시 그리드 기반 O(N) 처리
+        // ==========================================================
+        NativeHashMap<int3, int> gridMap = new NativeHashMap<int3, int>(allEntities.Length, Allocator.Temp);
+        for (int i = 0; i < allPositions.Length; i++)
+        {
+            int3 gridPos = new int3(
+                (int)math.floor(allPositions[i].x / 3.0f),
+                (int)math.floor(allPositions[i].y / 3.0f),
+                (int)math.floor(allPositions[i].z / 3.0f));
+            gridMap.TryAdd(gridPos, i);
+        }
+
+        NativeArray<int3> neighborOffsets = new NativeArray<int3>(6, Allocator.Temp);
+        neighborOffsets[0] = new int3(1, 0, 0);
+        neighborOffsets[1] = new int3(-1, 0, 0);
+        neighborOffsets[2] = new int3(0, 1, 0);
+        neighborOffsets[3] = new int3(0, -1, 0);
+        neighborOffsets[4] = new int3(0, 0, 1);
+        neighborOffsets[5] = new int3(0, 0, -1);
+
         for (int i = 0; i < allEntities.Length; i++)
         {
             float3 myPos = allPositions[i];
-            float minDiff = float.MaxValue;
+            int3 myGrid = new int3(
+                (int)math.floor(myPos.x / 3.0f),
+                (int)math.floor(myPos.y / 3.0f),
+                (int)math.floor(myPos.z / 3.0f));
 
-            for (int j = 0; j < allEntities.Length; j++)
+            bool hasNeighbor = false;
+            for (int n = 0; n < 6; n++)
             {
-                if (i == j) continue;
-                float3 otherPos = allPositions[j];
-                float diff = math.abs(myPos.x - otherPos.x) + math.abs(myPos.y - otherPos.y) + math.abs(myPos.z - otherPos.z);
-                if (diff < minDiff) minDiff = diff;
+                if (gridMap.ContainsKey(myGrid + neighborOffsets[n]))
+                {
+                    hasNeighbor = true;
+                    break;
+                }
             }
 
-            float diffSum = minDiff * 10.0f;
-
-            if (diffSum <= 29.5f || diffSum >= 69.5f)
+            if (!hasNeighbor)
             {
                 if (badEntities.Add(allEntities[i]))
                 {
@@ -182,6 +206,10 @@ public partial struct StressVisualizationSystem : ISystem
                 }
             }
         }
+
+        gridMap.Dispose();
+        neighborOffsets.Dispose();
+        // ========================== 최적화 끝 ==========================
 
         foreach (var (jointPair, entity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
         {
@@ -219,8 +247,8 @@ public partial struct StressVisualizationSystem : ISystem
 
             color.ValueRW.Value = new float4(1.0f, 1.0f, 1.0f, 1.0f);
             stress.ValueRW.SmoothedStress = 0.0f; stress.ValueRW.TargetStress = 0.0f;
-            stress.ValueRW.MaxTensileRatio = 0.0f; 
-            
+            stress.ValueRW.MaxTensileRatio = 0.0f;
+
             if (!SystemAPI.HasComponent<OriginalPosition>(entity))
             {
                 ecb.AddComponent(entity, new OriginalPosition { Value = transform.ValueRO.Position });
@@ -266,42 +294,52 @@ public partial struct StressVisualizationSystem : ISystem
         }
     }
 
-    private void ApplyFailureCheck(ref SystemState state)
+private void ApplyFailureCheck(ref SystemState state)
     {
         var ecb = new EntityCommandBuffer(Allocator.Temp);
+
+        // ⭐ 최적화: 루프 진입 전 Lookup 구조체를 미리 받아와서 수만 번의 GetComponent 오버헤드를 제거합니다.
+        var transformLookup = SystemAPI.GetComponentLookup<LocalTransform>(true);
+        var materialLookup = SystemAPI.GetComponentLookup<BlockMaterial>(true);
+        var stressLookup = SystemAPI.GetComponentLookup<BlockStress>(false); // ReadWrite 접근
 
         foreach (var (jointPair, joint, rest, jointEntity) in SystemAPI.Query<
           RefRO<PhysicsConstrainedBodyPair>, RefRO<PhysicsJoint>, RefRO<JointRestLength>>().WithAll<JointTag>().WithEntityAccess())
         {
             Entity eA = jointPair.ValueRO.EntityA; Entity eB = jointPair.ValueRO.EntityB;
-            if (!SystemAPI.HasComponent<LocalTransform>(eA) || !SystemAPI.HasComponent<LocalTransform>(eB)) continue;
-            if (!SystemAPI.HasComponent<BlockMaterial>(eA) || !SystemAPI.HasComponent<BlockMaterial>(eB)) continue;
+            
+            // 캐싱된 Lookup 배열을 사용하여 초고속 검증
+            if (!transformLookup.HasComponent(eA) || !transformLookup.HasComponent(eB)) continue;
+            if (!materialLookup.HasComponent(eA) || !materialLookup.HasComponent(eB)) continue;
 
-            var transA = SystemAPI.GetComponent<LocalTransform>(eA);
-            var transB = SystemAPI.GetComponent<LocalTransform>(eB);
+            var transA = transformLookup[eA];
+            var transB = transformLookup[eB];
             float3 pivotA = math.transform(new RigidTransform(transA.Rotation, transA.Position), joint.ValueRO.BodyAFromJoint.Position);
             float3 pivotB = math.transform(new RigidTransform(transB.Rotation, transB.Position), joint.ValueRO.BodyBFromJoint.Position);
             float dist = math.distance(pivotA, pivotB);
             float stretch = math.max(0.0f, dist - rest.ValueRO.Value);
-            
+
             if (stretch <= 0.0f) continue;
 
-            var matA = SystemAPI.GetComponent<BlockMaterial>(eA);
-            var matB = SystemAPI.GetComponent<BlockMaterial>(eB);
+            var matA = materialLookup[eA];
+            var matB = materialLookup[eB];
             float tensileStress = stretch * TensionStressScale;
             float tensileDefense = (matA.TensileStiffness + matB.TensileStiffness) * 0.5f;
 
             float ratio = tensileStress / math.max(1.0f, tensileDefense);
 
-            if (SystemAPI.HasComponent<BlockStress>(eA)) 
+            // Lookup을 통한 데이터 다이렉트 접근 및 갱신
+            if (stressLookup.HasComponent(eA))
             {
-                var stressA = SystemAPI.GetComponentRW<BlockStress>(eA);
-                stressA.ValueRW.MaxTensileRatio = math.max(stressA.ValueRO.MaxTensileRatio, ratio);
+                var stressA = stressLookup[eA];
+                stressA.MaxTensileRatio = math.max(stressA.MaxTensileRatio, ratio);
+                stressLookup[eA] = stressA;
             }
-            if (SystemAPI.HasComponent<BlockStress>(eB)) 
+            if (stressLookup.HasComponent(eB))
             {
-                var stressB = SystemAPI.GetComponentRW<BlockStress>(eB);
-                stressB.ValueRW.MaxTensileRatio = math.max(stressB.ValueRO.MaxTensileRatio, ratio);
+                var stressB = stressLookup[eB];
+                stressB.MaxTensileRatio = math.max(stressB.MaxTensileRatio, ratio);
+                stressLookup[eB] = stressB;
             }
 
             if (tensileStress > tensileDefense)
@@ -309,7 +347,6 @@ public partial struct StressVisualizationSystem : ISystem
                 ecb.DestroyEntity(jointEntity);
             }
         }
-
         var toDestroy = new NativeList<Entity>(Allocator.Temp);
         foreach (var (stress, mat, pos, entity) in SystemAPI.Query<
           RefRO<BlockStress>, RefRO<BlockMaterial>, RefRO<OriginalPosition>>().WithEntityAccess())
@@ -324,30 +361,30 @@ public partial struct StressVisualizationSystem : ISystem
             string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
             string id = strX + "_" + strZ + "_" + strY;
             string mName = mat.ValueRO.MaterialName.ToString().Replace("\0", "").Trim();
-            
-            // ⭐ [핵심 수정] 무작정 Wall로 덮어씌우지 않기 위해, 데이터를 조각내어 '|' 기호로 포장해둡니다.
-            // 나중에 UpdateResults에서 딕셔너리와 결합하여 정확한 꼬리표를 찾아줄 거예요.
+
             string destroyedLineStr = id + "|" +
                                       compStress.ToString("F2") + "|" +
                                       mName + "|" +
                                       mat.ValueRO.TensileStiffness.ToString("F1") + "|" +
                                       mat.ValueRO.CompressiveStiffness.ToString("F1") + "|" +
                                       originPos.y.ToString("F2");
-                                      
-            destroyedLines.Add(new FixedString512Bytes(destroyedLineStr));
 
+            destroyedLines.Add(new FixedString512Bytes(destroyedLineStr));
             toDestroy.Add(entity);
+        }
+
+        // ⭐ 최적화 2: 파괴될 블록들을 O(1) 탐색이 가능한 HashSet에 담습니다. (이중 루프 제거)
+        var destroySet = new NativeHashSet<Entity>(toDestroy.Length, Allocator.Temp);
+        for (int i = 0; i < toDestroy.Length; i++)
+        {
+            destroySet.Add(toDestroy[i]);
         }
 
         foreach (var (jointPair, jointEntity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
         {
-            for (int i = 0; i < toDestroy.Length; i++)
+            if (destroySet.Contains(jointPair.ValueRO.EntityA) || destroySet.Contains(jointPair.ValueRO.EntityB))
             {
-                if (jointPair.ValueRO.EntityA == toDestroy[i] || jointPair.ValueRO.EntityB == toDestroy[i])
-                {
-                    ecb.DestroyEntity(jointEntity);
-                    break;
-                }
+                ecb.DestroyEntity(jointEntity);
             }
         }
 
@@ -359,6 +396,7 @@ public partial struct StressVisualizationSystem : ISystem
         ecb.Playback(state.EntityManager);
         ecb.Dispose();
         toDestroy.Dispose();
+        destroySet.Dispose(); // 다 쓴 메모리 정리
     }
 
     private void UpdateResults(ref SystemState state)
@@ -385,9 +423,9 @@ public partial struct StressVisualizationSystem : ISystem
                     string k = c.ElementAt(0);
                     toolMap[k] = c.ElementAt(10);
                     typeMap[k] = c.ElementAt(11);
-                    matMap[k] = c.ElementAt(7);      
-                    tensileMap[k] = c.ElementAt(8);  
-                    compMap[k] = c.ElementAt(9);     
+                    matMap[k] = c.ElementAt(7);
+                    tensileMap[k] = c.ElementAt(8);
+                    compMap[k] = c.ElementAt(9);
                 }
             }
         }
@@ -402,7 +440,7 @@ public partial struct StressVisualizationSystem : ISystem
                 {
                     string k = c.ElementAt(0);
                     toolMap[k] = c.ElementAt(10);
-                    typeMap[k] = c.ElementAt(11); // ⭐ [핵심 수정] 여기서 Type(Reinforcement) 정보도 확실히 읽어옵니다!
+                    typeMap[k] = c.ElementAt(11);
                     matMap[k] = c.ElementAt(7);
                     tensileMap[k] = c.ElementAt(8);
                     compMap[k] = c.ElementAt(9);
@@ -419,14 +457,14 @@ public partial struct StressVisualizationSystem : ISystem
                 if (c.Count >= 12)
                 {
                     string k = c.ElementAt(0);
-                    typeMap[k] = c.ElementAt(11); 
-                    toolMap[k] = c.ElementAt(10); // ⭐ 도구 이름도 확실히 갱신!
-                    matMap[k] = c.ElementAt(7);   // ⭐ 재질도 최신으로 갱신!
+                    typeMap[k] = c.ElementAt(11);
+                    toolMap[k] = c.ElementAt(10);
+                    matMap[k] = c.ElementAt(7);
                 }
             }
         }
 
-        // ⭐ 최적화 1: 메인 스레드에서는 파일에 직접 쓰지 않고 메모리(List)에 줄 텍스트만 차곡차곡 모아둡니다.
+        // ⭐ 최적화 3: StreamWriter를 없애고, 메모리 리스트에 먼저 기록해둡니다.
         System.Collections.Generic.List<string> linesToWrite = new System.Collections.Generic.List<string>();
         linesToWrite.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
 
@@ -439,10 +477,12 @@ public partial struct StressVisualizationSystem : ISystem
         {
             float3 originPos = pos.ValueRO.Value;
             float ix = math.round(originPos.x * 10f); float iy = math.round(originPos.y * 10f); float iz = math.round(originPos.z * 10f);
+
             string strX = (ix < 0f ? "-" : "0") + math.abs(ix).ToString("000");
             string strZ = (iz < 0f ? "-" : "0") + math.abs(iz).ToString("000");
             string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
             string id = strX + "_" + strZ + "_" + strY;
+
             float3 p = disp.ValueRO.MaxDist > 0.0f ? disp.ValueRO.MaxPos : originPos;
 
             string mName = matMap.ContainsKey(id) ? matMap[id] : mat.ValueRO.MaterialName.ToString().Replace("\0", "").Trim();
@@ -468,6 +508,7 @@ public partial struct StressVisualizationSystem : ISystem
 
             string risk = "Safe";
             string pres = "N";
+
             color.ValueRW.Value = math.lerp(baseCol, new float4(1.0f, 0.0f, 0.0f, 1.0f), t);
 
             if (t >= 0.99f) { risk = "Danger"; pres = "Y"; }
@@ -478,37 +519,53 @@ public partial struct StressVisualizationSystem : ISystem
             string tool = toolMap.ContainsKey(id) ? toolMap[id] : "Existing";
             string type = typeMap.ContainsKey(id) ? typeMap[id] : (originPos.y > 1.5f ? "Wall" : "Floor");
 
-            string lineData = id + "," + p.x.ToString("F2") + "," + p.y.ToString("F2") + "," + p.z.ToString("F2") + "," +
-                              finalStressRecord.ToString("F2") + "," + risk + "," + pres + "," + mName + "," +
-                              tStr + "," + cStr + "," + tool + "," + type;
+            string lineData = id + "," +
+                              p.x.ToString("F2") + "," +
+                              p.y.ToString("F2") + "," +
+                              p.z.ToString("F2") + "," +
+                              finalStressRecord.ToString("F2") + "," +
+                              risk + "," +
+                              pres + "," +
+                              mName + "," +
+                              tStr + "," +
+                              cStr + "," +
+                              tool + "," +
+                              type;
 
-            linesToWrite.Add(lineData); // 파일 대신 메모리 리스트에 추가
+            linesToWrite.Add(lineData);
         }
 
         foreach (var line in destroyedLines)
         {
             var parts = line.ToString().Split('|');
             if (parts.Length < 6) continue;
-            
-            string dId = parts[0]; string dCompStress = parts[1]; string dMatName = parts[2];
-            string dTensile = parts[3]; string dComp = parts[4]; float dPosY = float.Parse(parts[5]);
-            
+
+            string dId = parts[0];
+            string dCompStress = parts[1];
+            string dMatName = parts[2];
+            string dTensile = parts[3];
+            string dComp = parts[4];
+            float dPosY = float.Parse(parts[5]);
+
             string dTool = toolMap.ContainsKey(dId) ? toolMap[dId] : "Existing";
             string dType = typeMap.ContainsKey(dId) ? typeMap[dId] : (dPosY > 1.5f ? "Wall" : "Floor");
-            
-            string finalDestroyedLine = dId + ",DESTROYED,DESTROYED,DESTROYED," + dCompStress + ",Destroyed,Y," +
-                                        dMatName + "," + dTensile + "," + dComp + "," + dTool + "," + dType;
-                                        
-            linesToWrite.Add(finalDestroyedLine); // 리스트에 추가
+
+            string finalDestroyedLine = dId + ",DESTROYED,DESTROYED,DESTROYED," +
+                                        dCompStress + ",Destroyed,Y," +
+                                        dMatName + "," + dTensile + "," + dComp + "," +
+                                        dTool + "," + dType;
+
+            linesToWrite.Add(finalDestroyedLine);
         }
 
-        string savePath = path; // 클로저용 캡처
-        
-        // ⭐ 최적화 2: 문자열 조립이 끝난 리스트를 통째로 백그라운드 스레드에 던져서 저장시킵니다.
-        System.Threading.Tasks.Task.Run(() => 
+        string savePath = path;
+
+        // ⭐ 최적화 4: 메모리에 모은 텍스트를 백그라운드 스레드에서 비동기로 파일에 저장합니다.
+        // 변경 코드
+        System.Threading.Tasks.Task.Run(() =>
         {
             File.WriteAllLines(savePath, linesToWrite);
-            UnityEngine.Debug.Log("📊 [통합 CSV] 비동기 스트레스 업데이트 완료! (프리징 완벽 제거)");
+            // ⭐ 최적화: 백그라운드 스레드 내에서의 유니티 콘솔 출력 스팸을 제거하여 크로스 스레드 컨텐션을 원천 차단합니다.
         });
 
         needsColorUpdate = false;
