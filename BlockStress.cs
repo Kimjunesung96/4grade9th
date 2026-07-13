@@ -41,6 +41,9 @@ public partial struct DefaultMaterialInitSystem : ISystem
     }
 }
 
+// ⭐ 최적화: 초기화가 완료되었음을 알리는 태그 (시스템 클래스 밖에 선언하는 것이 안전합니다)
+public struct MatInitTag : IComponentData { }
+
 [UpdateInGroup(typeof(SimulationSystemGroup))]
 [UpdateAfter(typeof(DefaultMaterialInitSystem))]
 public partial class MaterialPropertyInitSystem : SystemBase
@@ -50,7 +53,10 @@ public partial class MaterialPropertyInitSystem : SystemBase
         var matManager = MaterialDataManager.Instance;
         if (matManager == null || matManager.MaterialDict.Count == 0) return;
 
-        foreach (var (mat, entity) in SystemAPI.Query<RefRW<BlockMaterial>>().WithAll<BlockTag>().WithEntityAccess())
+        var ecb = new EntityCommandBuffer(Unity.Collections.Allocator.Temp);
+
+        // WithNone을 사용해 이미 초기화된 블록은 순회에서 완벽히 배제
+        foreach (var (mat, entity) in SystemAPI.Query<RefRW<BlockMaterial>>().WithAll<BlockTag>().WithNone<MatInitTag>().WithEntityAccess())
         {
             if (mat.ValueRO.TensileStiffness == 0.0f)
             {
@@ -82,7 +88,13 @@ public partial class MaterialPropertyInitSystem : SystemBase
                         mass.ValueRW.InverseMass = 1.0f / calculatedMass;
                     }
                 }
+                
+                // ⭐ 작업이 끝난 블록에 완료 태그를 달아줍니다.
+                ecb.AddComponent<MatInitTag>(entity);
             }
         }
+        
+        ecb.Playback(EntityManager);
+        ecb.Dispose();
     }
 }
