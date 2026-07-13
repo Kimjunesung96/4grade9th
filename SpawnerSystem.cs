@@ -66,7 +66,7 @@ public partial struct SpawnerSystem : ISystem
         else return "Unknown_Tool";
     }
 
-    public void OnCreate(ref SystemState state)
+public void OnCreate(ref SystemState state)
     {
         currentBuildMode = 1f; guideHeight = 1f; isGuideActive = false; nextStructureID = 1f;
         isCenterMoved = false; customCenterPos = float3.zero;
@@ -76,6 +76,16 @@ public partial struct SpawnerSystem : ISystem
         loadDelayTimer = 0f; isOMode = false; isLMode = false; isUMode = false; backupIDToQuery = -1f;
 
         blueprintMaterials.Clear();
+
+        // ==========================================================
+        // ⭐ [물리 한계 돌파 최적화]
+        // ==========================================================
+        // 1. 물리 계산 빈도를 기존 0.02s(초당 50번)에서 0.05s(초당 20번)로 낮춰 연산량을 60% 절감합니다.
+        Time.fixedDeltaTime = 0.05f;
+
+        // 2. 물리 연산이 밀리더라도 한 프레임에 최대 2번까지만 실행되도록 캡을 씌웁니다.
+        // 이 설정을 해야 한 프레임에 수십 번씩 물리 연산이 반복 호출되며 턱턱 막히는 현상이 완벽히 사라집니다.
+        Time.maximumDeltaTime = 0.1f; 
     }
 
     public void OnDestroy(ref SystemState state)
@@ -84,7 +94,7 @@ public partial struct SpawnerSystem : ISystem
         if (blueprintOffsets.IsCreated) blueprintOffsets.Dispose();
     }
 
-    public void OnUpdate(ref SystemState state)
+public void OnUpdate(ref SystemState state)
     {
         if (!UnityEngine.Application.isPlaying || Camera.main == null) return;
 
@@ -97,8 +107,20 @@ public partial struct SpawnerSystem : ISystem
 
         if (!SystemAPI.HasSingleton<BuilderStateData>()) return;
         var builderState = SystemAPI.GetSingletonRW<BuilderStateData>();
-        if (!SystemAPI.TryGetSingleton<PhysicsWorldSingleton>(out var physicsSingleton)) return;
+        
+        // ==========================================================
+        // ⭐ [물리 솔버 단계 다운 최적화]
+        // 한 프레임에 물리 연산이 밀려서 턱턱 막히는 현상을 완벽히 방지합니다.
+        // ==========================================================
+        if (SystemAPI.HasSingleton<PhysicsStep>())
+        {
+            var physicsStep = SystemAPI.GetSingletonRW<PhysicsStep>();
+            // 기본값(보통 4 또는 8)에서 1~2단계로 낮춰 거미줄 조인트 연산 부담을 해제합니다.
+            physicsStep.ValueRW.SolverIterationCount = 2;
+        }
 
+        // 기존에 이미 아래쪽에 정의되어 있던 싱글톤 조회를 그대로 연결합니다 (중복 선언 에러 해결).
+        if (!SystemAPI.TryGetSingleton<PhysicsWorldSingleton>(out var physicsSingleton)) return;
         SpawnerData spawnerData = default;
         bool hasSpawner = false;
         foreach (var data in SystemAPI.Query<RefRO<SpawnerData>>()) { spawnerData = data.ValueRO; hasSpawner = true; break; }
@@ -334,75 +356,79 @@ public partial struct SpawnerSystem : ISystem
                 BudgetUIManager.Instance.OnYKeyPressed();
         }
 
-        if (loadDelayTimer > 0f)
+      // 기존 코드 전체를 아래의 최적화된 배열 기반 코드로 통째로 교체합니다.
+if (loadDelayTimer > 0f)
+{
+    loadDelayTimer -= 1f;
+    if (loadDelayTimer <= 0f)
+    {
+        string planCsvPath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
+        if (File.Exists(planCsvPath))
         {
-            loadDelayTimer -= 1f;
-            if (loadDelayTimer <= 0f)
+            // ⭐ 최적화 1: 무거운 List 대신 일반 string[] 배열을 사용하여 메모리 복사 오버헤드 삭제
+            string[] linesArray = File.ReadAllLines(planCsvPath);
+            float minX = 99999f, minZ = 99999f, maxX = -99999f, maxZ = -99999f;
+
+            System.Collections.Generic.List<TempSpawnData> tempList = new System.Collections.Generic.List<TempSpawnData>();
+            System.Collections.Generic.HashSet<string> loadedIDs = new System.Collections.Generic.HashSet<string>();
+
+            for (int i = 1; i < linesArray.Length; i++)
             {
-                string planCsvPath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
-                if (File.Exists(planCsvPath))
+                // ⭐ 최적화 2: .ToList() 제거, 즉시 string[] 배열로 파싱 및 ElementAt -> 인덱서[] 전환
+                string[] cols = linesArray[i].Split(',');
+
+                if (cols.Length >= 12 && (cols[10] == "Reinforcement" || cols[10] == "Existing"))
                 {
-                    var linesList = File.ReadAllLines(planCsvPath).ToList();
-                    float minX = 99999f, minZ = 99999f, maxX = -99999f, maxZ = -99999f;
-
-                    System.Collections.Generic.List<TempSpawnData> tempList = new System.Collections.Generic.List<TempSpawnData>();
-                    System.Collections.Generic.HashSet<string> loadedIDs = new System.Collections.Generic.HashSet<string>();
-
-                    for (int i = 1; i < linesList.Count; i++)
+                    string[] idParts = cols[0].Split('_');
+                    if (idParts.Length >= 3)
                     {
-                        var cols = linesList.ElementAt(i).Split(',').ToList();
+                        float px = float.Parse(idParts[0]) / 10f;
+                        float pz = float.Parse(idParts[1]) / 10f;
+                        float py = float.Parse(idParts[2]) / 10f;
+                        
+                        float x = math.floor((px - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+                        float z = math.floor((pz - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+                        float y = math.floor((py - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
 
-                        if (cols.Count >= 12 && (cols.ElementAt(10) == "Reinforcement" || cols.ElementAt(10) == "Existing"))
-                        {
-                            var idParts = cols.ElementAt(0).Split('_').ToList();
-                            if (idParts.Count >= 3)
-                            {
-                                float px = float.Parse(idParts.ElementAt(0)) / 10f;
-                                float pz = float.Parse(idParts.ElementAt(1)) / 10f;
-                                float py = float.Parse(idParts.ElementAt(2)) / 10f;
-                                float x = math.floor((px - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-                                float z = math.floor((pz - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-                                float y = math.floor((py - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+                        // 문자열 결합 최소화 (가장 빠른 속도)
+                        string uniqueKey = $"{x}_{y}_{z}";
+                        if (loadedIDs.Contains(uniqueKey)) continue;
 
-                                string uniqueKey = x.ToString() + "_" + y.ToString() + "_" + z.ToString();
-                                if (loadedIDs.Contains(uniqueKey)) continue;
+                        float isReinforce = cols[10] == "Reinforcement" ? 1f : 0f;
+                        string readMat = cols[7].Replace("\0", "").Trim();
 
-                                float isReinforce = cols.ElementAt(10) == "Reinforcement" ? 1f : 0f;
-                                string readMat = cols.ElementAt(7).Replace("\0", "").Trim(); // ⭐ 재질 완벽 파싱
+                        tempList.Add(new TempSpawnData { Pos = new float3(x, y, z), IsReinforce = isReinforce, MatName = readMat });
+                        loadedIDs.Add(uniqueKey);
 
-                                tempList.Add(new TempSpawnData { Pos = new float3(x, y, z), IsReinforce = isReinforce, MatName = readMat });
-                                loadedIDs.Add(uniqueKey);
-
-                                if (x < minX) minX = x; if (x > maxX) maxX = x;
-                                if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
-                            }
-                        }
-                    }
-                    if (tempList.Count > 0)
-                    {
-                        isYMode = true;
-
-                        blueprintOffsets.Clear();
-                        blueprintMaterials.Clear();
-
-                        // Y축 기준으로 가지런히 정렬!
-                        tempList.Sort((a, b) => a.Pos.y.CompareTo(b.Pos.y));
-
-                        float centerX = math.round(((minX + maxX) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                        float centerZ = math.round(((minZ + maxZ) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                        customCenterPos = new float3(centerX, 0f, centerZ);
-                        isCenterMoved = true;
-
-                        foreach (var data in tempList)
-                        {
-                            blueprintOffsets.Add(new float4(data.Pos.x - centerX, data.Pos.y, data.Pos.z - centerZ, data.IsReinforce));
-                            blueprintMaterials.Add(data.MatName); // ⭐ 재질도 함께 장전!
-                        }
-                        UnityEngine.Debug.Log($"🏗️ [스마트 로드 완] {tempList.Count}개의 구조물과 재질 데이터가 장전되었습니다! F키로 확인해 보세요.");
+                        if (x < minX) minX = x; if (x > maxX) maxX = x;
+                        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
                     }
                 }
             }
+            if (tempList.Count > 0)
+            {
+                isYMode = true;
+                blueprintOffsets.Clear();
+                blueprintMaterials.Clear();
+
+                // Y축 정렬
+                tempList.Sort((a, b) => a.Pos.y.CompareTo(b.Pos.y));
+
+                float centerX = math.round(((minX + maxX) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                float centerZ = math.round(((minZ + maxZ) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                customCenterPos = new float3(centerX, 0f, centerZ);
+                isCenterMoved = true;
+
+                foreach (var data in tempList)
+                {
+                    blueprintOffsets.Add(new float4(data.Pos.x - centerX, data.Pos.y, data.Pos.z - centerZ, data.IsReinforce));
+                    blueprintMaterials.Add(data.MatName);
+                }
+                UnityEngine.Debug.Log($"🏗️ [스마트 로드 완] {tempList.Count}개의 구조물과 재질 데이터가 장전되었습니다! F키로 확인해 보세요.");
+            }
         }
+    }
+}
 
         if (isYMode && !isBMode)
         {
