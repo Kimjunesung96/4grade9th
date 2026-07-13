@@ -1,104 +1,45 @@
 using Unity.Entities;
+using Unity.Physics;
 using UnityEngine;
-using Unity.Profiling;
-using System.Collections.Generic;
-using System.Linq;
 
-[UpdateInGroup(typeof(SimulationSystemGroup), OrderLast = true)]
+[UpdateInGroup(typeof(SimulationSystemGroup))]
 public partial class LagDetectiveSystem : SystemBase
 {
-    // 감시 대상 시스템 이름들 (프로젝트에 있는 시스템 이름 그대로 적어주세요)
-    private static readonly string[] WatchedSystems = new string[]
-    {
-        "SpawnerSystem",
-        "SpawnerSystem_Cone",
-        "SpawnerSystem_Cylinder",
-        "SpawnerSystem_Frame",
-        "SpawnerSystem_Motor",
-        "SpawnerSystem_Pyramid",
-        "SpawnerSystem_Solid",
-        "StressVisualizationSystem",
-        "VibrationTestSystem",
-        "ShockwaveTestSystem",
-        "BuilderActionSystem",
-        "BuilderInputSystem",
-        "MaterialPropertyInitSystem",
-        "DefaultMaterialInitSystem",
-        "CameraFollowSystem",
-        "OptimizedColorSystem",
-        "PlayerMovementSystem",
-    };
-
-    private Dictionary<string, ProfilerRecorder> recorders = new Dictionary<string, ProfilerRecorder>();
+    private EntityQuery blockQuery;
+    private EntityQuery jointQuery;
     private float checkTimer;
 
     protected override void OnCreate()
     {
-        // 각 시스템 이름으로 프로파일러 레코더를 만들어 둡니다.
-        // Unity가 내부적으로 시스템 OnUpdate를 이 이름으로 프로파일링하고 있어서 그대로 후킹 가능합니다.
-        foreach (var name in WatchedSystems)
-        {
-            var recorder = ProfilerRecorder.StartNew(ProfilerCategory.Scripts, name, 1);
-            recorders[name] = recorder;
-        }
-    }
-
-    protected override void OnDestroy()
-    {
-        foreach (var kv in recorders)
-        {
-            kv.Value.Dispose();
-        }
-        recorders.Clear();
+        // 감시할 대상(블록과 조인트)을 찾는 쿼리 생성
+        blockQuery = GetEntityQuery(ComponentType.ReadOnly<BlockTag>());
+        jointQuery = GetEntityQuery(ComponentType.ReadOnly<JointTag>());
+        checkTimer = 0f;
     }
 
     protected override void OnUpdate()
     {
-        float dt = SystemAPI.Time.DeltaTime;
-
-        // 0.1초(100ms) 이상 걸린 프레임만 상세 분석
-        if (dt > 0.1f)
+        // 1. 순간적인 프리징(화면 멈춤) 감지
+        // 한 프레임을 처리하는 데 0.1초(100ms) 이상 걸리면 치명적인 병목으로 간주합니다.
+        if (SystemAPI.Time.DeltaTime > 0.1f)
         {
-            var results = new List<(string name, double ms)>();
-
-            foreach (var kv in recorders)
-            {
-                if (kv.Value.Valid && kv.Value.Count > 0)
-                {
-                    // 나노초 -> 밀리초 변환
-                    double ms = kv.Value.LastValue / 1000000.0;
-                    results.Add((kv.Key, ms));
-                }
-            }
-
-            // 오래 걸린 순서로 정렬
-            var sorted = results.OrderByDescending(r => r.ms).ToList();
-
-            string report = $"🚨 [렉 감지 상세] 프레임 {dt * 1000f:F1}ms 지연 발생! 범인 랭킹:\n";
-            for (int i = 0; i < sorted.Count && i < 5; i++)
-            {
-                if (sorted[i].ms > 1.0) // 1ms 이상만 표시 (의미없는 항목 제거)
-                {
-                    report += $"  {i + 1}위: {sorted[i].name} - {sorted[i].ms:F2}ms\n";
-                }
-            }
-
-            // 어떤 시스템도 크게 잡히지 않았다면 -> Unity 내부(물리 솔버, GC 등) 병목 가능성
-            if (sorted.Count == 0 || sorted[0].ms < 1.0)
-            {
-                report += "  ⚠️ 감시 대상 시스템 중엔 범인이 없습니다. Unity.Physics 솔버, GC(가비지 컬렉션), 또는 렌더링 스레드 병목일 가능성이 높습니다.";
-            }
-
-            UnityEngine.Debug.LogWarning(report);
+            UnityEngine.Debug.LogWarning($"🚨 [렉 감지] 프레임 처리 지연! ({SystemAPI.Time.DeltaTime * 1000f:F1}ms 소요)\n원인 의심: 파일 저장(CSV I/O) 병목 또는 O(N^2) 이중 반복문");
         }
 
-        // GC 발생 감지 (매 프레임 체크는 가볍습니다)
-        checkTimer += dt;
+        // 2. 조인트 폭탄 감지 (매 프레임 세면 낭비이므로 1초마다 한 번씩만 검사)
+        checkTimer += SystemAPI.Time.DeltaTime;
         if (checkTimer >= 1.0f)
         {
             checkTimer = 0f;
-            long gcMemory = System.GC.GetTotalMemory(false);
-            UnityEngine.Debug.Log($"📈 [메모리 체크] 현재 관리 힙: {gcMemory / 1024 / 1024}MB");
+
+            int blockCount = blockQuery.CalculateEntityCount();
+            int jointCount = jointQuery.CalculateEntityCount();
+
+            // 블록당 연결될 수 있는 정상적인 조인트 개수(상하좌우전후 = 최대 6개)를 아득히 초과했는지 검사
+            if (jointCount > 10000 && jointCount > blockCount * 5)
+            {
+                UnityEngine.Debug.LogError($"🧨 [조인트 폭탄 경고] 블록({blockCount}개) 대비 물리 조인트({jointCount}개)가 비정상적으로 많습니다!\n물리 엔진이 마비될 수 있습니다. 고정(Static) 블록 간의 무의미한 용접을 멈추세요!");
+            }
         }
     }
 }

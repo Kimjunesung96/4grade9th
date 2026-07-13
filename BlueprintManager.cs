@@ -104,8 +104,14 @@ public class BlueprintManager : MonoBehaviour
     public void SaveBlueprint()
     {
         string json = JsonUtility.ToJson(currentBlueprint, true);
-        File.WriteAllText(FilePath, json);
-        Debug.Log("💾 [BlueprintManager] JSON 도면 최종 기록 완료!");
+        string savePath = FilePath; // 백그라운드 스레드로 넘기기 위해 경로 미리 캡처
+        
+        // ⭐ 최적화: 메인 스레드를 멈추지 않고 백그라운드에서 파일 쓰기 진행
+        System.Threading.Tasks.Task.Run(() => 
+        {
+            File.WriteAllText(savePath, json);
+            UnityEngine.Debug.Log("💾 [BlueprintManager] 비동기 JSON 도면 최종 기록 완료! (렉 제거)");
+        });
     }
 
     public string VectorToID(Vector3 pos)
