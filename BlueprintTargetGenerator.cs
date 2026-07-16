@@ -435,10 +435,18 @@ public class BlueprintTargetGenerator : MonoBehaviour
                     for (int k = 0; k < 12; k++) fixedCols[k] = (k < cols.Length) ? cols[k].Trim() : "";
                     if (string.IsNullOrEmpty(fixedCols[7])) fixedCols[7] = "Default";
 
-                    float x = float.Parse(fixedCols[1], CultureInfo.InvariantCulture);
+                    // ⭐ 버그 수정: X, Z 좌표를 3칸 격자에 스냅합니다.
+                    // 기존엔 CSV의 원본 좌표(임의 소수점)를 그대로 써서, AI 추출 CSV처럼
+                    // 격자에 안 맞는 좌표가 들어오면 블록이 미세하게 어긋난 위치에 스폰되고
+                    // 그 상태로 조인트가 걸리면서 물리 솔버가 침투를 밀어내다 "폭발"했습니다.
+                    // (LoadLastBuildingForUMode의 U키 로직과 동일하게 스냅을 맞춥니다.)
+                    float rawX = float.Parse(fixedCols[1], CultureInfo.InvariantCulture);
+                    float rawZ = float.Parse(fixedCols[3], CultureInfo.InvariantCulture);
+                    float x = math.round((rawX - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                    float z = math.round((rawZ - 1.5f) / 3.0f) * 3.0f + 1.5f;
+
                     float yOffset = i * 15.0f;
                     float y = float.Parse(fixedCols[2], CultureInfo.InvariantCulture) + yOffset;
-                    float z = float.Parse(fixedCols[3], CultureInfo.InvariantCulture);
 
                     finalStackedData.Add(new float3(x, y, z));
 
