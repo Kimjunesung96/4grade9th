@@ -104,7 +104,7 @@ public partial struct StressVisualizationSystem : ISystem
     public void OnUpdate(ref SystemState state)
     {
         if (Input.GetKeyDown(KeyCode.V)) { isWeightScanMode = true; StartScan(ref state); }
-        else if (Input.GetKeyDown(KeyCode.B)) { isWeightScanMode = false; StartScan(ref state); }
+       // else if (Input.GetKeyDown(KeyCode.B)) { isWeightScanMode = false; StartScan(ref state); }
 
         if (isScanning)
         {
