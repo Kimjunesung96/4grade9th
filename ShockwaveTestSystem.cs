@@ -24,62 +24,52 @@ public partial struct ShockwaveTestSystem : ISystem
 
         if (Input.GetKeyDown(KeyCode.N) && !isShocking)
         {
-            isNMode = !isNMode; IsNModeActive = isNMode;
-            if (isNMode) { Debug.Log("☢️ N-모드 시작"); foreach (var color in SystemAPI.Query<RefRW<URPMaterialPropertyBaseColor>>().WithAll<BlockTag>()) { color.ValueRW.Value = new float4(1, 1, 1, 1); } }
+            if (!isNMode) 
+            {
+                isNMode = true; IsNModeActive = true;
+                Debug.Log("☢️ N-모드 시작! 우클릭으로 좌표를 잡고 한 번 더 N을 누르면 폭발합니다.");
+                foreach (var color in SystemAPI.Query<RefRW<URPMaterialPropertyBaseColor>>().WithAll<BlockTag>()) { color.ValueRW.Value = new float4(1, 1, 1, 1); }
+            }
+            else
+            {
+                isNMode = false; IsNModeActive = false;
+                var ecb = new EntityCommandBuffer(Allocator.Temp); PhysicsWorld physicsWorld = SystemAPI.GetSingleton<PhysicsWorldSingleton>().PhysicsWorld;
+                int ghostCount = 0; foreach (var (ghost, entity) in SystemAPI.Query<RefRO<GhostBlockTag>>().WithEntityAccess()) { ghostCount++; ecb.DestroyEntity(entity); }
+                float explosionPower = ghostCount * 5.0f; float blastRadius = ghostCount * 1.5f; isShocking = true; shockTimer = MAX_SHOCK_TIME;
+
+                foreach (var (transform, mass, velocity, gravity, entity) in SystemAPI.Query<RefRO<LocalTransform>, RefRW<PhysicsMass>, RefRW<PhysicsVelocity>, RefRW<PhysicsGravityFactor>>().WithAll<BlockTag>().WithEntityAccess())
+                {
+                    gravity.ValueRW.Value = 1.0f;
+                    if (transform.ValueRO.Position.y <= 3.1f) { mass.ValueRW.InverseMass = 0f; mass.ValueRW.InverseInertia = float3.zero; }
+                    ecb.AddComponent(entity, new ShockTracker { OriginalPos = transform.ValueRO.Position, OriginalRot = transform.ValueRO.Rotation, MaxDisplacement = 0f });
+                    if (mass.ValueRO.InverseMass > 0)
+                    {
+                        float3 dir = transform.ValueRO.Position - epicenter; float dist = math.length(dir);
+                        if (dist <= blastRadius + 1.0f)
+                        {
+                            if (dist < 0.1f) dir = math.up(); else dir = math.normalize(dir);
+                            float finalPower = explosionPower; RaycastInput ray = new RaycastInput { Start = epicenter, End = transform.ValueRO.Position, Filter = CollisionFilter.Default };
+                            if (physicsWorld.CastRay(ray, out Unity.Physics.RaycastHit hit)) { if (hit.Entity != entity) finalPower *= 0.15f; }
+                            float forceMag = finalPower / (dist * dist + 0.5f); velocity.ValueRW.Linear += dir * forceMag;
+                            float3 toppleAxis = math.cross(math.up(), dir); float heightMult = math.max(1.0f, transform.ValueRO.Position.y * 0.5f); velocity.ValueRW.Angular += toppleAxis * (forceMag * 0.5f * heightMult);
+                        }
+                    }
+                }
+                ecb.Playback(state.EntityManager); ecb.Dispose();
+            }
         }
 
         if (isNMode)
         {
             UnityEngine.Debug.DrawLine(epicenter + new float3(-1, 0, 0), epicenter + new float3(1, 0, 0), UnityEngine.Color.red); UnityEngine.Debug.DrawLine(epicenter + new float3(0, -1, 0), epicenter + new float3(0, 1, 0), UnityEngine.Color.red); UnityEngine.Debug.DrawLine(epicenter + new float3(0, 0, -1), epicenter + new float3(0, 0, 1), UnityEngine.Color.red); UnityEngine.Debug.DrawRay(epicenter, UnityEngine.Vector3.up * 5f, UnityEngine.Color.red);
-       if (Input.GetMouseButtonDown(1))
+            if (Input.GetMouseButtonDown(1))
             {
                 UnityEngine.Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
                 PhysicsWorld physicsWorld = SystemAPI.GetSingleton<PhysicsWorldSingleton>().PhysicsWorld; 
-                // bool hitSuccess = false; // ⭐ 미사용 변수 제거
-
                 RaycastInput rayInput = new RaycastInput { Start = ray.origin, End = ray.origin + ray.direction * 500f, Filter = CollisionFilter.Default };
-                if (physicsWorld.CastRay(rayInput, out Unity.Physics.RaycastHit hit)) 
-                { 
-                    epicenter = hit.Position; 
-                    // hitSuccess = true; // ⭐ 미사용 변수 제거
-                }
-                else 
-                { 
-                    UnityEngine.Plane groundPlane = new UnityEngine.Plane(UnityEngine.Vector3.up, UnityEngine.Vector3.zero);
-                    if (groundPlane.Raycast(ray, out float enter)) 
-                    { 
-                        epicenter = ray.GetPoint(enter); 
-                        // hitSuccess = true; // ⭐ 미사용 변수 제거
-                    } 
-                }
+                if (physicsWorld.CastRay(rayInput, out Unity.Physics.RaycastHit hit)) { epicenter = hit.Position; }
+                else { UnityEngine.Plane groundPlane = new UnityEngine.Plane(UnityEngine.Vector3.up, UnityEngine.Vector3.zero); if (groundPlane.Raycast(ray, out float enter)) { epicenter = ray.GetPoint(enter); } }
             }
-        }
-
-        if (isNMode && Input.GetKeyDown(KeyCode.G) && !isShocking)
-        {
-            isNMode = false; IsNModeActive = false;
-            var ecb = new EntityCommandBuffer(Allocator.Temp); PhysicsWorld physicsWorld = SystemAPI.GetSingleton<PhysicsWorldSingleton>().PhysicsWorld;
-            int ghostCount = 0; foreach (var (ghost, entity) in SystemAPI.Query<RefRO<GhostBlockTag>>().WithEntityAccess()) { ghostCount++; ecb.DestroyEntity(entity); }
-            float explosionPower = ghostCount * 5.0f; float blastRadius = ghostCount * 1.5f; isShocking = true; shockTimer = MAX_SHOCK_TIME;
-
-            foreach (var (transform, mass, velocity, entity) in SystemAPI.Query<RefRO<LocalTransform>, RefRW<PhysicsMass>, RefRW<PhysicsVelocity>>().WithAll<BlockTag>().WithEntityAccess())
-            {
-                if (transform.ValueRO.Position.y <= 3.1f) { mass.ValueRW.InverseMass = 0f; mass.ValueRW.InverseInertia = float3.zero; }
-                ecb.AddComponent(entity, new ShockTracker { OriginalPos = transform.ValueRO.Position, OriginalRot = transform.ValueRO.Rotation, MaxDisplacement = 0f });
-                if (mass.ValueRO.InverseMass > 0)
-                {
-                    float3 dir = transform.ValueRO.Position - epicenter; float dist = math.length(dir);
-                    if (dist <= blastRadius + 1.0f)
-                    {
-                        if (dist < 0.1f) dir = math.up(); else dir = math.normalize(dir);
-                        float finalPower = explosionPower; RaycastInput ray = new RaycastInput { Start = epicenter, End = transform.ValueRO.Position, Filter = CollisionFilter.Default };
-                        if (physicsWorld.CastRay(ray, out Unity.Physics.RaycastHit hit)) { if (hit.Entity != entity) finalPower *= 0.15f; }
-                        float forceMag = finalPower / (dist * dist + 0.5f); velocity.ValueRW.Linear += dir * forceMag;
-                        float3 toppleAxis = math.cross(math.up(), dir); float heightMult = math.max(1.0f, transform.ValueRO.Position.y * 0.5f); velocity.ValueRW.Angular += toppleAxis * (forceMag * 0.5f * heightMult);
-                    }
-                }
-            }
-            ecb.Playback(state.EntityManager); ecb.Dispose();
         }
 
         if (isShocking)
@@ -91,22 +81,63 @@ public partial struct ShockwaveTestSystem : ISystem
                 if (dist > tracker.ValueRW.MaxDisplacement) tracker.ValueRW.MaxDisplacement = dist;
                 if (shockTimer > 0f) color.ValueRW.Value = new float4(1, 1, 1, 1);
             }
+
+            state.Dependency.Complete();
+            var breakEcb = new EntityCommandBuffer(Allocator.Temp);
+            var transLookup = SystemAPI.GetComponentLookup<LocalTransform>(true);
+            var matLookup = SystemAPI.GetComponentLookup<BlockMaterial>(true);
+
+            foreach (var (jointPair, joint, jointEntity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>, RefRO<PhysicsJoint>>().WithAll<JointTag>().WithEntityAccess())
+            {
+                if (transLookup.HasComponent(jointPair.ValueRO.EntityA) && transLookup.HasComponent(jointPair.ValueRO.EntityB) &&
+                    matLookup.HasComponent(jointPair.ValueRO.EntityA) && matLookup.HasComponent(jointPair.ValueRO.EntityB))
+                {
+                    var transA = transLookup[jointPair.ValueRO.EntityA];
+                    var transB = transLookup[jointPair.ValueRO.EntityB];
+                    var matA = matLookup[jointPair.ValueRO.EntityA];
+                    var matB = matLookup[jointPair.ValueRO.EntityB];
+
+                    float3 pivotA = math.transform(new RigidTransform(transA.Rotation, transA.Position), joint.ValueRO.BodyAFromJoint.Position);
+                    float3 pivotB = math.transform(new RigidTransform(transB.Rotation, transB.Position), joint.ValueRO.BodyBFromJoint.Position);
+                    
+                    float stretch = math.distance(pivotA, pivotB);
+                    if (stretch > 0.05f) 
+                    {
+                        float tensileStress = stretch * 5000.0f;
+                        float tensileDefense = (matA.TensileStiffness + matB.TensileStiffness) * 0.5f;
+
+                        if (tensileStress > tensileDefense) { breakEcb.DestroyEntity(jointEntity); }
+                    }
+                }
+            }
+            breakEcb.Playback(state.EntityManager);
+            breakEcb.Dispose();
+
             if (shockTimer <= 0f)
             {
-                isShocking = false; var ecb = new EntityCommandBuffer(Allocator.Temp);
-                NativeList<float3> finalPos = new NativeList<float3>(Allocator.Temp); NativeList<float> finalStresses = new NativeList<float>(Allocator.Temp);
-                NativeList<FixedString32Bytes> finalMaterials = new NativeList<FixedString32Bytes>(Allocator.Temp); // ⭐ 재질 리스트
+                isShocking = false; Debug.Log("🛑 [폭발 종료] 위치가 원상복구되며, 파괴 여부는 색상으로 표시됩니다.");
 
-                // ⭐ 재질(BlockMaterial) 같이 스캔
-                foreach (var (tr, tracker, vel, color, mat, ent) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<ShockTracker>, RefRW<PhysicsVelocity>, RefRW<URPMaterialPropertyBaseColor>, RefRO<BlockMaterial>>().WithAll<BlockTag>().WithEntityAccess())
+                var ecb = new EntityCommandBuffer(Allocator.Temp);
+                NativeList<float3> finalPos = new NativeList<float3>(Allocator.Temp); NativeList<float> finalStresses = new NativeList<float>(Allocator.Temp);
+                NativeList<FixedString32Bytes> finalMaterials = new NativeList<FixedString32Bytes>(Allocator.Temp);
+
+                foreach (var (tr, tracker, vel, gravity, color, mat, ent) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<ShockTracker>, RefRW<PhysicsVelocity>, RefRW<PhysicsGravityFactor>, RefRW<URPMaterialPropertyBaseColor>, RefRO<BlockMaterial>>().WithAll<BlockTag>().WithEntityAccess())
                 {
-                    tr.ValueRW.Position = tracker.ValueRO.OriginalPos; tr.ValueRW.Rotation = tracker.ValueRO.OriginalRot; vel.ValueRW.Linear = float3.zero; vel.ValueRW.Angular = float3.zero;
-                    float maxDisp = tracker.ValueRO.MaxDisplacement; float4 newCol = new float4(1, 1, 1, 1);
-                    if (maxDisp >= 5.0f) newCol = new float4(0.2f, 0.2f, 0.2f, 1); else if (maxDisp >= 2.0f) newCol = new float4(1, 0, 0, 1); else if (maxDisp >= 0.5f) newCol = new float4(1, 1, 0, 1);
+                    tr.ValueRW.Position = tracker.ValueRO.OriginalPos; 
+                    tr.ValueRW.Rotation = tracker.ValueRO.OriginalRot; 
+                    vel.ValueRW.Linear = float3.zero; 
+                    vel.ValueRW.Angular = float3.zero;
+                    gravity.ValueRW.Value = 0.0f;
+
+                    float maxDisp = tracker.ValueRO.MaxDisplacement; 
+                    float4 newCol = new float4(1, 1, 1, 1);
+                    // ⭐ 파괴 기준 통일: 빨간색 (1, 0, 0)
+                    if (maxDisp >= 2.0f) newCol = new float4(1.0f, 0.0f, 0.0f, 1.0f); 
+                    else if (maxDisp >= 0.5f) newCol = new float4(1.0f, 1.0f, 0.0f, 1.0f);
                     color.ValueRW.Value = newCol;
 
                     finalPos.Add(tracker.ValueRO.OriginalPos); finalStresses.Add(maxDisp);
-                    finalMaterials.Add(mat.ValueRO.MaterialName); // ⭐ 저장
+                    finalMaterials.Add(mat.ValueRO.MaterialName); 
 
                     ecb.RemoveComponent<ShockTracker>(ent);
                 }
@@ -127,47 +158,28 @@ public partial struct ShockwaveTestSystem : ISystem
         string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
 
         System.Collections.Generic.List<string> currentLines = new System.Collections.Generic.List<string>();
-
-        // 12칸 표준 규격 헤더
         currentLines.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
 
         for (int i = 0; i < positions.Length; i++)
         {
-            float3 pos = positions[i];
-            float stress = stresses[i];
-            string mat = materials[i].ToString();
-
-            float ix = math.round(pos.x * 10f);
-            float iz = math.round(pos.z * 10f);
-            float iy = math.round(pos.y * 10f);
-            string strX = (ix < 0 ? "-" : "0") + math.abs(ix).ToString("000");
-            string strZ = (iz < 0 ? "-" : "0") + math.abs(iz).ToString("000");
-            string strY = (iy < 0 ? "-" : "0") + math.abs(iy).ToString("000");
-
+            float3 pos = positions[i]; float stress = stresses[i]; string mat = materials[i].ToString();
+            float ix = math.round(pos.x * 10f); float iz = math.round(pos.z * 10f); float iy = math.round(pos.y * 10f);
+            string strX = (ix < 0 ? "-" : "0") + math.abs(ix).ToString("000"); string strZ = (iz < 0 ? "-" : "0") + math.abs(iz).ToString("000"); string strY = (iy < 0 ? "-" : "0") + math.abs(iy).ToString("000");
             string id = strX + "_" + strZ + "_" + strY;
-            string risk = stress >= 2.0f ? "Danger" : (stress >= 0.5f ? "Warning" : "Safe");
+
+            // ⭐ 엑셀에 파괴된 블록 좌표를 DESTROYED로 기록하도록 통일!
+            string posX = stress >= 2.0f ? "DESTROYED" : pos.x.ToString("F2");
+            string posY = stress >= 2.0f ? "DESTROYED" : pos.y.ToString("F2");
+            string posZ = stress >= 2.0f ? "DESTROYED" : pos.z.ToString("F2");
+
+            string risk = stress >= 2.0f ? "Destroyed" : (stress >= 0.5f ? "Warning" : "Safe"); 
             string pres = stress >= 2.0f ? "Y" : "N";
             string typeStr = pos.y > 1.5f ? "Wall" : "Floor";
 
-            // 12칸 표준 규격 데이터 작성
-            string lineData = id + "," +
-                              pos.x.ToString("F2") + "," +
-                              pos.y.ToString("F2") + "," +
-                              pos.z.ToString("F2") + "," +
-                              stress.ToString("F2") + "," +
-                              risk + "," +
-                              pres + "," +
-                              mat + "," +
-                              "0.0" + "," +
-                              "0.0" + "," +
-                              "Existing" + "," +
-                              typeStr;
-
+            string lineData = id + "," + posX + "," + posY + "," + posZ + "," + stress.ToString("F2") + "," + risk + "," + pres + "," + mat + ",0.0,0.0,Existing," + typeStr;
             currentLines.Add(lineData);
         }
 
-        File.WriteAllLines(historyPath, currentLines);
-        File.WriteAllLines(currentPath, currentLines);
-        UnityEngine.Debug.Log("📄 [엑셀] N키 폭발 진단결과 저장 완료! (12칸 표준 규격)");
+        File.WriteAllLines(historyPath, currentLines); File.WriteAllLines(currentPath, currentLines);
     }
 }
