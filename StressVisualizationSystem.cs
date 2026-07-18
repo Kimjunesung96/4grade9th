@@ -136,7 +136,7 @@ public partial struct StressVisualizationSystem : ISystem
             }
         }
 
-        if (needsColorUpdate) { UpdateResults(ref state); }
+        if (needsColorUpdate) { UpdateResults(ref state); needsColorUpdate = false; }
     }
 
     private void StartScan(ref SystemState state)

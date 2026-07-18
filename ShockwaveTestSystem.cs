@@ -16,6 +16,9 @@ public partial struct ShockwaveTestSystem : ISystem
     public static bool IsNModeActive = false;
     private bool isNMode; private bool isShocking; private float shockTimer; private const float MAX_SHOCK_TIME = 5.0f; private float3 epicenter;
 
+    private static readonly int3[] gridDirs = new int3[] { new int3(1, 0, 0), new int3(0, 0, 1), new int3(0, 1, 0) };
+    private static readonly float3[] internalDirs = new float3[] { new float3(1, 0, 0), new float3(0, 0, 1), new float3(0, 1, 0) };
+
     public void OnCreate(ref SystemState state) { isNMode = false; IsNModeActive = false; isShocking = false; shockTimer = 0f; epicenter = float3.zero; state.RequireForUpdate<PhysicsWorldSingleton>(); }
 
     public void OnUpdate(ref SystemState state)
@@ -144,8 +147,73 @@ public partial struct ShockwaveTestSystem : ISystem
                 SaveShockwaveExcel(finalPos, finalStresses, finalMaterials);
                 finalPos.Dispose(); finalStresses.Dispose(); finalMaterials.Dispose();
                 ecb.Playback(state.EntityManager); ecb.Dispose();
+
+                // ⭐ [조인트 전면 재구성] 살아남은/끊어진 조인트 다 지우고, 현재(=복구된) 위치 기준으로 그리드 스캔해서 새로 싹 다 묶음
+                RebuildAllJoints(ref state);
             }
         }
+    }
+
+    // ⭐ 3유닛 그리드 기준으로 인접한 블록들을 전부 다시 조인트로 묶는다 (O(N) 공간 해시, SpawnerSystem의 조인트 생성 로직과 동일한 방식)
+    private void RebuildAllJoints(ref SystemState state)
+    {
+        var destroyEcb = new EntityCommandBuffer(Allocator.Temp);
+        foreach (var (pair, jointEntity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
+        {
+            destroyEcb.DestroyEntity(jointEntity);
+        }
+        destroyEcb.Playback(state.EntityManager);
+        destroyEcb.Dispose();
+
+        var gridMap = new NativeHashMap<int3, Entity>(4096, Allocator.Temp);
+        var posMap = new NativeHashMap<Entity, float3>(4096, Allocator.Temp);
+
+        foreach (var (transform, entity) in SystemAPI.Query<RefRO<LocalTransform>>().WithAll<BlockTag>().WithEntityAccess())
+        {
+            float3 pos = transform.ValueRO.Position;
+            int3 key = new int3(
+                (int)math.floor(pos.x / 3f + 0.5f),
+                (int)math.floor(pos.y / 3f + 0.5f),
+                (int)math.floor(pos.z / 3f + 0.5f));
+            gridMap.TryAdd(key, entity);
+            posMap.TryAdd(entity, pos);
+        }
+
+        var buildEcb = new EntityCommandBuffer(Allocator.Temp);
+        var keys = gridMap.GetKeyArray(Allocator.Temp);
+        int newJointCount = 0;
+
+        for (int k = 0; k < keys.Length; k++)
+        {
+            int3 key = keys[k];
+            Entity cur = gridMap[key];
+
+            for (int d = 0; d < 3; d++)
+            {
+                if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor) && neighbor != cur)
+                {
+                    CreateIndestructibleJoint(ref buildEcb, cur, neighbor, internalDirs[d] * 3.0f);
+                    newJointCount++;
+                }
+            }
+        }
+
+        buildEcb.Playback(state.EntityManager);
+        buildEcb.Dispose();
+        keys.Dispose();
+        gridMap.Dispose();
+        posMap.Dispose();
+
+        Debug.Log($"🔧 [조인트 전면 재구성] 기존 조인트 삭제 후 인접 블록 {newJointCount}쌍 재결합 완료!");
+    }
+
+    private void CreateIndestructibleJoint(ref EntityCommandBuffer ecb, Entity entityA, Entity entityB, float3 offsetToB)
+    {
+        Entity jointEntity = ecb.CreateEntity();
+        ecb.AddSharedComponent(jointEntity, new PhysicsWorldIndex());
+        ecb.AddComponent<JointTag>(jointEntity);
+        ecb.AddComponent(jointEntity, new PhysicsConstrainedBodyPair(entityA, entityB, true));
+        ecb.AddComponent(jointEntity, PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f)));
     }
 
     private void SaveShockwaveExcel(NativeList<float3> positions, NativeList<float> stresses, NativeList<FixedString32Bytes> materials)
@@ -172,8 +240,9 @@ public partial struct ShockwaveTestSystem : ISystem
             string posY = stress >= 2.0f ? "DESTROYED" : pos.y.ToString("F2");
             string posZ = stress >= 2.0f ? "DESTROYED" : pos.z.ToString("F2");
 
-            string risk = stress >= 2.0f ? "Destroyed" : (stress >= 0.5f ? "Warning" : "Safe"); 
-            string pres = stress >= 2.0f ? "Y" : "N";
+            // ⭐ 폭발 전용 라벨로 분리!
+            string risk = stress >= 2.0f ? "Destroyed" : (stress >= 0.5f ? "Explosion_Danger" : "Safe"); 
+            string pres = stress >= 2.0f ? "Y" : (stress >= 0.5f ? "Y" : "N");
             string typeStr = pos.y > 1.5f ? "Wall" : "Floor";
 
             string lineData = id + "," + posX + "," + posY + "," + posZ + "," + stress.ToString("F2") + "," + risk + "," + pres + "," + mat + ",0.0,0.0,Existing," + typeStr;
