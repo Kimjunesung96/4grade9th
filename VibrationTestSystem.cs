@@ -22,6 +22,9 @@ public partial struct VibrationTestSystem : ISystem
     private bool isBMode; private int vibeLevel; private float actualVibePower;
     private bool isVibrating; private float vibeTimer; private const float MAX_VIBE_TIME = 5.0f;
 
+    private static readonly int3[] gridDirs = new int3[] { new int3(1, 0, 0), new int3(0, 0, 1), new int3(0, 1, 0) };
+    private static readonly float3[] internalDirs = new float3[] { new float3(1, 0, 0), new float3(0, 0, 1), new float3(0, 1, 0) };
+
     public void OnCreate(ref SystemState state)
     {
         isBMode = false; IsBModeActive = false; vibeLevel = 1; actualVibePower = 1f; isVibrating = false; vibeTimer = 0f; state.RequireForUpdate<PhysicsWorldSingleton>();
@@ -108,9 +111,18 @@ public partial struct VibrationTestSystem : ISystem
                     float stretch = math.distance(pivotA, pivotB);
                     if (stretch > 0.05f) 
                     {
-                        float tensileStress = stretch * 5000.0f;
-                        float tensileDefense = (matA.TensileStiffness + matB.TensileStiffness) * 0.5f;
-                        if (tensileStress > tensileDefense) { breakEcb.DestroyEntity(jointEntity); }
+                        // ⭐ [재질 강도 영향 반영] 재질의 인장 강도가 높을수록 더 큰 변형을 버팀!
+                        float tensileStress = stretch * 5000.0f; 
+                        
+                        // ⭐ [재질 강도 영향 반영] 
+                        // tensileDefense = (matA.TensileStiffness + matB.TensileStiffness) * 0.5f; 
+                        // 위 기존 코드에 진동의 강도(actualVibePower)를 대입하여 강도에 따라 파괴 임계값 조정
+                        float tensileDefense = (matA.TensileStiffness + matB.TensileStiffness) * 0.5f * math.max(0.1f, (10.0f - actualVibePower));
+
+                        if (tensileStress > tensileDefense) 
+                        { 
+                            breakEcb.DestroyEntity(jointEntity); 
+                        }
                     }
                 }
             }
@@ -159,8 +171,73 @@ public partial struct VibrationTestSystem : ISystem
 
                 finalPositions.Dispose(); finalStresses.Dispose(); finalMaterials.Dispose();
                 ecb.Playback(state.EntityManager); ecb.Dispose();
+
+                // ⭐ [조인트 전면 재구성] 살아남은/끊어진 조인트 다 지우고, 현재(=복구된) 위치 기준으로 그리드 스캔해서 새로 싹 다 묶음
+                RebuildAllJoints(ref state);
             }
         }
+    }
+
+    // ⭐ 3유닛 그리드 기준으로 인접한 블록들을 전부 다시 조인트로 묶는다 (O(N) 공간 해시, SpawnerSystem의 조인트 생성 로직과 동일한 방식)
+    private void RebuildAllJoints(ref SystemState state)
+    {
+        var destroyEcb = new EntityCommandBuffer(Allocator.Temp);
+        foreach (var (pair, jointEntity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
+        {
+            destroyEcb.DestroyEntity(jointEntity);
+        }
+        destroyEcb.Playback(state.EntityManager);
+        destroyEcb.Dispose();
+
+        var gridMap = new NativeHashMap<int3, Entity>(4096, Allocator.Temp);
+        var posMap = new NativeHashMap<Entity, float3>(4096, Allocator.Temp);
+
+        foreach (var (transform, entity) in SystemAPI.Query<RefRO<LocalTransform>>().WithAll<BlockTag>().WithEntityAccess())
+        {
+            float3 pos = transform.ValueRO.Position;
+            int3 key = new int3(
+                (int)math.floor(pos.x / 3f + 0.5f),
+                (int)math.floor(pos.y / 3f + 0.5f),
+                (int)math.floor(pos.z / 3f + 0.5f));
+            gridMap.TryAdd(key, entity);
+            posMap.TryAdd(entity, pos);
+        }
+
+        var buildEcb = new EntityCommandBuffer(Allocator.Temp);
+        var keys = gridMap.GetKeyArray(Allocator.Temp);
+        int newJointCount = 0;
+
+        for (int k = 0; k < keys.Length; k++)
+        {
+            int3 key = keys[k];
+            Entity cur = gridMap[key];
+
+            for (int d = 0; d < 3; d++)
+            {
+                if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor) && neighbor != cur)
+                {
+                    CreateIndestructibleJoint(ref buildEcb, cur, neighbor, internalDirs[d] * 3.0f);
+                    newJointCount++;
+                }
+            }
+        }
+
+        buildEcb.Playback(state.EntityManager);
+        buildEcb.Dispose();
+        keys.Dispose();
+        gridMap.Dispose();
+        posMap.Dispose();
+
+        Debug.Log($"🔧 [조인트 전면 재구성] 기존 조인트 삭제 후 인접 블록 {newJointCount}쌍 재결합 완료!");
+    }
+
+    private void CreateIndestructibleJoint(ref EntityCommandBuffer ecb, Entity entityA, Entity entityB, float3 offsetToB)
+    {
+        Entity jointEntity = ecb.CreateEntity();
+        ecb.AddSharedComponent(jointEntity, new PhysicsWorldIndex());
+        ecb.AddComponent<JointTag>(jointEntity);
+        ecb.AddComponent(jointEntity, new PhysicsConstrainedBodyPair(entityA, entityB, true));
+        ecb.AddComponent(jointEntity, PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f)));
     }
 
     private void SaveVibrationExcel(NativeList<float3> positions, NativeList<float> stresses, NativeList<FixedString32Bytes> materials)
@@ -187,8 +264,8 @@ public partial struct VibrationTestSystem : ISystem
             string posY = stress >= 2.0f ? "DESTROYED" : pos.y.ToString("F2");
             string posZ = stress >= 2.0f ? "DESTROYED" : pos.z.ToString("F2");
 
-            string risk = stress >= 2.0f ? "Destroyed" : (stress >= 0.5f ? "Warning" : "Safe"); 
-            string pres = stress >= 2.0f ? "Y" : "N";
+            string risk = stress >= 2.0f ? "Destroyed" : (stress >= 0.5f ? "Quake_Danger" : "Safe"); 
+            string pres = stress >= 2.0f ? "Y" : (stress >= 0.5f ? "Y" : "N");
             string typeStr = pos.y > 1.5f ? "Wall" : "Floor";
 
             string lineData = id + "," + posX + "," + posY + "," + posZ + "," + stress.ToString("F2") + "," + risk + "," + pres + "," + mat + ",0.0,0.0,Existing," + typeStr;

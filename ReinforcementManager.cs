@@ -58,28 +58,108 @@ public class ReinforcementManager : MonoBehaviour
             currentMode = BudgetUIManager.Instance.reinforcementMode;
         }
 
-        if (shouldReinforce)
-        {
-            List<(Vector3 pos, bool isDanger)> flaggedPoints = new List<(Vector3 pos, bool isDanger)>();
-
-            for (int i = 1; i < lines.Count; i++)
+       if (shouldReinforce)
             {
-                var cols = lines[i].Split(',').ToList();
-                if (cols.Count < 12 || cols[5] != "Danger") continue; 
+                List<(Vector3 pos, bool isDanger)> flaggedPoints = new List<(Vector3 pos, bool isDanger)>();
+                List<Vector3> quakePoints = new List<Vector3>();
 
-                string id = cols[0];
-                var parts = id.Split('_').ToList();
-                if (parts.Count != 3) continue;
+                for (int i = 1; i < lines.Count; i++)
+                {
+                    var cols = lines[i].Split(',').ToList();
+                    if (cols.Count < 12) continue; 
 
-                float cleanX = float.Parse(parts[0]) / 10f;
-                float cleanZ = float.Parse(parts[1]) / 10f;
-                float currentY = float.Parse(parts[2]); 
+                    string id = cols[0];
+                    var parts = id.Split('_').ToList();
+                    if (parts.Count != 3) continue;
 
-                flaggedPoints.Add((new Vector3(cleanX, currentY, cleanZ), true));
-            }
+                    float cleanX = float.Parse(parts[0]) / 10f;
+                    float cleanZ = float.Parse(parts[1]) / 10f;
+                    float currentY = float.Parse(parts[2]); 
 
-            if (flaggedPoints.Count > 0)
-            {
+                    if (cols[5] == "Danger")
+                    {
+                        flaggedPoints.Add((new Vector3(cleanX, currentY, cleanZ), true));
+                    }
+else if (cols[5] == "Quake_Danger" || cols[5] == "Explosion_Danger")
+                    {
+                        quakePoints.Add(new Vector3(cleanX, currentY, cleanZ));
+                    }
+                }
+
+                // ==========================================================
+                // 🚀 [신규 모드] 로켓 도킹 타워 (Outrigger) 보강 로직 (Quake/Explosion_Danger 전용)
+                // ==========================================================
+                if (quakePoints.Count > 0)
+                {
+                    float minX = 9999f, minZ = 9999f, maxX = -9999f, maxZ = -9999f;
+                    foreach (var id in existingBlocks)
+                    {
+                        var parts = id.Split('_');
+                        if (parts.Length < 3) continue;
+                        
+                        // ⭐ 거대한 바닥(Floor) 블록은 건물 중심 계산에서 제외하여 정확한 외벽 방향 도출!
+                        float py = float.Parse(parts[2]) / 10f;
+                        if (py <= 1.5f) continue; 
+                        
+                        float px = float.Parse(parts[0]) / 10f;
+                        float pz = float.Parse(parts[1]) / 10f;
+                        if (px < minX) minX = px; if (px > maxX) maxX = px;
+                        if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
+                    }
+                    Vector2 buildingCenter = new Vector2((minX + maxX) / 2f, (minZ + maxZ) / 2f);
+
+                    List<Vector2> builtTowers = new List<Vector2>();
+                    var sortedQuake = quakePoints.OrderByDescending(p => p.y).ToList();
+
+                    foreach (var p in sortedQuake)
+                    {
+                        Vector2 targetXZ = new Vector2(p.x, p.z);
+                        
+                        // 타워 간격 제한: 반경 15m(5칸) 이내 중복 건설 방지
+                        if (builtTowers.Any(t => Vector2.Distance(targetXZ, t) < 14.9f)) continue;
+                        builtTowers.Add(targetXZ);
+
+                        // 바깥 방향으로 4칸(12m) 이격된 타워 중심 계산
+                        Vector2 dir = (targetXZ - buildingCenter).normalized;
+                        if (dir == Vector2.zero) dir = new Vector2(1, 0); // 중심일 경우 예외처리
+                        
+                        float towerX = Mathf.Round((p.x + dir.x * 12.0f - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                        float towerZ = Mathf.Round((p.z + dir.y * 12.0f - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                        float targetY = p.y;
+
+                        // 수직 기둥(타워) 타설
+                        for (float ty = 1.5f; ty <= targetY; ty += 3.0f)
+                        {
+                            float ix = Mathf.Round(towerX * 10f); float iz = Mathf.Round(towerZ * 10f); float iy = Mathf.Round(ty * 10f);
+                            string tId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
+                            if (!existingBlocks.Contains(tId))
+                            {
+                                planLines.Add($"{tId},{towerX:F2},{ty:F2},{towerZ:F2},0.00,Safe,N,Steel,0.0,0.0,Reinforcement,Reinforcement");
+                                existingBlocks.Add(tId);
+                            }
+                        }
+
+                        // 수평 도킹 암(가로 지지대) 타설
+                        float dx = towerX - p.x; float dz = towerZ - p.z;
+                        int steps = Mathf.Max(1, Mathf.RoundToInt(Mathf.Sqrt(dx * dx + dz * dz) / 3.0f));
+                        for (int s = 1; s < steps; s++)
+                        {
+                            float bridgeX = Mathf.Round((p.x + (dx * s / steps) - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                            float bridgeZ = Mathf.Round((p.z + (dz * s / steps) - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                            float ix = Mathf.Round(bridgeX * 10f); float iz = Mathf.Round(bridgeZ * 10f); float iy = Mathf.Round(targetY * 10f);
+                            string bId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
+                            if (!existingBlocks.Contains(bId))
+                            {
+                                planLines.Add($"{bId},{bridgeX:F2},{targetY:F2},{bridgeZ:F2},0.00,Safe,N,Steel,0.0,0.0,Reinforcement,Reinforcement");
+                                existingBlocks.Add(bId);
+                            }
+                        }
+                    }
+                    UnityEngine.Debug.Log("🚀 [로켓 도킹 타워] 지진 대비 외부 아웃리거 보강 도면 생성 완료!");
+                }
+
+                if (flaggedPoints.Count > 0)
+                {
                 // ==========================================================
                 // 🏗️ [모드 1] 물량 공세 바둑판(Grid) 보강 로직
                 // ==========================================================
