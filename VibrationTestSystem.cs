@@ -79,7 +79,7 @@ public partial struct VibrationTestSystem : ISystem
             vibeTimer -= SystemAPI.Time.DeltaTime;
             var random = Unity.Mathematics.Random.CreateFromIndex((uint)(vibeTimer * 1000f + 1));
 
-            float3 shakeVel = new float3(math.sin(vibeTimer * 10.0f) * actualVibePower, 0, 0);
+            float3 groundAccel = new float3(math.sin(vibeTimer * 10.0f) * actualVibePower, 0, 0);
             foreach (var (transform, tracker, velocity, mass, color, entity) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<VibrationTracker>, RefRW<PhysicsVelocity>, RefRO<PhysicsMass>, RefRW<URPMaterialPropertyBaseColor>>().WithAll<BlockTag>().WithEntityAccess())
             {
                 float currentDist = math.distance(transform.ValueRO.Position, tracker.ValueRO.OriginalPos);
@@ -87,7 +87,12 @@ public partial struct VibrationTestSystem : ISystem
 
                 if (vibeTimer > 0f)
                 {
-                    if (transform.ValueRO.Position.y <= 3.1f) velocity.ValueRW.Linear = shakeVel;
+                    // ⭐ [지진 물리 개선] 1층(지면)은 완전히 고정 상태로 두고(속도 강제주입 X),
+                    // 위층 블록에만 "관성력"(질량 무관, 그냥 더하기)을 매 프레임 누적 적용 → 조인트가 자연스럽게 저항/전달
+                    if (transform.ValueRO.Position.y > 3.1f)
+                    {
+                        velocity.ValueRW.Linear += groundAccel * SystemAPI.Time.DeltaTime;
+                    }
                     color.ValueRW.Value = new float4(1, 1, 1, 1);
                 }
             }
@@ -249,6 +254,9 @@ public partial struct VibrationTestSystem : ISystem
         string historyPath = Path.Combine(vibDir, "Vibration_All_" + dateStamp + ".csv");
         string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
 
+        // ⭐ [Tool 태그 보존] BlueprintManager한테 물어봐서, 원래 보강물(Reinforcement)이었던 블록은 계속 Reinforcement로 기록
+        var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
+
         System.Collections.Generic.List<string> currentLines = new System.Collections.Generic.List<string>();
         currentLines.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
 
@@ -264,11 +272,12 @@ public partial struct VibrationTestSystem : ISystem
             string posY = stress >= 2.0f ? "DESTROYED" : pos.y.ToString("F2");
             string posZ = stress >= 2.0f ? "DESTROYED" : pos.z.ToString("F2");
 
-            string risk = stress >= 2.0f ? "Destroyed" : (stress >= 0.5f ? "Quake_Danger" : "Safe"); 
+            string risk = stress >= 2.0f ? "Quake_Destroyed" : (stress >= 0.5f ? "Quake_Danger" : "Safe"); 
             string pres = stress >= 2.0f ? "Y" : (stress >= 0.5f ? "Y" : "N");
             string typeStr = pos.y > 1.5f ? "Wall" : "Floor";
+            string toolTag = bpManager != null ? bpManager.GetToolName(id) : "Existing";
 
-            string lineData = id + "," + posX + "," + posY + "," + posZ + "," + stress.ToString("F2") + "," + risk + "," + pres + "," + mat + ",0.0,0.0,Existing," + typeStr;
+            string lineData = id + "," + posX + "," + posY + "," + posZ + "," + stress.ToString("F2") + "," + risk + "," + pres + "," + mat + ",0.0,0.0," + toolTag + "," + typeStr;
             currentLines.Add(lineData);
         }
         File.WriteAllLines(historyPath, currentLines); File.WriteAllLines(currentPath, currentLines);
