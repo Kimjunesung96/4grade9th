@@ -114,6 +114,10 @@ public class BudgetUIManager : MonoBehaviour
 // 변수 선언하는 곳(클래스 상단)에 아래 변수 추가
 public int reinforcementMode = 1; // 1: 많이(바둑판 격자), 2: 적게(가성비 우산)
 
+// ⭐ [신규] 보강재(타워/도킹암 등) 전용 재질 선택 — 나중에 재질 늘어나면 이 배열에만 이름 추가하면 됨
+public string reinforcementMaterial = "H_Beam";
+private static readonly string[] reinforcementMaterialOptions = new string[] { "H_Beam" };
+
 // 클래스 안쪽 맨 아래 등 빈 공간에 아래 두 함수 추가
 public void SetReinforcementModeMany()
 {
@@ -206,6 +210,21 @@ public void SetReinforcementModeFew()
 
             GUI.backgroundColor = Color.white;
 
+            GUILayout.EndHorizontal();
+
+            // ⭐ [신규] 보강재 재질 선택 줄 — reinforcementMaterialOptions 배열 기준으로 자동 생성 (지금은 H_Beam 하나, 나중에 늘어나면 배열에 추가만 하면 버튼도 늘어남)
+            GUILayout.Space(4);
+            GUILayout.BeginHorizontal();
+            GUILayout.Space(230);
+            GUILayout.Label("보강재질", GUILayout.Width(65));
+
+            foreach (string matOption in reinforcementMaterialOptions)
+            {
+                GUI.backgroundColor = (reinforcementMaterial == matOption) ? new Color(0.6f, 1f, 0.6f) : Color.gray;
+                if (GUILayout.Button(matOption, GUILayout.Width(80))) reinforcementMaterial = matOption;
+            }
+
+            GUI.backgroundColor = Color.white;
             GUILayout.EndHorizontal();
 
         }

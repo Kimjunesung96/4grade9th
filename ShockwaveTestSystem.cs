@@ -225,6 +225,9 @@ public partial struct ShockwaveTestSystem : ISystem
         string historyPath = Path.Combine(shockDir, "Shockwave_All_" + dateStamp + ".csv");
         string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
 
+        // ⭐ [Tool 태그 보존] VibrationTestSystem과 동일하게, 원래 보강물이었던 블록은 계속 Reinforcement로 기록
+        var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
+
         System.Collections.Generic.List<string> currentLines = new System.Collections.Generic.List<string>();
         currentLines.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
 
@@ -241,11 +244,12 @@ public partial struct ShockwaveTestSystem : ISystem
             string posZ = stress >= 2.0f ? "DESTROYED" : pos.z.ToString("F2");
 
             // ⭐ 폭발 전용 라벨로 분리!
-            string risk = stress >= 2.0f ? "Destroyed" : (stress >= 0.5f ? "Explosion_Danger" : "Safe"); 
+            string risk = stress >= 2.0f ? "Explosion_Destroyed" : (stress >= 0.5f ? "Explosion_Danger" : "Safe"); 
             string pres = stress >= 2.0f ? "Y" : (stress >= 0.5f ? "Y" : "N");
             string typeStr = pos.y > 1.5f ? "Wall" : "Floor";
+            string toolTag = bpManager != null ? bpManager.GetToolName(id) : "Existing";
 
-            string lineData = id + "," + posX + "," + posY + "," + posZ + "," + stress.ToString("F2") + "," + risk + "," + pres + "," + mat + ",0.0,0.0,Existing," + typeStr;
+            string lineData = id + "," + posX + "," + posY + "," + posZ + "," + stress.ToString("F2") + "," + risk + "," + pres + "," + mat + ",0.0,0.0," + toolTag + "," + typeStr;
             currentLines.Add(lineData);
         }
 
