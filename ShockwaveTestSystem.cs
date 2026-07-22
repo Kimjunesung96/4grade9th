@@ -92,13 +92,19 @@ public partial struct ShockwaveTestSystem : ISystem
 
             foreach (var (jointPair, joint, jointEntity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>, RefRO<PhysicsJoint>>().WithAll<JointTag>().WithEntityAccess())
             {
-                if (transLookup.HasComponent(jointPair.ValueRO.EntityA) && transLookup.HasComponent(jointPair.ValueRO.EntityB) &&
-                    matLookup.HasComponent(jointPair.ValueRO.EntityA) && matLookup.HasComponent(jointPair.ValueRO.EntityB))
+                Entity eA = jointPair.ValueRO.EntityA; 
+                Entity eB = jointPair.ValueRO.EntityB;
+
+                // ⭐ Null 체크 추가
+                if (eA == Entity.Null || eB == Entity.Null) continue;
+
+                if (transLookup.HasComponent(eA) && transLookup.HasComponent(eB) &&
+                    matLookup.HasComponent(eA) && matLookup.HasComponent(eB))
                 {
-                    var transA = transLookup[jointPair.ValueRO.EntityA];
-                    var transB = transLookup[jointPair.ValueRO.EntityB];
-                    var matA = matLookup[jointPair.ValueRO.EntityA];
-                    var matB = matLookup[jointPair.ValueRO.EntityB];
+                    var transA = transLookup[eA];
+                    var transB = transLookup[eB];
+                    var matA = matLookup[eA];
+                    var matB = matLookup[eB];
 
                     float3 pivotA = math.transform(new RigidTransform(transA.Rotation, transA.Position), joint.ValueRO.BodyAFromJoint.Position);
                     float3 pivotB = math.transform(new RigidTransform(transB.Rotation, transB.Position), joint.ValueRO.BodyBFromJoint.Position);
@@ -225,7 +231,18 @@ public partial struct ShockwaveTestSystem : ISystem
         string historyPath = Path.Combine(shockDir, "Shockwave_All_" + dateStamp + ".csv");
         string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
 
-        // ⭐ [Tool 태그 보존] VibrationTestSystem과 동일하게, 원래 보강물이었던 블록은 계속 Reinforcement로 기록
+        // ⭐ [속성 보존 추가]
+        var toolMap = new System.Collections.Generic.Dictionary<string, string>();
+        if (File.Exists(currentPath))
+        {
+            var oldLines = File.ReadAllLines(currentPath);
+            for (int i = 1; i < oldLines.Length; i++)
+            {
+                var c = oldLines[i].Split(',');
+                if (c.Length >= 12) toolMap[c[0]] = c[10];
+            }
+        }
+
         var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
 
         System.Collections.Generic.List<string> currentLines = new System.Collections.Generic.List<string>();
@@ -247,7 +264,7 @@ public partial struct ShockwaveTestSystem : ISystem
             string risk = stress >= 2.0f ? "Explosion_Destroyed" : (stress >= 0.5f ? "Explosion_Danger" : "Safe"); 
             string pres = stress >= 2.0f ? "Y" : (stress >= 0.5f ? "Y" : "N");
             string typeStr = pos.y > 1.5f ? "Wall" : "Floor";
-            string toolTag = bpManager != null ? bpManager.GetToolName(id) : "Existing";
+            string toolTag = toolMap.ContainsKey(id) ? toolMap[id] : (bpManager != null ? bpManager.GetToolName(id) : "Existing");
 
             string lineData = id + "," + posX + "," + posY + "," + posZ + "," + stress.ToString("F2") + "," + risk + "," + pres + "," + mat + ",0.0,0.0," + toolTag + "," + typeStr;
             currentLines.Add(lineData);
