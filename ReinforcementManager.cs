@@ -40,11 +40,15 @@ public class ReinforcementManager : MonoBehaviour
             string typeStr = posY > 1.5f ? "Wall" : "Floor";
 
             string safeX = cols.ElementAt(1) == "DESTROYED" ? (float.Parse(id.Split('_')[0]) / 10f).ToString("F2") : cols.ElementAt(1);
-            string safeY = cols.ElementAt(2) == "DESTROYED" ? (float.Parse(id.Split('_')[2]) / 10f).ToString("F2") : cols.ElementAt(2);
+string safeY = cols.ElementAt(2) == "DESTROYED" ? (float.Parse(id.Split('_')[2]) / 10f).ToString("F2") : cols.ElementAt(2);
             string safeZ = cols.ElementAt(3) == "DESTROYED" ? (float.Parse(id.Split('_')[1]) / 10f).ToString("F2") : cols.ElementAt(3);
 
+            // ⭐ [해결!] 과거의 자신이 보강재(Reinforcement)였는지 기억을 유지하도록 currentTool 변수를 부활시킵니다!
+            string currentTool = cols.Count > 10 ? cols.ElementAt(10).Trim() : "Existing";
+
+            // ⭐ 무조건 "Existing"이라고 박아버리던 멍청한 코드를 수정하여 원래 신분을 유지하게 만듭니다.
             string lineData = id + "," + safeX + "," + safeY + "," + safeZ + "," +
-                              "0.00,Safe,N," + cols.ElementAt(7) + "," + cols.ElementAt(8) + "," + cols.ElementAt(9) + ",Existing," + typeStr;
+                              "0.00,Safe,N," + cols.ElementAt(7) + "," + cols.ElementAt(8) + "," + cols.ElementAt(9) + "," + currentTool + "," + typeStr;
            planLines.Add(lineData);
         }
 
