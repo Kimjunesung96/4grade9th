@@ -128,43 +128,75 @@ public void OnUpdate(ref SystemState state)
 
         PhysicsWorld physicsWorld = physicsSingleton.PhysicsWorld;
 
-        if (backupIDToQuery > -1f)
+       if (backupIDToQuery > -1f)
         {
             StringBuilder csv = new StringBuilder();
             csv.AppendLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
             bool found = false;
 
-            foreach (var transform in SystemAPI.Query<RefRO<LocalTransform>>().WithAll<BlockTag>())
+            var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
+
+            // ⭐ [기억상실 완벽 치료] 기존 장부(CurrentStress.csv)를 훑어서 예전 보강재 태그들을 절대 까먹지 않게 미리 챙겨둡니다!
+            // ⭐ [기억상실 완벽 치료] 기존 장부를 훑어서 예전 보강재 태그들을 미리 챙겨둡니다
+            var toolMap = new System.Collections.Generic.Dictionary<string, string>();
+            string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
+            if (File.Exists(currentPath))
             {
-                float px = transform.ValueRO.Position.x;
-                float py = transform.ValueRO.Position.y;
-                float pz = transform.ValueRO.Position.z;
+                var oldLines = File.ReadAllLines(currentPath);
+                for (int i = 1; i < oldLines.Length; i++)
+                {
+                    var c = oldLines[i].Split(',');
+                    if (c.Length >= 12) toolMap[c[0]] = c[10];
+                }
+            }
+
+            foreach (var (transform, mat) in SystemAPI.Query<RefRO<LocalTransform>, RefRO<BlockMaterial>>().WithAll<BlockTag>())
+            {
+                // ⭐ [물리 흔들림 방지] 찌그러진 좌표를 무시하고 무조건 3.0 격자 정중앙으로 스냅!
+                float rawX = transform.ValueRO.Position.x;
+                float rawY = transform.ValueRO.Position.y;
+                float rawZ = transform.ValueRO.Position.z;
+
+                float px = math.floor((rawX - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+                float py = math.floor((rawY - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+                float pz = math.floor((rawZ - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+                
                 string typeStr = py > 1.5f ? "Wall" : "Floor";
-                string realId = $"{(int)math.round(px * 10f)}_{(int)math.round(pz * 10f)}_{(int)math.round(py * 10f)}";
+                
+                // 교정된 좌표로 완벽한 ID 생성
+                float ix = math.round(px * 10f);
+                float iy = math.round(py * 10f);
+                float iz = math.round(pz * 10f);
+                string strX = (ix < 0f ? "-" : "0") + math.abs(ix).ToString("000");
+                string strZ = (iz < 0f ? "-" : "0") + math.abs(iz).ToString("000");
+                string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
+                string realId = $"{strX}_{strZ}_{strY}";
+
+                // 이제 흔들림 없이 무조건 제 짝을 찾아냅니다!
+                string toolTag = toolMap.ContainsKey(realId) ? toolMap[realId] : (bpManager != null ? bpManager.GetToolName(realId) : "Existing");
+                
+                string matName = mat.ValueRO.MaterialName.ToString().Replace("\0", "").Trim();
 
                 string lineData = realId + "," +
                                   px.ToString("F2") + "," +
                                   py.ToString("F2") + "," +
                                   pz.ToString("F2") + "," +
-                                  "0.00,Safe,N,Concrete,0.0,0.0,Existing," + typeStr;
+                                  "0.00,Safe,N," + matName + ",0.0,0.0," + toolTag + "," + typeStr;
 
                 csv.AppendLine(lineData);
                 found = true;
             }
-
-           // 변경 코드
-        if (found)
-        {
-            string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
-            if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
-            
-            string finalCsv = csv.ToString();
-            // 백그라운드 스레드로 넘겨 화면이 멈추는 현상 방지
-            System.Threading.Tasks.Task.Run(() => File.WriteAllText(path, finalCsv));
-            
-            UnityEngine.Debug.Log("💾 [U모드 스냅샷] 비동기 백업 완료! (12칸 표준 규격)");
-        }
-        backupIDToQuery = -1f;
+            if (found)
+            {
+                string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+                if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
+                
+                string finalCsv = csv.ToString();
+                System.Threading.Tasks.Task.Run(() => File.WriteAllText(path, finalCsv));
+                
+                UnityEngine.Debug.Log("💾 [U모드 스냅샷] 비동기 백업 완료! (속성 보존 완벽 성공)");
+            }
+            backupIDToQuery = -1f;
         }
 
         if (isClearREnabled && Input.GetKeyDown(KeyCode.R)) { if (LogManager.Instance != null) LogManager.Instance.OnPressRKey(); isCenterMoved = false; UnityEngine.Debug.Log("🪓 [현장 철거] R키 작동! 건물은 철거되지만 도면은 유지됩니다."); }
@@ -304,11 +336,17 @@ public void OnUpdate(ref SystemState state)
                         if (isYMode)
                         {
                             var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
-                            if (bpManager != null) { string id = bpManager.VectorToID(new UnityEngine.Vector3(finalPos.x, finalPos.y, finalPos.z)); bpManager.AddReinforcementBlock(id, "Reinforcement", new UnityEngine.Vector3(finalPos.x, finalPos.y, finalPos.z)); }
+                            if (bpManager != null) { 
+                                string id = bpManager.VectorToID(new UnityEngine.Vector3(finalPos.x, finalPos.y, finalPos.z)); 
+                                
+                                // ⭐ 무조건 Reinforcement로 덮어쓰던 것을 수정!
+                                // 위에서 이미 판별한 isReinforceBlock 변수를 활용해서 원본과 보강물을 정확히 분리합니다.
+                                string properTool = isReinforceBlock ? "Reinforcement" : "Existing"; 
+                                bpManager.AddReinforcementBlock(id, properTool, new UnityEngine.Vector3(finalPos.x, finalPos.y, finalPos.z)); 
+                            }
                         }
-                    }
                 }
-
+                }
                 if (triggerSpecialReal)
                 {
                     var keys = gridMap.GetKeyArray(Allocator.Temp);

@@ -104,11 +104,17 @@ public partial struct VibrationTestSystem : ISystem
 
             foreach (var (jointPair, joint, jointEntity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>, RefRO<PhysicsJoint>>().WithAll<JointTag>().WithEntityAccess())
             {
-                if (transLookup.HasComponent(jointPair.ValueRO.EntityA) && transLookup.HasComponent(jointPair.ValueRO.EntityB) &&
-                    matLookup.HasComponent(jointPair.ValueRO.EntityA) && matLookup.HasComponent(jointPair.ValueRO.EntityB))
+                Entity eA = jointPair.ValueRO.EntityA; 
+                Entity eB = jointPair.ValueRO.EntityB;
+
+                // ⭐ [에러 수정] 바닥(맨땅)과 용접되어 Entity.Null 상태인 조인트를 검사하려다 뻗는 현상 방지!
+                if (eA == Entity.Null || eB == Entity.Null) continue;
+
+                if (transLookup.HasComponent(eA) && transLookup.HasComponent(eB) &&
+                    matLookup.HasComponent(eA) && matLookup.HasComponent(eB))
                 {
-                    var transA = transLookup[jointPair.ValueRO.EntityA]; var transB = transLookup[jointPair.ValueRO.EntityB];
-                    var matA = matLookup[jointPair.ValueRO.EntityA]; var matB = matLookup[jointPair.ValueRO.EntityB];
+                    var transA = transLookup[eA]; var transB = transLookup[eB];
+                    var matA = matLookup[eA]; var matB = matLookup[eB];
 
                     float3 pivotA = math.transform(new RigidTransform(transA.Rotation, transA.Position), joint.ValueRO.BodyAFromJoint.Position);
                     float3 pivotB = math.transform(new RigidTransform(transB.Rotation, transB.Position), joint.ValueRO.BodyBFromJoint.Position);
@@ -116,12 +122,9 @@ public partial struct VibrationTestSystem : ISystem
                     float stretch = math.distance(pivotA, pivotB);
                     if (stretch > 0.05f) 
                     {
-                        // ⭐ [재질 강도 영향 반영] 재질의 인장 강도가 높을수록 더 큰 변형을 버팀!
                         float tensileStress = stretch * 5000.0f; 
                         
                         // ⭐ [재질 강도 영향 반영] 
-                        // tensileDefense = (matA.TensileStiffness + matB.TensileStiffness) * 0.5f; 
-                        // 위 기존 코드에 진동의 강도(actualVibePower)를 대입하여 강도에 따라 파괴 임계값 조정
                         float tensileDefense = (matA.TensileStiffness + matB.TensileStiffness) * 0.5f * math.max(0.1f, (10.0f - actualVibePower));
 
                         if (tensileStress > tensileDefense) 
@@ -254,7 +257,18 @@ public partial struct VibrationTestSystem : ISystem
         string historyPath = Path.Combine(vibDir, "Vibration_All_" + dateStamp + ".csv");
         string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
 
-        // ⭐ [Tool 태그 보존] BlueprintManager한테 물어봐서, 원래 보강물(Reinforcement)이었던 블록은 계속 Reinforcement로 기록
+        // ⭐ [속성 보존 추가] 기존 장부를 먼저 읽어와서 기존에 보강재였던 녀석들을 뇌리에 각인!
+        var toolMap = new System.Collections.Generic.Dictionary<string, string>();
+        if (File.Exists(currentPath))
+        {
+            var oldLines = File.ReadAllLines(currentPath);
+            for (int i = 1; i < oldLines.Length; i++)
+            {
+                var c = oldLines[i].Split(',');
+                if (c.Length >= 12) toolMap[c[0]] = c[10];
+            }
+        }
+
         var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
 
         System.Collections.Generic.List<string> currentLines = new System.Collections.Generic.List<string>();
@@ -275,7 +289,7 @@ public partial struct VibrationTestSystem : ISystem
             string risk = stress >= 2.0f ? "Quake_Destroyed" : (stress >= 0.5f ? "Quake_Danger" : "Safe"); 
             string pres = stress >= 2.0f ? "Y" : (stress >= 0.5f ? "Y" : "N");
             string typeStr = pos.y > 1.5f ? "Wall" : "Floor";
-            string toolTag = bpManager != null ? bpManager.GetToolName(id) : "Existing";
+            string toolTag = toolMap.ContainsKey(id) ? toolMap[id] : (bpManager != null ? bpManager.GetToolName(id) : "Existing");
 
             string lineData = id + "," + posX + "," + posY + "," + posZ + "," + stress.ToString("F2") + "," + risk + "," + pres + "," + mat + ",0.0,0.0," + toolTag + "," + typeStr;
             currentLines.Add(lineData);

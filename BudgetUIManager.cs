@@ -23,7 +23,10 @@ public class BudgetUIManager : MonoBehaviour
     private string budgetInput = "500000";
     private string floorCountInput = "1";
     public bool wantsReinforcement = false;
-
+    
+    // ⭐ 철거 명령 예약용 깃발
+    private bool pendingRemoveReinforcements = false;
+    
     private bool isCheapON = false;
     private bool isExpensiveON = false;
 
@@ -36,7 +39,11 @@ public class BudgetUIManager : MonoBehaviour
     private string csvPath;
     private string metaPath;
 
-    // 내부 계산용 클래스
+    public int reinforcementMode = 1; 
+
+    public string reinforcementMaterial = "H_Beam";
+    private static readonly string[] reinforcementMaterialOptions = new string[] { "H_Beam" };
+
     private class BlockData
     {
         public string[] Cols;
@@ -46,6 +53,7 @@ public class BudgetUIManager : MonoBehaviour
         public float Price;
         public float Tensile;
         public float Compressive;
+        public string Tool; 
     }
 
     void Awake()
@@ -59,6 +67,16 @@ public class BudgetUIManager : MonoBehaviour
         csvPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
         metaPath = Path.Combine(Application.dataPath, "StressBlock", "Budget_Meta.csv");
         LoadMaterialLists();
+    }
+
+    void Update()
+    {
+        // ⭐ 예약된 철거 명령을 안전한 타이밍에 실행
+        if (pendingRemoveReinforcements)
+        {
+            pendingRemoveReinforcements = false;
+            ExecuteRemoveReinforcements();
+        }
     }
 
     void LoadMaterialLists()
@@ -107,31 +125,17 @@ public class BudgetUIManager : MonoBehaviour
         }
     }
 
+    public void SetReinforcementModeMany()
+    {
+        reinforcementMode = 1;
+        UnityEngine.Debug.Log("보강 모드: 많이 (바둑판 물량 공세)");
+    }
 
-
-
-
-// 변수 선언하는 곳(클래스 상단)에 아래 변수 추가
-public int reinforcementMode = 1; // 1: 많이(바둑판 격자), 2: 적게(가성비 우산)
-
-// ⭐ [신규] 보강재(타워/도킹암 등) 전용 재질 선택 — 나중에 재질 늘어나면 이 배열에만 이름 추가하면 됨
-public string reinforcementMaterial = "H_Beam";
-private static readonly string[] reinforcementMaterialOptions = new string[] { "H_Beam" };
-
-// 클래스 안쪽 맨 아래 등 빈 공간에 아래 두 함수 추가
-public void SetReinforcementModeMany()
-{
-    reinforcementMode = 1;
-    UnityEngine.Debug.Log("보강 모드: 많이 (바둑판 물량 공세)");
-}
-
-public void SetReinforcementModeFew()
-{
-    reinforcementMode = 2;
-    UnityEngine.Debug.Log("보강 모드: 적게 (가성비 핀포인트)");
-}
-
-
+    public void SetReinforcementModeFew()
+    {
+        reinforcementMode = 2;
+        UnityEngine.Debug.Log("보강 모드: 적게 (가성비 핀포인트)");
+    }
 
     void OnGUI()
     {
@@ -166,53 +170,33 @@ public void SetReinforcementModeFew()
         floorCountInput = GUILayout.TextField(floorCountInput, GUILayout.Width(60));
         GUILayout.Label("(스크롤 복사)", GUILayout.Width(100));
         GUILayout.Space(20);
-         GUILayout.Label("보강재", GUILayout.Width(60));
+        GUILayout.Label("보강재", GUILayout.Width(60));
 
         GUI.backgroundColor = wantsReinforcement ? Color.cyan : Color.gray;
-
         if (GUILayout.Button("YES", GUILayout.Width(70))) wantsReinforcement = true;
 
         GUI.backgroundColor = !wantsReinforcement ? Color.cyan : Color.gray;
-
         if (GUILayout.Button("NO", GUILayout.Width(70))) wantsReinforcement = false;
 
         GUI.backgroundColor = Color.white;
-
-        GUILayout.EndHorizontal(); // <--- 기존 코드의 이 부분 바로 밑에 추가!
-
-        // 👇👇 여기서부터 복사해서 붙여넣기 👇👇
+        GUILayout.EndHorizontal();
 
         if (wantsReinforcement)
-
         {
-
             GUILayout.Space(4);
-
             GUILayout.BeginHorizontal();
-
-            GUILayout.Space(230); // 줄 맞추기 위한 여백
-
+            GUILayout.Space(230); 
             GUILayout.Label("보강 모드", GUILayout.Width(65));
-
             
-
             GUI.backgroundColor = (reinforcementMode == 1) ? new Color(1f, 0.6f, 0.6f) : Color.gray;
-
             if (GUILayout.Button("많이 [격자]", GUILayout.Width(80))) reinforcementMode = 1;
-
             
-
             GUI.backgroundColor = (reinforcementMode == 2) ? new Color(0.6f, 0.8f, 1f) : Color.gray;
-
             if (GUILayout.Button("적게 [우산]", GUILayout.Width(80))) reinforcementMode = 2;
-
             
-
             GUI.backgroundColor = Color.white;
-
             GUILayout.EndHorizontal();
 
-            // ⭐ [신규] 보강재 재질 선택 줄 — reinforcementMaterialOptions 배열 기준으로 자동 생성 (지금은 H_Beam 하나, 나중에 늘어나면 배열에 추가만 하면 버튼도 늘어남)
             GUILayout.Space(4);
             GUILayout.BeginHorizontal();
             GUILayout.Space(230);
@@ -226,12 +210,7 @@ public void SetReinforcementModeFew()
 
             GUI.backgroundColor = Color.white;
             GUILayout.EndHorizontal();
-
         }
-
-        // 👆👆 여기까지 👆👆
-
-        
 
         GUILayout.FlexibleSpace(); 
 
@@ -271,6 +250,16 @@ public void SetReinforcementModeFew()
         GUILayout.EndHorizontal();
         GUILayout.EndVertical();
 
+        GUILayout.FlexibleSpace();
+
+        GUILayout.BeginVertical();
+        GUILayout.Space(25);
+        GUI.backgroundColor = new Color(1f, 0.4f, 0.4f);
+        if (GUILayout.Button("보강재 초기화\n(테스트용)", GUILayout.Height(55), GUILayout.Width(130))) 
+        {
+            pendingRemoveReinforcements = true; 
+        }
+        GUILayout.EndVertical();
         GUILayout.FlexibleSpace();
 
         GUILayout.BeginVertical();
@@ -329,7 +318,6 @@ public void SetReinforcementModeFew()
 
         showPanel = false;
 
-        // ⭐ 버그 2 해결: U모드가 아닌 Y모드(보강 도면)를 정확하게 불러오도록 세팅 변경
         yKeyState = 0;
         SpawnerSystem.isUMode = false;
         SpawnerSystem.loadDelayTimer = 5f;
@@ -375,16 +363,31 @@ public void SetReinforcementModeFew()
             if (cols.Length < 12) { output.Add(currentLine); continue; }
 
             float stress = 0f;
-            float.TryParse(cols.GetValue(4).ToString(), out stress);
-            string type = cols.GetValue(11).ToString();
+            float.TryParse(cols[4], out stress);
+            string type = cols[11];
+            string tool = cols[10].Trim(); 
 
-            BlockData b = new BlockData { Cols = cols, Stress = stress, Type = type };
+            BlockData b = new BlockData { Cols = cols, Stress = stress, Type = type, Tool = tool, MatName = cols[7] };
+            
+            if (dict.TryGetValue(b.MatName, out var spec))
+            {
+                b.Tensile = spec.Tensile;
+                b.Compressive = spec.Compressive;
+                b.Price = spec.Density * spec.PricePerKg * 3.375f;
+            }
             blocks.Add(b);
         }
 
+        foreach (var b in blocks.Where(b => b.Tool == "Reinforcement"))
+        {
+            totalCost += b.Price;
+        }
+
+        var originalBlocks = blocks.Where(b => b.Tool != "Reinforcement").ToList();
+
         if (mode == "Manual")
         {
-            foreach (var b in blocks)
+            foreach (var b in originalBlocks)
             {
                 string matName = b.Type == "Floor" ? selectedFloorMaterial : selectedWallMaterial;
                 b.MatName = matName;
@@ -392,7 +395,6 @@ public void SetReinforcementModeFew()
                 {
                     b.Tensile = spec.Tensile;
                     b.Compressive = spec.Compressive;
-                    // ⭐ 실제 단가(PricePerKg)를 곱해서 블록 가격 산출 (3.375f는 체적 및 화폐단위 스케일 보정용)
                     b.Price = spec.Density * spec.PricePerKg * 3.375f; 
                 }
                 totalCost += b.Price;
@@ -400,11 +402,10 @@ public void SetReinforcementModeFew()
         }
         else if (mode == "Cheap")
         {
-            foreach (var b in blocks)
+            foreach (var b in originalBlocks)
             {
-                // ⭐ 싸게: 가성비 1순위부터 찾되, V/B/N 스트레스의 1.2배(안전마진) 이상을 버티는 재질 픽!
                 var target = cheapMats.FirstOrDefault(m => math.min(m.Value.Tensile, m.Value.Compressive) >= b.Stress * 1.2f);
-                if (string.IsNullOrEmpty(target.Key)) target = strongestMat; // 못 버티면 제일 쎈걸로 강제 배정
+                if (string.IsNullOrEmpty(target.Key)) target = strongestMat;
 
                 b.MatName = target.Key;
                 b.Tensile = target.Value.Tensile;
@@ -415,8 +416,7 @@ public void SetReinforcementModeFew()
         }
         else if (mode == "Expensive")
         {
-            // ⭐ 1단계: '싸게' 모드와 동일하게 기초 안전마진을 맞춰 기본 예산 베이스를 깝니다.
-            foreach (var b in blocks)
+            foreach (var b in originalBlocks)
             {
                 var target = cheapMats.FirstOrDefault(m => math.min(m.Value.Tensile, m.Value.Compressive) >= b.Stress * 1.2f);
                 if (string.IsNullOrEmpty(target.Key)) target = strongestMat;
@@ -428,8 +428,7 @@ public void SetReinforcementModeFew()
                 totalCost += b.Price;
             }
 
-            // ⭐ 2단계: 스트레스(위험도)를 가장 많이 받는 블록부터, 남은 예산 한도 내에서 초고강도 재질로 업그레이드!
-            var sortedBlocks = blocks.OrderByDescending(b => b.Stress).ToList();
+            var sortedBlocks = originalBlocks.OrderByDescending(b => b.Stress).ToList();
             
             foreach (var b in sortedBlocks)
             {
@@ -437,7 +436,6 @@ public void SetReinforcementModeFew()
                 {
                     float newPrice = strongMat.Value.Density * strongMat.Value.PricePerKg * 3.375f;
                     
-                    // 기존 재료보다 강도가 더 뛰어나면서, 이걸로 교체해도 전체 예산(budget) 안쪽이라면 통과!
                     if (math.min(strongMat.Value.Tensile, strongMat.Value.Compressive) > math.min(b.Tensile, b.Compressive) 
                         && (totalCost - b.Price + newPrice) <= budget)
                     {
@@ -446,7 +444,7 @@ public void SetReinforcementModeFew()
                         b.Tensile = strongMat.Value.Tensile;
                         b.Compressive = strongMat.Value.Compressive;
                         b.Price = newPrice;
-                        break; // 이 블록은 최고급으로 업그레이드 했으니 다음 블록으로 넘어갑니다.
+                        break;
                     }
                 }
             }
@@ -454,13 +452,12 @@ public void SetReinforcementModeFew()
 
         foreach (var b in blocks)
         {
-            b.Cols.SetValue(b.MatName, 7);
-            b.Cols.SetValue(b.Tensile.ToString("F1"), 8);
-            b.Cols.SetValue(b.Compressive.ToString("F1"), 9);
+            b.Cols[7] = b.MatName;
+            b.Cols[8] = b.Tensile.ToString("F1");
+            b.Cols[9] = b.Compressive.ToString("F1");
             output.Add(string.Join(",", b.Cols));
         }
 
-        // 십장님이 찾아내신 바로 그 저장 코드 추가 완료!
         File.WriteAllLines(csvPath, output);
         UnityEngine.Debug.Log("저장 완료 CurrentStress.csv 파일에 재질 변경 내역 저장 완료");
 
@@ -481,7 +478,7 @@ public void SetReinforcementModeFew()
             string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
             string id = strX + "_" + strZ + "_" + strY;
 
-            var targetBlock = blocks.FirstOrDefault(b => b.Cols.FirstOrDefault() == id);
+            var targetBlock = blocks.FirstOrDefault(b => b.Cols[0] == id);
             if (targetBlock != null)
             {
                 var newMat = new BlockMaterial
@@ -494,5 +491,63 @@ public void SetReinforcementModeFew()
             }
         }
         entities.Dispose();
+    }
+
+    // ⭐ [이름 정상 변경됨] 안전한 타이밍에 찌꺼기 없이 실행됩니다!
+    void ExecuteRemoveReinforcements()
+    {
+        if (!File.Exists(csvPath))
+        {
+            Debug.LogWarning("⚠️ CurrentStress.csv 파일이 없습니다.");
+            return;
+        }
+
+        var lines = File.ReadAllLines(csvPath).ToList();
+        if (lines.Count <= 1) return;
+
+        List<string> cleanLines = new List<string> { lines.First() }; // 헤더 추가
+
+        for (int i = 1; i < lines.Count; i++)
+        {
+            var cols = lines[i].Split(',');
+            if (cols.Length >= 12 && cols[10].Trim() == "Existing")
+            {
+                string id = cols[0];
+
+                // ⭐ [파편 복구 완벽 치료] ID에서 좌표 강제 파내기
+                string safeX = (float.Parse(id.Split('_')[0]) / 10f).ToString("F2");
+                string safeY = (float.Parse(id.Split('_')[2]) / 10f).ToString("F2");
+                string safeZ = (float.Parse(id.Split('_')[1]) / 10f).ToString("F2");
+
+                string fixedLine = $"{id},{safeX},{safeY},{safeZ},{cols[4]},{cols[5]},{cols[6]},{cols[7]},{cols[8]},{cols[9]},{cols[10]},{cols[11]}";
+                cleanLines.Add(fixedLine);
+            }
+        }
+
+        File.WriteAllLines(csvPath, cleanLines);
+        
+        string projectPath = Directory.GetParent(Application.dataPath).FullName;
+        string genPath = Path.Combine(projectPath, "BuildingLogs", "Last_Building.csv");
+        if (!Directory.Exists(Path.GetDirectoryName(genPath))) Directory.CreateDirectory(Path.GetDirectoryName(genPath));
+        File.WriteAllLines(genPath, cleanLines);
+
+        var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
+        em.DestroyEntity(em.CreateEntityQuery(typeof(BlockTag)));
+        em.DestroyEntity(em.CreateEntityQuery(typeof(JointTag)));
+        em.DestroyEntity(em.CreateEntityQuery(typeof(GhostBlockTag)));
+        
+        if (LogManager.Instance != null) LogManager.Instance.OnPressRKey();
+
+        showPanel = false;
+        yKeyState = 0;
+        
+        SpawnerSystem.isUMode = true;
+        SpawnerSystem.isOMode = false;
+        SpawnerSystem.isLMode = false;
+        
+        var gen = FindFirstObjectByType<BlueprintTargetGenerator>();
+        if (gen != null) gen.LoadLastBuildingForUMode();
+
+        Debug.Log("🗑️ [테스트] 보강재 삭제 & 현장 초기화 완료! 즉시 U모드로 장전되었습니다. 우클릭으로 위치 잡고 F 누르세요!");
     }
 }

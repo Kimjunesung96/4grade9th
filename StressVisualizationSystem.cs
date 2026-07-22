@@ -439,7 +439,9 @@ private void ApplyFailureCheck(ref SystemState state)
                 if (c.Count >= 12)
                 {
                     string k = c.ElementAt(0);
-                    toolMap[k] = c.ElementAt(10);
+                    // ⭐ [보강 태그 우선 규칙] 이미 Reinforcement로 확인된 블록은 뒤에 읽는 파일이 Existing이라 해도 덮어쓰지 않음
+                    if (toolMap.TryGetValue(k, out var existingTag) && existingTag == "Reinforcement" && c.ElementAt(10) != "Reinforcement") { }
+                    else toolMap[k] = c.ElementAt(10);
                     typeMap[k] = c.ElementAt(11);
                     matMap[k] = c.ElementAt(7);
                     tensileMap[k] = c.ElementAt(8);
@@ -458,7 +460,9 @@ private void ApplyFailureCheck(ref SystemState state)
                 {
                     string k = c.ElementAt(0);
                     typeMap[k] = c.ElementAt(11);
-                    toolMap[k] = c.ElementAt(10);
+                    // ⭐ [보강 태그 우선 규칙] Last_Building.csv가 제일 나중에 읽혀서 무조건 이겼었음 - 이미 Reinforcement면 지키기
+                    if (toolMap.TryGetValue(k, out var existingTag2) && existingTag2 == "Reinforcement" && c.ElementAt(10) != "Reinforcement") { }
+                    else toolMap[k] = c.ElementAt(10);
                     matMap[k] = c.ElementAt(7);
                 }
             }

@@ -23,36 +23,47 @@ public class ReinforcementManager : MonoBehaviour
         var lines = File.ReadAllLines(stressCsvPath).ToList();
         if (lines.Count <= 1) return;
 
+        // ⭐ [횟수 카운터] 현재 장부에 기록된 가장 높은 보강 차수를 찾아 다음 번호를 매깁니다!
+        int maxPhase = 0;
+        for (int i = 1; i < lines.Count; i++)
+        {
+            var colsTemp = lines[i].Split(',').ToList();
+            if (colsTemp.Count > 12 && int.TryParse(colsTemp[12].Trim(), out int phase))
+            {
+                if (phase > maxPhase) maxPhase = phase;
+            }
+        }
+        int nextPhase = maxPhase + 1;
+
         HashSet<string> existingBlocks = new HashSet<string>();
-        // ⭐ 이 장부는 이제 오직 '보강재(Reinforcement)'만을 위한 전용 장부가 됩니다.
-        List<string> planLines = new List<string> { "BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type" };
+        // ⭐ 헤더에 Phase 추가
+        List<string> planLines = new List<string> { "BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type,Phase" };
 
         for (int i = 1; i < lines.Count; i++)
         {
             string currentLine = lines.ElementAt(i);
+            
             var cols = currentLine.Split(',').ToList();
             if (cols.Count < 12) continue;
+
+            string riskLevel = cols.Count > 5 ? cols[5].Trim() : "";
 
             string id = cols.ElementAt(0);
             float px = float.Parse(id.Split('_')[0]) / 10f;
             float pz = float.Parse(id.Split('_')[1]) / 10f;
             float py = float.Parse(id.Split('_')[2]) / 10f;
 
-            float snapX = Mathf.Round((px - 1.5f) / 3.0f) * 3.0f + 1.5f;
-            float snapZ = Mathf.Round((pz - 1.5f) / 3.0f) * 3.0f + 1.5f;
-            float snapY = Mathf.Round((py - 1.5f) / 3.0f) * 3.0f + 1.5f;
+            float snapX = Mathf.Floor((px - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+            float snapZ = Mathf.Floor((pz - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+            float snapY = Mathf.Floor((py - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
             
-            float ix = Mathf.Round(snapX * 10f);
-            float iz = Mathf.Round(snapZ * 10f);
-            float iy = Mathf.Round(snapY * 10f);
+            float ix = Mathf.Round((snapX + 0.001f) * 10f);
+            float iz = Mathf.Round((snapZ + 0.001f) * 10f);
+            float iy = Mathf.Round((snapY + 0.001f) * 10f);
             string cleanId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
 
-            // ⭐ 원본이 있는 자리는 피하도록 위치만 기억해 둡니다. (보강재 중복 스폰 방지)
             existingBlocks.Add(cleanId);
-            
-            // 🛑 기존 원본 블록을 planLines에 강제로 기입하던 로직을 완전 삭제! (십장님 논리 적용)
         }
-
         bool shouldReinforce = true;
         int currentMode = 1; 
 
@@ -67,7 +78,7 @@ public class ReinforcementManager : MonoBehaviour
 
         if (shouldReinforce)
         {
-            float Snap(float val) => Mathf.Round((val - 1.5f) / 3.0f) * 3.0f + 1.5f;
+            float Snap(float val) => Mathf.Floor((val - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
 
             List<(Vector3 pos, bool isDanger)> flaggedPoints = new List<(Vector3 pos, bool isDanger)>();
             List<Vector3> quakePoints = new List<Vector3>();
@@ -86,14 +97,146 @@ public class ReinforcementManager : MonoBehaviour
                 float rawY = float.Parse(parts[2]);
 
                 if (cols[5] == "Danger" || cols[5] == "Danger_Destroyed")
-                    // ⭐ 버그 수정: flaggedPoints는 이후에 다시 /10f 하는 곳이 없어서
-                    // Y를 여기서 바로 실좌표로 변환해야 함 (quakePoints는 뒤에서 별도로 /10f 하므로 raw 유지)
-                    flaggedPoints.Add((new Vector3(cleanX, rawY / 10f, cleanZ), true));
+                    flaggedPoints.Add((new Vector3(cleanX, rawY, cleanZ), true));
                 else if (cols[5] == "Quake_Danger" || cols[5] == "Quake_Destroyed" || cols[5] == "Explosion_Danger" || cols[5] == "Explosion_Destroyed")
                     quakePoints.Add(new Vector3(cleanX, rawY, cleanZ));
             }
 
-            if (quakePoints.Count > 0)
+            if (quakePoints.Count > 0 && currentMode == 1)
+            {
+                string MakeId(float x, float z, float y)
+                {
+                    float ix = Mathf.Round((x + 0.001f) * 10f);
+                    float iz = Mathf.Round((z + 0.001f) * 10f);
+                    float iy = Mathf.Round((y + 0.001f) * 10f);
+                    return $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
+                }
+
+                Dictionary<(int ix, int iz), int> redCells = new Dictionary<(int, int), int>();
+                foreach (var p in quakePoints)
+                {
+                    int gx = Mathf.RoundToInt((p.x + 0.001f) * 10f);
+                    int gz = Mathf.RoundToInt((p.z + 0.001f) * 10f);
+                    int rawY = Mathf.RoundToInt(p.y);
+                    var key = (gx, gz);
+                    if (!redCells.ContainsKey(key) || rawY > redCells[key]) redCells[key] = rawY;
+                }
+
+                int step = 30;
+                int[] dxArr = { step, -step, 0, 0 };
+                int[] dzArr = { 0, 0, step, -step };
+                Dictionary<(int ix, int iz), int> perimeter = new Dictionary<(int, int), int>();
+
+                foreach (var kv in redCells)
+                {
+                    var (rx, rz) = kv.Key;
+                    int height = kv.Value;
+                    for (int d = 0; d < 4; d++)
+                    {
+                        var nKey = (rx + dxArr[d], rz + dzArr[d]);
+                        if (redCells.ContainsKey(nKey)) continue;
+                        if (!perimeter.ContainsKey(nKey) || height > perimeter[nKey]) perimeter[nKey] = height;
+                    }
+                }
+
+                var remaining = perimeter
+                    .Select(kv => (x: kv.Key.ix / 10f, z: kv.Key.iz / 10f, rawY: kv.Value))
+                    .ToList();
+
+                List<(float x, float z, int rawY)> ringOrder = new List<(float, float, int)>();
+                if (remaining.Count > 0)
+                {
+                    int startIdx = 0;
+                    float bestStartDist = float.MaxValue;
+                    for (int i = 0; i < remaining.Count; i++)
+                    {
+                        float d = remaining[i].x * remaining[i].x + remaining[i].z * remaining[i].z;
+                        if (d < bestStartDist) { bestStartDist = d; startIdx = i; }
+                    }
+
+                    var current = remaining[startIdx];
+                    remaining.RemoveAt(startIdx);
+                    ringOrder.Add(current);
+
+                    while (remaining.Count > 0)
+                    {
+                        int nearestIdx = 0;
+                        float bestDist = float.MaxValue;
+                        for (int i = 0; i < remaining.Count; i++)
+                        {
+                            float dx = remaining[i].x - current.x;
+                            float dz = remaining[i].z - current.z;
+                            float d = dx * dx + dz * dz;
+                            if (d < bestDist) { bestDist = d; nearestIdx = i; }
+                        }
+                        current = remaining[nearestIdx];
+                        remaining.RemoveAt(nearestIdx);
+                        ringOrder.Add(current);
+                    }
+                }
+
+                HashSet<int> cornerIdx = new HashSet<int>();
+                for (int i = 1; i < ringOrder.Count - 1; i++)
+                {
+                    Vector2 dirPrev = new Vector2(ringOrder[i].x - ringOrder[i - 1].x, ringOrder[i].z - ringOrder[i - 1].z).normalized;
+                    Vector2 dirNext = new Vector2(ringOrder[i + 1].x - ringOrder[i].x, ringOrder[i + 1].z - ringOrder[i].z).normalized;
+                    if (Vector2.Dot(dirPrev, dirNext) < 0.99f) cornerIdx.Add(i);
+                }
+                bool build = true;
+                for (int i = 0; i < ringOrder.Count; i++)
+                {
+                    var cell = ringOrder[i];
+                    bool isCorner = cornerIdx.Contains(i);
+
+                    if (!build && !isCorner) { build = true; continue; }
+                    if (!isCorner) build = false;
+
+                    for (int ty = 15; ty <= cell.rawY; ty += 30)
+                    {
+                        float exactY = ty / 10f;
+                        string tId = MakeId(cell.x, cell.z, exactY);
+                        if (!existingBlocks.Contains(tId))
+                        {
+                            // ⭐ nextPhase 기록!
+                            planLines.Add($"{tId},{cell.x:F2},{exactY:F2},{cell.z:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
+                            existingBlocks.Add(tId);
+                        }
+                    }
+                }
+
+                Dictionary<(int ix, int iz), int> outerPerimeter = new Dictionary<(int, int), int>();
+                foreach (var kv in perimeter)
+                {
+                    var (px, pz) = kv.Key;
+                    int height = kv.Value;
+                    for (int d = 0; d < 4; d++)
+                    {
+                        var nKey = (px + dxArr[d], pz + dzArr[d]);
+                        if (redCells.ContainsKey(nKey) || perimeter.ContainsKey(nKey)) continue;
+                        if (!outerPerimeter.ContainsKey(nKey) || height > outerPerimeter[nKey]) outerPerimeter[nKey] = height;
+                    }
+                }
+
+                foreach (var kv in outerPerimeter)
+                {
+                    float ox = kv.Key.ix / 10f;
+                    float oz = kv.Key.iz / 10f;
+                    int oHeight = kv.Value;
+
+                    for (int ty = 15; ty <= oHeight; ty += 30)
+                    {
+                        float exactY = ty / 10f;
+                        string tId = MakeId(ox, oz, exactY);
+                        if (!existingBlocks.Contains(tId))
+                        {
+                            // ⭐ nextPhase 기록!
+                            planLines.Add($"{tId},{ox:F2},{exactY:F2},{oz:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
+                            existingBlocks.Add(tId);
+                        }
+                    }
+                }
+            }
+            else if (quakePoints.Count > 0 && currentMode == 2)
             {
                 float minX = 9999f, minZ = 9999f, maxX = -9999f, maxZ = -9999f;
                 foreach (var id in existingBlocks)
@@ -125,6 +268,19 @@ public class ReinforcementManager : MonoBehaviour
 
                     float towerX = Snap(p.x + dir.x * 12.0f);
                     float towerZ = Snap(p.z + dir.y * 12.0f);
+                    for (float dist = 3.0f; dist <= 30.0f; dist += 3.0f)
+                    {
+                        float tryX = Snap(p.x + dir.x * dist);
+                        float tryZ = Snap(p.z + dir.y * dist);
+                        float baseIx = Mathf.Round((tryX + 0.001f) * 10f);
+                        float baseIz = Mathf.Round((tryZ + 0.001f) * 10f);
+                        string baseId = $"{(baseIx < 0f ? "-" : "0")}{Mathf.Abs(baseIx):000}_{(baseIz < 0f ? "-" : "0")}{Mathf.Abs(baseIz):000}_0015";
+                        if (!existingBlocks.Contains(baseId))
+                        {
+                            towerX = tryX; towerZ = tryZ;
+                            break;
+                        }
+                    }
                     float targetY = p.y / 10f; 
 
                     float wallX = dir.x != 0f ? p.x : towerX;
@@ -135,42 +291,28 @@ public class ReinforcementManager : MonoBehaviour
 
                     for (float ty = 1.5f; ty <= targetY; ty += 3.0f)
                     {
-                        float ix = Mathf.Round(towerX * 10f); float iz = Mathf.Round(towerZ * 10f); float iy = Mathf.Round(ty * 10f);
+                        float ix = Mathf.Round((towerX + 0.001f) * 10f); float iz = Mathf.Round((towerZ + 0.001f) * 10f); float iy = Mathf.Round((ty + 0.001f) * 10f);
                         string tId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
                         if (!existingBlocks.Contains(tId))
                         {
-                            planLines.Add($"{tId},{towerX:F2},{ty:F2},{towerZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement");
+                            // ⭐ nextPhase 기록!
+                            planLines.Add($"{tId},{towerX:F2},{ty:F2},{towerZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
                             existingBlocks.Add(tId);
-                        }
-
-                        if (currentMode == 1)
-                        {
-                            Vector2[] crossOffsetsB = new Vector2[] { new Vector2(3f, 0f), new Vector2(-3f, 0f), new Vector2(0f, 3f), new Vector2(0f, -3f) };
-                            foreach (var off in crossOffsetsB)
-                            {
-                                float armX = Snap(towerX + off.x); float armZ = Snap(towerZ + off.y);
-                                float aix = Mathf.Round(armX * 10f); float aiz = Mathf.Round(armZ * 10f);
-                                string aId = $"{(aix < 0f ? "-" : "0")}{Mathf.Abs(aix):000}_{(aiz < 0f ? "-" : "0")}{Mathf.Abs(aiz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
-                                if (!existingBlocks.Contains(aId))
-                                {
-                                    planLines.Add($"{aId},{armX:F2},{ty:F2},{armZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement");
-                                    existingBlocks.Add(aId);
-                                }
-                            }
                         }
 
                         int floorIndex = Mathf.RoundToInt((ty - 1.5f) / 3.0f);
                         if (floorIndex % 2 == 0)
                         {
-                            for (int s = 2; s < steps; s++)
+                            for (int s = 1; s < steps; s++)
                             {
                                 float bridgeX = Snap(wallX + (dx * s / steps));
                                 float bridgeZ = Snap(wallZ + (dz * s / steps));
-                                float bix = Mathf.Round(bridgeX * 10f); float biz = Mathf.Round(bridgeZ * 10f); float biy = Mathf.Round(ty * 10f);
+                                float bix = Mathf.Round((bridgeX + 0.001f) * 10f); float biz = Mathf.Round((bridgeZ + 0.001f) * 10f); float biy = Mathf.Round((ty + 0.001f) * 10f);
                                 string bId = $"{(bix < 0f ? "-" : "0")}{Mathf.Abs(bix):000}_{(biz < 0f ? "-" : "0")}{Mathf.Abs(biz):000}_{(biy < 0f ? "-" : "0")}{Mathf.Abs(biy):000}";
                                 if (!existingBlocks.Contains(bId))
                                 {
-                                    planLines.Add($"{bId},{bridgeX:F2},{ty:F2},{bridgeZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement");
+                                    // ⭐ nextPhase 기록!
+                                    planLines.Add($"{bId},{bridgeX:F2},{ty:F2},{bridgeZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
                                     existingBlocks.Add(bId);
                                 }
                             }
@@ -208,7 +350,8 @@ public class ReinforcementManager : MonoBehaviour
 
                             if (!existingBlocks.Contains(targetId))
                             {
-                                planLines.Add($"{targetId},{targetX:F2},{exactY:F2},{targetZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement");
+                                // ⭐ nextPhase 기록!
+                                planLines.Add($"{targetId},{targetX:F2},{exactY:F2},{targetZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
                                 existingBlocks.Add(targetId);
                             }
                         }
@@ -237,7 +380,8 @@ public class ReinforcementManager : MonoBehaviour
 
                                     if (!existingBlocks.Contains(targetId))
                                     {
-                                        planLines.Add($"{targetId},{interpX:F2},{exactY:F2},{interpZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement");
+                                        // ⭐ nextPhase 기록!
+                                        planLines.Add($"{targetId},{interpX:F2},{exactY:F2},{interpZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
                                         existingBlocks.Add(targetId);
                                     }
                                 }
@@ -281,7 +425,8 @@ public class ReinforcementManager : MonoBehaviour
 
                             if (!existingBlocks.Contains(targetId))
                             {
-                                planLines.Add($"{targetId},{targetX:F2},{exactY:F2},{targetZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement");
+                                // ⭐ nextPhase 기록!
+                                planLines.Add($"{targetId},{targetX:F2},{exactY:F2},{targetZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
                                 existingBlocks.Add(targetId);
                             }
                         }
