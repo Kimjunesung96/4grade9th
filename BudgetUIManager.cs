@@ -494,7 +494,7 @@ public class BudgetUIManager : MonoBehaviour
     }
 
     // ⭐ [이름 정상 변경됨] 안전한 타이밍에 찌꺼기 없이 실행됩니다!
-    void ExecuteRemoveReinforcements()
+void ExecuteRemoveReinforcements()
     {
         if (!File.Exists(csvPath))
         {
@@ -502,25 +502,48 @@ public class BudgetUIManager : MonoBehaviour
             return;
         }
 
+        // ⭐ 제1원칙, 제3원칙: CurrentStress.csv와 Reinforcement_Plan.csv 양쪽 다 보강재 찌꺼기를 박멸합니다!
+        string planPath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
+        if (File.Exists(planPath))
+        {
+            File.Delete(planPath);
+            Debug.Log("🗑️ [제1원칙] 보강 도면 파일(Reinforcement_Plan.csv) 완전 삭제 완료!");
+        }
+
         var lines = File.ReadAllLines(csvPath).ToList();
         if (lines.Count <= 1) return;
 
+        // ⭐ 제2원칙: ID를 유일한 키로 삼아 블록 중첩 생성 원천 차단
+        HashSet<string> seenIDs = new HashSet<string>();
         List<string> cleanLines = new List<string> { lines.First() }; // 헤더 추가
 
         for (int i = 1; i < lines.Count; i++)
         {
             var cols = lines[i].Split(',');
-            if (cols.Length >= 12 && cols[10].Trim() == "Existing")
+            if (cols.Length >= 12)
             {
+                string toolAttr = cols[10].Trim();
                 string id = cols[0];
 
-                // ⭐ [파편 복구 완벽 치료] ID에서 좌표 강제 파내기
-                string safeX = (float.Parse(id.Split('_')[0]) / 10f).ToString("F2");
-                string safeY = (float.Parse(id.Split('_')[2]) / 10f).ToString("F2");
-                string safeZ = (float.Parse(id.Split('_')[1]) / 10f).ToString("F2");
+                // 제3원칙: 보강물(Reinforcement)이 아닌 원본(Existing 등)만 대상에 포함
+                if (toolAttr != "Reinforcement")
+                {
+                    // 제2원칙: 이미 처리된 ID라면 중복 추가 무조건 방지
+                    if (seenIDs.Contains(id)) continue;
+                    seenIDs.Add(id);
 
-                string fixedLine = $"{id},{safeX},{safeY},{safeZ},{cols[4]},{cols[5]},{cols[6]},{cols[7]},{cols[8]},{cols[9]},{cols[10]},{cols[11]}";
-                cleanLines.Add(fixedLine);
+                    // 제2원칙: ID에서 좌표를 정확히 파내어 완벽 복구
+                    string[] idParts = id.Split('_');
+                    if (idParts.Length >= 3)
+                    {
+                        float px = float.Parse(idParts[0]) / 10f;
+                        float pz = float.Parse(idParts[1]) / 10f;
+                        float py = float.Parse(idParts[2]) / 10f;
+
+                        string fixedLine = $"{id},{px:F2},{py:F2},{pz:F2},0.00,Safe,N,{cols[7]},{cols[8]},{cols[9]},{toolAttr},{cols[11]}";
+                        cleanLines.Add(fixedLine);
+                    }
+                }
             }
         }
 
@@ -548,6 +571,6 @@ public class BudgetUIManager : MonoBehaviour
         var gen = FindFirstObjectByType<BlueprintTargetGenerator>();
         if (gen != null) gen.LoadLastBuildingForUMode();
 
-        Debug.Log("🗑️ [테스트] 보강재 삭제 & 현장 초기화 완료! 즉시 U모드로 장전되었습니다. 우클릭으로 위치 잡고 F 누르세요!");
+        Debug.Log("🗑️ [완벽 초기화 완료] 보강 도면 삭제 + ID 중복 필터링 + 순정 원본 복구 완료!");
     }
 }
