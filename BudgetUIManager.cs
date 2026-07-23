@@ -516,6 +516,8 @@ void ExecuteRemoveReinforcements()
         // ⭐ 제2원칙: ID를 유일한 키로 삼아 블록 중첩 생성 원천 차단
         HashSet<string> seenIDs = new HashSet<string>();
         List<string> cleanLines = new List<string> { lines.First() }; // 헤더 추가
+        int restoredDestroyedCount = 0;
+        int skippedParseFailCount = 0;
 
         for (int i = 1; i < lines.Count; i++)
         {
@@ -526,26 +528,39 @@ void ExecuteRemoveReinforcements()
                 string id = cols[0];
 
                 // 제3원칙: 보강물(Reinforcement)이 아닌 원본(Existing 등)만 대상에 포함
+                // ⭐ [명시화] RiskLevel/좌표가 "DESTROYED"였던 원본 블록도 여기서 좌표를 ID로부터
+                // 재계산해서 복구 대상에 반드시 포함시킨다. (파괴 여부와 무관하게 원본이면 무조건 복구)
                 if (toolAttr != "Reinforcement")
                 {
+                    bool wasDestroyed = cols[1].Trim() == "DESTROYED" || cols[5].Trim().Contains("Destroyed");
+
                     // 제2원칙: 이미 처리된 ID라면 중복 추가 무조건 방지
                     if (seenIDs.Contains(id)) continue;
                     seenIDs.Add(id);
 
                     // 제2원칙: ID에서 좌표를 정확히 파내어 완벽 복구
                     string[] idParts = id.Split('_');
-                    if (idParts.Length >= 3)
+                    if (idParts.Length >= 3 &&
+                        float.TryParse(idParts[0], out float px) &&
+                        float.TryParse(idParts[1], out float pz) &&
+                        float.TryParse(idParts[2], out float py))
                     {
-                        float px = float.Parse(idParts[0]) / 10f;
-                        float pz = float.Parse(idParts[1]) / 10f;
-                        float py = float.Parse(idParts[2]) / 10f;
+                        px /= 10f; pz /= 10f; py /= 10f;
 
                         string fixedLine = $"{id},{px:F2},{py:F2},{pz:F2},0.00,Safe,N,{cols[7]},{cols[8]},{cols[9]},{toolAttr},{cols[11]}";
                         cleanLines.Add(fixedLine);
+                        if (wasDestroyed) restoredDestroyedCount++;
+                    }
+                    else
+                    {
+                        skippedParseFailCount++;
+                        Debug.LogWarning($"⚠️ [복구 실패] ID 파싱 실패로 복구 대상에서 누락됨: {id}");
                     }
                 }
             }
         }
+
+        Debug.Log($"🧱 [원본 복구] 파괴됐던 원본 블록 {restoredDestroyedCount}개 포함 복구 완료! (파싱 실패로 누락된 블록: {skippedParseFailCount}개)");
 
         File.WriteAllLines(csvPath, cleanLines);
         
