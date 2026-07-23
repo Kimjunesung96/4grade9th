@@ -243,6 +243,35 @@ public partial struct ShockwaveTestSystem : ISystem
             }
         }
 
+        // ⭐ [v/b와 동일화] Reinforcement_Plan.csv, Last_Building.csv까지 병합해서 태그 소실 방지
+        string reinforcePath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
+        if (File.Exists(reinforcePath))
+        {
+            var rLines = File.ReadAllLines(reinforcePath);
+            for (int i = 1; i < rLines.Length; i++)
+            {
+                var c = rLines[i].Split(',');
+                if (c.Length < 12) continue;
+                string k = c[0];
+                if (toolMap.TryGetValue(k, out var existingTag) && existingTag == "Reinforcement" && c[10] != "Reinforcement") continue;
+                toolMap[k] = c[10];
+            }
+        }
+
+        string lastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+        if (File.Exists(lastBuildPath))
+        {
+            var lLines = File.ReadAllLines(lastBuildPath);
+            for (int i = 1; i < lLines.Length; i++)
+            {
+                var c = lLines[i].Split(',');
+                if (c.Length < 12) continue;
+                string k = c[0];
+                if (toolMap.TryGetValue(k, out var existingTag2) && existingTag2 == "Reinforcement" && c[10] != "Reinforcement") continue;
+                toolMap[k] = c[10];
+            }
+        }
+
         var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
 
         System.Collections.Generic.List<string> currentLines = new System.Collections.Generic.List<string>();

@@ -569,6 +569,17 @@ void ExecuteRemoveReinforcements()
         if (!Directory.Exists(Path.GetDirectoryName(genPath))) Directory.CreateDirectory(Path.GetDirectoryName(genPath));
         File.WriteAllLines(genPath, cleanLines);
 
+        // ⭐ [핵심 수정] V/B/N 테스트 시스템들이 실제로 읽는 경로는 여기(BuildingLogs)가 아니라
+        // Assets/StressBlock/Last_Building.csv였음! 여기가 업데이트 안 돼서 낡은 Reinforcement 태그가
+        // 제거 후에도 V/B/N 테스트 시 되살아나고 있었음 - 이 경로에도 반드시 정리된 결과를 같이 써준다.
+        string stressBlockLastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+        File.WriteAllLines(stressBlockLastBuildPath, cleanLines);
+
+        // ⭐ [핵심 수정] BlueprintManager의 런타임 메모리 캐시(toolNameLookup)를 즉시 비움.
+        // 파일들은 정리해도 이 캐시가 안 지워지면, ID 매칭이 살짝 어긋날 때 낡은 Reinforcement 정보가 되살아남.
+        var bpManagerForClear = FindFirstObjectByType<BlueprintManager>();
+        if (bpManagerForClear != null) bpManagerForClear.ClearRuntimeCache();
+
         var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
         em.DestroyEntity(em.CreateEntityQuery(typeof(BlockTag)));
         em.DestroyEntity(em.CreateEntityQuery(typeof(JointTag)));

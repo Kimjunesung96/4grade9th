@@ -408,7 +408,9 @@ if (loadDelayTimer > 0f)
             float minX = 99999f, minZ = 99999f, maxX = -99999f, maxZ = -99999f;
 
             System.Collections.Generic.List<TempSpawnData> tempList = new System.Collections.Generic.List<TempSpawnData>();
-            System.Collections.Generic.HashSet<string> loadedIDs = new System.Collections.Generic.HashSet<string>();
+            // ⭐ [원본 대체 불가 보장] HashSet(순서 기반 선착순) 대신 Dictionary로 바꿔서,
+            // 같은 좌표에 Existing과 Reinforcement가 겹치면 파일 순서와 상관없이 Existing이 항상 이기게 함
+            System.Collections.Generic.Dictionary<string, int> loadedIndex = new System.Collections.Generic.Dictionary<string, int>();
 
             for (int i = 1; i < linesArray.Length; i++)
             {
@@ -430,13 +432,27 @@ if (loadDelayTimer > 0f)
 
                         // 문자열 결합 최소화 (가장 빠른 속도)
                         string uniqueKey = $"{x}_{y}_{z}";
-                        if (loadedIDs.Contains(uniqueKey)) continue;
+                        bool isReinforceLine = cols[10] == "Reinforcement";
 
-                        float isReinforce = cols[10] == "Reinforcement" ? 1f : 0f;
+                        if (loadedIndex.TryGetValue(uniqueKey, out int existingIdx))
+                        {
+                            // ⭐ 이미 이 좌표에 뭔가 있음: 기존 것이 Existing(원본)이면 지금 줄이 뭐든 무시 (원본 절대 보호)
+                            bool existingWasReinforce = tempList[existingIdx].IsReinforce > 0.5f;
+                            if (!existingWasReinforce) continue; // 기존이 원본이면 지금 줄(뭐든) 버림
+                            if (isReinforceLine) continue; // 기존도 보강, 지금도 보강이면 그냥 첫 번째 유지
+
+                            // 기존이 보강인데 지금 줄이 원본이면, 원본으로 교체(원본 우선)
+                            float readIsReinforce = isReinforceLine ? 1f : 0f;
+                            string readMatSwap = cols[7].Replace("\0", "").Trim();
+                            tempList[existingIdx] = new TempSpawnData { Pos = new float3(x, y, z), IsReinforce = readIsReinforce, MatName = readMatSwap };
+                            continue;
+                        }
+
+                        float isReinforce = isReinforceLine ? 1f : 0f;
                         string readMat = cols[7].Replace("\0", "").Trim();
 
                         tempList.Add(new TempSpawnData { Pos = new float3(x, y, z), IsReinforce = isReinforce, MatName = readMat });
-                        loadedIDs.Add(uniqueKey);
+                        loadedIndex[uniqueKey] = tempList.Count - 1;
 
                         if (x < minX) minX = x; if (x > maxX) maxX = x;
                         if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;

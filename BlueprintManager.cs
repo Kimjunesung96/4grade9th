@@ -106,6 +106,15 @@ public class BlueprintManager : MonoBehaviour
     }
 
     // ⭐ [신규] 이 블록이 원래 보강물(Reinforcement)로 지어졌는지 조회 — VibrationTestSystem 등에서 CSV 저장 시 Tool 태그 보존용
+    // ⭐ [신규] 파일 재로딩 없이 런타임 캐시(toolNameLookup)만 즉시 비움 - 보강재 제거 직후 낡은 정보 잔존 방지용
+    public void ClearRuntimeCache()
+    {
+        toolNameLookup.Clear();
+        blueprintCabinet.Clear();
+        currentBlueprint.blocks.Clear();
+        Debug.Log("🧹 [BlueprintManager] 런타임 캐시(toolNameLookup) 초기화 완료!");
+    }
+
     public string GetToolName(string fullId)
     {
         return toolNameLookup.TryGetValue(fullId, out var tool) ? tool : "Existing";
