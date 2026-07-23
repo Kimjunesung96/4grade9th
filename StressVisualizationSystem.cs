@@ -468,6 +468,10 @@ private void ApplyFailureCheck(ref SystemState state)
             }
         }
 
+        // ⭐ [b와 동일하게 통일] CSV(계획 좌표)에 없는 ID는 BlueprintManager의 실제 스폰 좌표 기준
+        // toolNameLookup으로 최종 확인한다. (baseCenter 재정렬로 계획 ID와 실제 ID가 어긋나는 케이스 보정)
+        var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
+
         // ⭐ 최적화 3: StreamWriter를 없애고, 메모리 리스트에 먼저 기록해둡니다.
         System.Collections.Generic.List<string> linesToWrite = new System.Collections.Generic.List<string>();
         linesToWrite.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
@@ -520,7 +524,7 @@ private void ApplyFailureCheck(ref SystemState state)
             else if (t >= 0.33f) { risk = "Warning"; pres = "N"; }
             else { risk = "Safe"; pres = "N"; }
 
-            string tool = toolMap.ContainsKey(id) ? toolMap[id] : "Existing";
+            string tool = toolMap.ContainsKey(id) ? toolMap[id] : (bpManager != null ? bpManager.GetToolName(id) : "Existing");
             string type = typeMap.ContainsKey(id) ? typeMap[id] : (originPos.y > 1.5f ? "Wall" : "Floor");
 
             string lineData = id + "," +
@@ -551,7 +555,7 @@ private void ApplyFailureCheck(ref SystemState state)
             string dComp = parts[4];
             float dPosY = float.Parse(parts[5]);
 
-            string dTool = toolMap.ContainsKey(dId) ? toolMap[dId] : "Existing";
+            string dTool = toolMap.ContainsKey(dId) ? toolMap[dId] : (bpManager != null ? bpManager.GetToolName(dId) : "Existing");
             string dType = typeMap.ContainsKey(dId) ? typeMap[dId] : (dPosY > 1.5f ? "Wall" : "Floor");
 
             string finalDestroyedLine = dId + ",DESTROYED,DESTROYED,DESTROYED," +
