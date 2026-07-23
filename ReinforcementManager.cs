@@ -34,7 +34,9 @@ public class ReinforcementManager : MonoBehaviour
             if (cols.Count < 12) continue;
 
             string id = cols.ElementAt(0);
-            if (cols.ElementAt(1) != "DESTROYED") existingBlocks.Add(id);
+            // ⭐ [원본 절대 보호] DESTROYED든 아니든 원본 위치는 무조건 existingBlocks에 등록.
+            // 예전엔 DESTROYED만 빼놓아서, 그 자리에 보강재가 중복으로 끼어들 틈이 생겼었음(원본 대체 버그의 원인).
+            existingBlocks.Add(id);
 
             float posY = float.Parse(id.Split('_')[2]) / 10f;
             string typeStr = posY > 1.5f ? "Wall" : "Floor";

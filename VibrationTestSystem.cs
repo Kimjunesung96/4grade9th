@@ -286,6 +286,21 @@ public partial struct VibrationTestSystem : ISystem
             }
         }
 
+        // ⭐ [v와 완전 동일화] Last_Building.csv까지 마저 병합 (StressVisualizationSystem과 3파일 소스 통일)
+        string lastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+        if (File.Exists(lastBuildPath))
+        {
+            var lLines = File.ReadAllLines(lastBuildPath);
+            for (int i = 1; i < lLines.Length; i++)
+            {
+                var c = lLines[i].Split(',');
+                if (c.Length < 12) continue;
+                string k = c[0];
+                if (toolMap.TryGetValue(k, out var existingTag2) && existingTag2 == "Reinforcement" && c[10] != "Reinforcement") continue;
+                toolMap[k] = c[10];
+            }
+        }
+
         var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
 
         System.Collections.Generic.List<string> currentLines = new System.Collections.Generic.List<string>();
