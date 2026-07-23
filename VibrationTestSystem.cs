@@ -269,6 +269,23 @@ public partial struct VibrationTestSystem : ISystem
             }
         }
 
+        // ⭐ [v와 동일하게 통일] CurrentStress.csv에는 아직 없는 신규 보강 블록도
+        // Reinforcement_Plan.csv에서 찾아서 태그를 확정한다. (b가 먼저 실행돼도 안전하게)
+        string reinforcePath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
+        if (File.Exists(reinforcePath))
+        {
+            var rLines = File.ReadAllLines(reinforcePath);
+            for (int i = 1; i < rLines.Length; i++)
+            {
+                var c = rLines[i].Split(',');
+                if (c.Length < 12) continue;
+                string k = c[0];
+                // 이미 Reinforcement로 확정된 태그는 다른 값으로 덮어쓰지 않음 (v와 동일한 우선순위 규칙)
+                if (toolMap.TryGetValue(k, out var existingTag) && existingTag == "Reinforcement" && c[10] != "Reinforcement") continue;
+                toolMap[k] = c[10];
+            }
+        }
+
         var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
 
         System.Collections.Generic.List<string> currentLines = new System.Collections.Generic.List<string>();
