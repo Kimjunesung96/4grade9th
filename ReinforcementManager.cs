@@ -83,12 +83,14 @@ public class ReinforcementManager : MonoBehaviour
 
                 float cleanX = float.Parse(parts[0]) / 10f;
                 float cleanZ = float.Parse(parts[1]) / 10f;
-                float currentY = float.Parse(parts[2]); 
+                float rawY = float.Parse(parts[2]);
 
                 if (cols[5] == "Danger" || cols[5] == "Danger_Destroyed")
-                    flaggedPoints.Add((new Vector3(cleanX, currentY, cleanZ), true));
+                    // ⭐ 버그 수정: flaggedPoints는 이후에 다시 /10f 하는 곳이 없어서
+                    // Y를 여기서 바로 실좌표로 변환해야 함 (quakePoints는 뒤에서 별도로 /10f 하므로 raw 유지)
+                    flaggedPoints.Add((new Vector3(cleanX, rawY / 10f, cleanZ), true));
                 else if (cols[5] == "Quake_Danger" || cols[5] == "Quake_Destroyed" || cols[5] == "Explosion_Danger" || cols[5] == "Explosion_Destroyed")
-                    quakePoints.Add(new Vector3(cleanX, currentY, cleanZ));
+                    quakePoints.Add(new Vector3(cleanX, rawY, cleanZ));
             }
 
             if (quakePoints.Count > 0)

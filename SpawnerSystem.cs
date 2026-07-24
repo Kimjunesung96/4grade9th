@@ -121,6 +121,8 @@ public void OnUpdate(ref SystemState state)
         {
             StringBuilder csv = new StringBuilder();
             csv.AppendLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
+            StringBuilder originalOnlyCsv = new StringBuilder();
+            originalOnlyCsv.AppendLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
             bool found = false;
 
             var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
@@ -179,15 +181,20 @@ public void OnUpdate(ref SystemState state)
 
                 csv.AppendLine(lineData);
                 found = true;
+
+                // ⭐ 버그 수정: Last_Building.csv는 "보강재가 하나라도 있으면 저장 자체를 스킵"했었음.
+                // 그러면 한 번 보강한 뒤로 새로 지은 블록들이 영원히 원본에 기록이 안 되고 사라짐.
+                // 보강재(Reinforcement) 태그만 걸러내고, 나머지는 항상 원본 장부에 남긴다.
+                if (toolTag != "Reinforcement") originalOnlyCsv.AppendLine(lineData);
             }
             if (found)
             {
-                if (!isBuildingReinforced)
-                {
-                    string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
-                    if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
-                    System.Threading.Tasks.Task.Run(() => File.WriteAllText(path, csv.ToString()));
-                }
+                string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+                if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
+                // ⭐ 버그 수정: 비동기(Task.Run)로 쓰면 저장이 끝나기 전에 Y키/보강건설이 먼저 실행돼서
+                // 방금 G키로 지은 마지막 블록이 Last_Building.csv에 반영되기 전에 읽혀버림(=증발).
+                // 동기 쓰기로 바꿔서 이 함수가 끝날 때는 반드시 디스크에 반영이 완료되도록 보장.
+                File.WriteAllText(path, originalOnlyCsv.ToString());
             }
             backupIDToQuery = -1f;
         }
