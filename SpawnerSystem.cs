@@ -119,83 +119,7 @@ public void OnUpdate(ref SystemState state)
 
        if (backupIDToQuery > -1f)
         {
-            StringBuilder csv = new StringBuilder();
-            csv.AppendLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
-            StringBuilder originalOnlyCsv = new StringBuilder();
-            originalOnlyCsv.AppendLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
-            bool found = false;
-
-            var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
-
-            var toolMap = new System.Collections.Generic.Dictionary<string, string>();
-            string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
-            
-            // 🚀 건물 전체에서 보강재가 하나라도 있는지 전수 조사! (신분 세탁 원천 차단)
-            bool isBuildingReinforced = false;
-
-            if (File.Exists(currentPath))
-            {
-                var oldLines = File.ReadAllLines(currentPath);
-                for (int i = 1; i < oldLines.Length; i++)
-                {
-                    var c = oldLines[i].Split(',');
-                    if (c.Length >= 12) 
-                    {
-                        toolMap[c[0]] = c[10];
-                        if (c[10] == "Reinforcement") isBuildingReinforced = true;
-                    }
-                }
-            }
-
-            foreach (var (transform, mat) in SystemAPI.Query<RefRO<LocalTransform>, RefRO<BlockMaterial>>().WithAll<BlockTag>())
-            {
-                float px = math.floor((transform.ValueRO.Position.x - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-                float py = math.floor((transform.ValueRO.Position.y - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-                float pz = math.floor((transform.ValueRO.Position.z - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-                
-                string typeStr = py > 1.5f ? "Wall" : "Floor";
-                
-                float ix = math.round(px * 10f);
-                float iy = math.round(py * 10f);
-                float iz = math.round(pz * 10f);
-                string strX = (ix < 0f ? "-" : "0") + math.abs(ix).ToString("000");
-                string strZ = (iz < 0f ? "-" : "0") + math.abs(iz).ToString("000");
-                string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
-                string realId = $"{strX}_{strZ}_{strY}";
-
-                string toolTag = "Existing";
-                
-                // 보강된 건물이면 원래 태그 유지! 아니면 무조건 원본(Existing)!
-                if (isBuildingReinforced)
-                {
-                    toolTag = toolMap.ContainsKey(realId) ? toolMap[realId] : "Existing";
-                }
-
-                string matName = mat.ValueRO.MaterialName.ToString().Replace("\0", "").Trim();
-
-                string lineData = realId + "," +
-                                  px.ToString("F2") + "," +
-                                  py.ToString("F2") + "," +
-                                  pz.ToString("F2") + "," +
-                                  "0.00,Safe,N," + matName + ",0.0,0.0," + toolTag + "," + typeStr;
-
-                csv.AppendLine(lineData);
-                found = true;
-
-                // ⭐ 버그 수정: Last_Building.csv는 "보강재가 하나라도 있으면 저장 자체를 스킵"했었음.
-                // 그러면 한 번 보강한 뒤로 새로 지은 블록들이 영원히 원본에 기록이 안 되고 사라짐.
-                // 보강재(Reinforcement) 태그만 걸러내고, 나머지는 항상 원본 장부에 남긴다.
-                if (toolTag != "Reinforcement") originalOnlyCsv.AppendLine(lineData);
-            }
-            if (found)
-            {
-                string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
-                if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
-                // ⭐ 버그 수정: 비동기(Task.Run)로 쓰면 저장이 끝나기 전에 Y키/보강건설이 먼저 실행돼서
-                // 방금 G키로 지은 마지막 블록이 Last_Building.csv에 반영되기 전에 읽혀버림(=증발).
-                // 동기 쓰기로 바꿔서 이 함수가 끝날 때는 반드시 디스크에 반영이 완료되도록 보장.
-                File.WriteAllText(path, originalOnlyCsv.ToString());
-            }
+            SaveLastBuildingSnapshot(state.EntityManager);
             backupIDToQuery = -1f;
         }
 
@@ -563,6 +487,88 @@ public void OnUpdate(ref SystemState state)
                     pendingJointCleanup = true;
                 }
             }
+        }
+    }
+
+    // ⭐ [증발 버그 수정] 원래 backupIDToQuery 예약 처리 안에 있던 로직을 그대로 뽑아낸 것.
+    // BudgetUIManager 등 다른 MonoBehaviour에서, 씬의 BlockTag 엔티티를 파괴하기 "직전"에
+    // 이 함수를 먼저 호출해서 마지막으로 지은 블록까지 확실히 Last_Building.csv에 반영되게 한다.
+    // (예약만 걸어두고 -1f로 취소해버리면, 그 사이에 씬을 지워버리는 코드가 먼저 실행돼서
+    //  방금 G로 지은 마지막 블록이 원본 장부에 한 번도 기록되지 못한 채 영원히 사라짐)
+    public static void SaveLastBuildingSnapshot(EntityManager em)
+    {
+        StringBuilder originalOnlyCsv = new StringBuilder();
+        originalOnlyCsv.AppendLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
+        bool found = false;
+
+        var toolMap = new System.Collections.Generic.Dictionary<string, string>();
+        string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
+
+        // 🚀 건물 전체에서 보강재가 하나라도 있는지 전수 조사! (신분 세탁 원천 차단)
+        bool isBuildingReinforced = false;
+
+        if (File.Exists(currentPath))
+        {
+            var oldLines = File.ReadAllLines(currentPath);
+            for (int i = 1; i < oldLines.Length; i++)
+            {
+                var c = oldLines[i].Split(',');
+                if (c.Length >= 12)
+                {
+                    toolMap[c[0]] = c[10];
+                    if (c[10] == "Reinforcement") isBuildingReinforced = true;
+                }
+            }
+        }
+
+        var query = em.CreateEntityQuery(ComponentType.ReadOnly<LocalTransform>(), ComponentType.ReadOnly<BlockMaterial>(), ComponentType.ReadOnly<BlockTag>());
+        var transforms = query.ToComponentDataArray<LocalTransform>(Allocator.Temp);
+        var mats = query.ToComponentDataArray<BlockMaterial>(Allocator.Temp);
+
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            float3 pos = transforms[i].Position;
+            float px = math.floor((pos.x - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+            float py = math.floor((pos.y - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+            float pz = math.floor((pos.z - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+
+            string typeStr = py > 1.5f ? "Wall" : "Floor";
+
+            float ix = math.round(px * 10f);
+            float iy = math.round(py * 10f);
+            float iz = math.round(pz * 10f);
+            string strX = (ix < 0f ? "-" : "0") + math.abs(ix).ToString("000");
+            string strZ = (iz < 0f ? "-" : "0") + math.abs(iz).ToString("000");
+            string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
+            string realId = $"{strX}_{strZ}_{strY}";
+
+            string toolTag = "Existing";
+            if (isBuildingReinforced)
+            {
+                toolTag = toolMap.ContainsKey(realId) ? toolMap[realId] : "Existing";
+            }
+
+            string matName = mats[i].MaterialName.ToString().Replace("\0", "").Trim();
+
+            string lineData = realId + "," +
+                              px.ToString("F2") + "," +
+                              py.ToString("F2") + "," +
+                              pz.ToString("F2") + "," +
+                              "0.00,Safe,N," + matName + ",0.0,0.0," + toolTag + "," + typeStr;
+
+            found = true;
+            if (toolTag != "Reinforcement") originalOnlyCsv.AppendLine(lineData);
+        }
+
+        transforms.Dispose();
+        mats.Dispose();
+
+        if (found)
+        {
+            string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+            if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
+            // 동기 쓰기: 호출자가 이 함수에서 리턴받는 즉시 디스크 반영이 끝나있음을 보장.
+            File.WriteAllText(path, originalOnlyCsv.ToString());
         }
     }
 
