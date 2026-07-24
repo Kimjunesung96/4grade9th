@@ -377,6 +377,11 @@ public class BudgetUIManager : MonoBehaviour
         SaveBudgetMeta(budget, currentMode, floors);
         ApplyMaterialsToScene(currentMode, budget);
 
+        // ⭐ [증발 버그 수정] 씬을 지우기 전에, 방금 G로 지은 것까지 포함해서
+        // Last_Building.csv를 무조건 먼저 확정 저장한다. (backupIDToQuery 예약을 그냥
+        // -1f로 취소해버리면 마지막 건설분이 원본 장부에 한 번도 안 남고 사라짐)
+        SpawnerSystem.SaveLastBuildingSnapshot(Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager);
+
         var rm = FindFirstObjectByType<ReinforcementManager>();
         if (rm != null) rm.CreatePlanExcel();
 
@@ -404,6 +409,9 @@ public class BudgetUIManager : MonoBehaviour
 
     void OnJustReinforce()
     {
+        // ⭐ [증발 버그 수정] 씬을 지우기 전에 마지막 G까지 반드시 Last_Building.csv에 반영
+        SpawnerSystem.SaveLastBuildingSnapshot(Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager);
+
         // 1. CSV 데이터 전처리 실행
         MergeToAfterReinforce();
 
