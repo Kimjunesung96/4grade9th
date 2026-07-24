@@ -17,12 +17,15 @@ public partial struct SpawnerSystem : ISystem
 {
     public static System.Collections.Generic.List<float3> ExternalBlueprintData = new System.Collections.Generic.List<float3>();
 
-    // ⭐ 재질을 보존하기 위한 새로운 리스트 추가!
     public static System.Collections.Generic.List<string> blueprintMaterials = new System.Collections.Generic.List<string>();
 
     public static bool isOMode = false;
     public static bool isLMode = false;
     public static bool isUMode = false;
+    
+    // ⭐ [신규 마법] 0,0,0 절대 좌표 고정 모드 (홀로그램 이동 금지)
+    public static bool isAbsolutePositionMode = false;
+    public static string targetLoadFile = "Reinforcement_Plan.csv";
 
     public static bool isManualModeEnabled = true;
     public static bool isAimMoveEnabled = true;
@@ -48,7 +51,6 @@ public partial struct SpawnerSystem : ISystem
     public static float loadDelayTimer;
     private bool pendingJointCleanup;
 
-    // 임시 파싱용 구조체
     private struct TempSpawnData
     {
         public float3 Pos;
@@ -74,17 +76,11 @@ public void OnCreate(ref SystemState state)
         isYMode = false;
         blueprintOffsets = new NativeList<float4>(Allocator.Persistent);
         loadDelayTimer = 0f; isOMode = false; isLMode = false; isUMode = false; backupIDToQuery = -1f;
+        isAbsolutePositionMode = false;
 
         blueprintMaterials.Clear();
 
-        // ==========================================================
-        // ⭐ [물리 한계 돌파 최적화]
-        // ==========================================================
-        // 1. 물리 계산 빈도를 기존 0.02s(초당 50번)에서 0.05s(초당 20번)로 낮춰 연산량을 60% 절감합니다.
         Time.fixedDeltaTime = 0.05f;
-
-        // 2. 물리 연산이 밀리더라도 한 프레임에 최대 2번까지만 실행되도록 캡을 씌웁니다.
-        // 이 설정을 해야 한 프레임에 수십 번씩 물리 연산이 반복 호출되며 턱턱 막히는 현상이 완벽히 사라집니다.
         Time.maximumDeltaTime = 0.1f; 
     }
 
@@ -102,24 +98,17 @@ public void OnUpdate(ref SystemState state)
         {
             RemoveDuplicateJoints(ref state);
             pendingJointCleanup = false;
-            UnityEngine.Debug.Log("🔧 [중복 조인트 정리] 완료!");
         }
 
         if (!SystemAPI.HasSingleton<BuilderStateData>()) return;
         var builderState = SystemAPI.GetSingletonRW<BuilderStateData>();
         
-        // ==========================================================
-        // ⭐ [물리 솔버 단계 다운 최적화]
-        // 한 프레임에 물리 연산이 밀려서 턱턱 막히는 현상을 완벽히 방지합니다.
-        // ==========================================================
         if (SystemAPI.HasSingleton<PhysicsStep>())
         {
             var physicsStep = SystemAPI.GetSingletonRW<PhysicsStep>();
-            // 기본값(보통 4 또는 8)에서 1~2단계로 낮춰 거미줄 조인트 연산 부담을 해제합니다.
             physicsStep.ValueRW.SolverIterationCount = 2;
         }
 
-        // 기존에 이미 아래쪽에 정의되어 있던 싱글톤 조회를 그대로 연결합니다 (중복 선언 에러 해결).
         if (!SystemAPI.TryGetSingleton<PhysicsWorldSingleton>(out var physicsSingleton)) return;
         SpawnerData spawnerData = default;
         bool hasSpawner = false;
@@ -136,34 +125,34 @@ public void OnUpdate(ref SystemState state)
 
             var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
 
-            // ⭐ [기억상실 완벽 치료] 기존 장부(CurrentStress.csv)를 훑어서 예전 보강재 태그들을 절대 까먹지 않게 미리 챙겨둡니다!
-            // ⭐ [기억상실 완벽 치료] 기존 장부를 훑어서 예전 보강재 태그들을 미리 챙겨둡니다
             var toolMap = new System.Collections.Generic.Dictionary<string, string>();
             string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
+            
+            // 🚀 건물 전체에서 보강재가 하나라도 있는지 전수 조사! (신분 세탁 원천 차단)
+            bool isBuildingReinforced = false;
+
             if (File.Exists(currentPath))
             {
                 var oldLines = File.ReadAllLines(currentPath);
                 for (int i = 1; i < oldLines.Length; i++)
                 {
                     var c = oldLines[i].Split(',');
-                    if (c.Length >= 12) toolMap[c[0]] = c[10];
+                    if (c.Length >= 12) 
+                    {
+                        toolMap[c[0]] = c[10];
+                        if (c[10] == "Reinforcement") isBuildingReinforced = true;
+                    }
                 }
             }
 
             foreach (var (transform, mat) in SystemAPI.Query<RefRO<LocalTransform>, RefRO<BlockMaterial>>().WithAll<BlockTag>())
             {
-                // ⭐ [물리 흔들림 방지] 찌그러진 좌표를 무시하고 무조건 3.0 격자 정중앙으로 스냅!
-                float rawX = transform.ValueRO.Position.x;
-                float rawY = transform.ValueRO.Position.y;
-                float rawZ = transform.ValueRO.Position.z;
-
-                float px = math.floor((rawX - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-                float py = math.floor((rawY - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-                float pz = math.floor((rawZ - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+                float px = math.floor((transform.ValueRO.Position.x - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+                float py = math.floor((transform.ValueRO.Position.y - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+                float pz = math.floor((transform.ValueRO.Position.z - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
                 
                 string typeStr = py > 1.5f ? "Wall" : "Floor";
                 
-                // 교정된 좌표로 완벽한 ID 생성
                 float ix = math.round(px * 10f);
                 float iy = math.round(py * 10f);
                 float iz = math.round(pz * 10f);
@@ -172,9 +161,14 @@ public void OnUpdate(ref SystemState state)
                 string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
                 string realId = $"{strX}_{strZ}_{strY}";
 
-                // 이제 흔들림 없이 무조건 제 짝을 찾아냅니다!
-                string toolTag = toolMap.ContainsKey(realId) ? toolMap[realId] : (bpManager != null ? bpManager.GetToolName(realId) : "Existing");
+                string toolTag = "Existing";
                 
+                // 보강된 건물이면 원래 태그 유지! 아니면 무조건 원본(Existing)!
+                if (isBuildingReinforced)
+                {
+                    toolTag = toolMap.ContainsKey(realId) ? toolMap[realId] : "Existing";
+                }
+
                 string matName = mat.ValueRO.MaterialName.ToString().Replace("\0", "").Trim();
 
                 string lineData = realId + "," +
@@ -188,18 +182,21 @@ public void OnUpdate(ref SystemState state)
             }
             if (found)
             {
-                string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
-                if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
-                
-                string finalCsv = csv.ToString();
-                System.Threading.Tasks.Task.Run(() => File.WriteAllText(path, finalCsv));
-                
-                UnityEngine.Debug.Log("💾 [U모드 스냅샷] 비동기 백업 완료! (속성 보존 완벽 성공)");
+                if (!isBuildingReinforced)
+                {
+                    string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+                    if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
+                    System.Threading.Tasks.Task.Run(() => File.WriteAllText(path, csv.ToString()));
+                }
             }
             backupIDToQuery = -1f;
         }
 
-        if (isClearREnabled && Input.GetKeyDown(KeyCode.R)) { if (LogManager.Instance != null) LogManager.Instance.OnPressRKey(); isCenterMoved = false; UnityEngine.Debug.Log("🪓 [현장 철거] R키 작동! 건물은 철거되지만 도면은 유지됩니다."); }
+        if (isClearREnabled && Input.GetKeyDown(KeyCode.R)) { 
+            if (LogManager.Instance != null) LogManager.Instance.OnPressRKey(); 
+            isCenterMoved = false; 
+            isAbsolutePositionMode = false; // R 누르면 마법도 해제
+        }
 
         bool isBMode = VibrationTestSystem.IsBModeActive; bool isNMode = ShockwaveTestSystem.IsNModeActive;
         bool isAnySpecialMode = isOMode || isLMode || isYMode || isUMode;
@@ -253,6 +250,13 @@ public void OnUpdate(ref SystemState state)
                 foreach (var (ghostTag, entity) in SystemAPI.Query<RefRO<GhostBlockTag>>().WithEntityAccess()) { ecb.DestroyEntity(entity); }
 
                 float3 baseCenter = new float3(math.round((customCenterPos.x - 1.5f) / 3.0f) * 3.0f + 1.5f, 0f, math.round((customCenterPos.z - 1.5f) / 3.0f) * 3.0f + 1.5f);
+                
+                // ⭐ [마법 발동] 절대 좌표 모드일 땐 마우스(baseCenter)를 무시하고 무조건 (0,0,0) 적용!
+                if (isYMode && isAbsolutePositionMode)
+                {
+                    baseCenter = float3.zero;
+                }
+
                 var gridMap = new NativeHashMap<int3, Entity>((int)countF, Allocator.Temp);
                 var posMap = new NativeHashMap<Entity, float3>((int)countF, Allocator.Temp);
 
@@ -277,7 +281,6 @@ public void OnUpdate(ref SystemState state)
                     var instance = ecb.Instantiate(spawnerData.Prefab);
                     ecb.SetComponent(instance, LocalTransform.FromPositionRotationScale(finalPos, quaternion.identity, 2.95f));
 
-                    // ⭐ 핵심 로직 적용! (CSV에서 읽어온 실제 재료 데이터 사용)
                     string matName = "Concrete";
                     if (isYMode && i < blueprintMaterials.Count)
                     {
@@ -294,7 +297,6 @@ public void OnUpdate(ref SystemState state)
                     float def = isReinforceBlock ? 600f : 400f;
                     float4 bColor = isReinforceBlock ? new float4(0.2f, 0.5f, 1.0f, 1f) : new float4(0.7f, 0.7f, 0.7f, 1f);
 
-                    // MaterialDataManager 연동
                     if (MaterialDataManager.Instance != null && MaterialDataManager.Instance.MaterialDict.TryGetValue(matName, out var spec))
                     {
                         hp = spec.BaseHP;
@@ -324,7 +326,6 @@ public void OnUpdate(ref SystemState state)
                         ecb.AddComponent<BlockStress>(instance);
                         ecb.AddComponent(instance, new StructureID { Value = (int)nextStructureID });
 
-                    
                         ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = bColor });
 
                         if (finalPos.y <= 2.0f) { PhysicsMass m = SystemAPI.GetComponent<PhysicsMass>(spawnerData.Prefab); m.InverseMass = 0f; m.InverseInertia = float3.zero; ecb.SetComponent(instance, m); }
@@ -338,26 +339,34 @@ public void OnUpdate(ref SystemState state)
                             var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
                             if (bpManager != null) { 
                                 string id = bpManager.VectorToID(new UnityEngine.Vector3(finalPos.x, finalPos.y, finalPos.z)); 
-                                
-                                // ⭐ 무조건 Reinforcement로 덮어쓰던 것을 수정!
-                                // 위에서 이미 판별한 isReinforceBlock 변수를 활용해서 원본과 보강물을 정확히 분리합니다.
                                 string properTool = isReinforceBlock ? "Reinforcement" : "Existing"; 
                                 bpManager.AddReinforcementBlock(id, properTool, new UnityEngine.Vector3(finalPos.x, finalPos.y, finalPos.z)); 
                             }
                         }
+                    }
                 }
-                }
+                
                 if (triggerSpecialReal)
                 {
                     var keys = gridMap.GetKeyArray(Allocator.Temp);
                     int3[] gridDirs = { new int3(1, 0, 0), new int3(0, 1, 0), new int3(0, 0, 1) };
                     float3[] internalDirs = { math.right(), math.up(), math.forward() };
+                    float3[] allDirs = { math.up(), math.down(), math.left(), math.right(), math.forward(), math.back() };
 
                     foreach (var key in keys)
                     {
                         Entity cur = gridMap[key]; float3 curPos = posMap[cur];
                         for (int d = 0; d < 3; d++) { if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor)) CreateIndestructibleJoint(ref ecb, cur, neighbor, internalDirs[d] * 3.0f); }
-                        foreach (var anchorDir in new float3[] { math.up(), math.down() }) { RaycastInput ray = new RaycastInput { Start = curPos, End = curPos + anchorDir * 2.0f, Filter = CollisionFilter.Default }; if (physicsWorld.CastRay(ray, out Unity.Physics.RaycastHit hit)) { if (hit.Entity != Entity.Null && !posMap.ContainsKey(hit.Entity) && SystemAPI.HasComponent<BlockTag>(hit.Entity)) { float3 hitPos = SystemAPI.GetComponent<LocalTransform>(hit.Entity).Position; CreateIndestructibleJoint(ref ecb, hit.Entity, cur, curPos - hitPos); } } }
+                        
+                        foreach (var anchorDir in allDirs) { 
+                            RaycastInput ray = new RaycastInput { Start = curPos, End = curPos + anchorDir * 2.0f, Filter = CollisionFilter.Default }; 
+                            if (physicsWorld.CastRay(ray, out Unity.Physics.RaycastHit hit)) { 
+                                if (hit.Entity != Entity.Null && !posMap.ContainsKey(hit.Entity) && SystemAPI.HasComponent<BlockTag>(hit.Entity)) { 
+                                    float3 hitPos = SystemAPI.GetComponent<LocalTransform>(hit.Entity).Position; 
+                                    CreateIndestructibleJoint(ref ecb, hit.Entity, cur, curPos - hitPos); 
+                                } 
+                            } 
+                        }
                     }
                     keys.Dispose();
 
@@ -367,9 +376,13 @@ public void OnUpdate(ref SystemState state)
                         if (bpManager != null) bpManager.SaveBlueprint();
 
                         blueprintOffsets.Clear();
-                        blueprintMaterials.Clear(); // ⭐ 타설 끝났으니 재료 리스트도 깔끔하게 비움
+                        blueprintMaterials.Clear(); 
                         isYMode = false;
-                        UnityEngine.Debug.Log("🏗️ [보강 공사] 튼튼하게 기존 건물과 보강 철근이 융합되었습니다!");
+                        
+                        // ⭐ 타설 완료 후 씬의 상태 갱신 + 마법 해제
+                        backupIDToQuery = 1f; 
+                        isAbsolutePositionMode = false;
+                        UnityEngine.Debug.Log("🏗️ [타설 완료] 지점에 오차 없이 융합되었습니다!");
                     }
                     else
                     {
@@ -377,7 +390,6 @@ public void OnUpdate(ref SystemState state)
                         isOMode = false;
                         isLMode = false;
                         isUMode = false;
-                        UnityEngine.Debug.Log("🏗️ [도면 공사] O/U 복층 도면 타설 완료!");
                     }
 
                     nextStructureID += 1f;
@@ -394,95 +406,79 @@ public void OnUpdate(ref SystemState state)
                 BudgetUIManager.Instance.OnYKeyPressed();
         }
 
-      // 기존 코드 전체를 아래의 최적화된 배열 기반 코드로 통째로 교체합니다.
-if (loadDelayTimer > 0f)
-{
-    loadDelayTimer -= 1f;
-    if (loadDelayTimer <= 0f)
-    {
-        string planCsvPath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
-        if (File.Exists(planCsvPath))
+        if (loadDelayTimer > 0f)
         {
-            // ⭐ 최적화 1: 무거운 List 대신 일반 string[] 배열을 사용하여 메모리 복사 오버헤드 삭제
-            string[] linesArray = File.ReadAllLines(planCsvPath);
-            float minX = 99999f, minZ = 99999f, maxX = -99999f, maxZ = -99999f;
-
-            System.Collections.Generic.List<TempSpawnData> tempList = new System.Collections.Generic.List<TempSpawnData>();
-            // ⭐ [원본 대체 불가 보장] HashSet(순서 기반 선착순) 대신 Dictionary로 바꿔서,
-            // 같은 좌표에 Existing과 Reinforcement가 겹치면 파일 순서와 상관없이 Existing이 항상 이기게 함
-            System.Collections.Generic.Dictionary<string, int> loadedIndex = new System.Collections.Generic.Dictionary<string, int>();
-
-            for (int i = 1; i < linesArray.Length; i++)
+            loadDelayTimer -= 1f;
+            if (loadDelayTimer <= 0f)
             {
-                // ⭐ 최적화 2: .ToList() 제거, 즉시 string[] 배열로 파싱 및 ElementAt -> 인덱서[] 전환
-                string[] cols = linesArray[i].Split(',');
-
-                if (cols.Length >= 12 && (cols[10] == "Reinforcement" || cols[10] == "Existing"))
+                // 🚀 매니저가 명령한 파일(보강재 or 복구용 원본)만 딱 읽어옵니다.
+                string readPath = Path.Combine(Application.dataPath, "StressBlock", targetLoadFile);
+                
+                if (File.Exists(readPath))
                 {
-                    string[] idParts = cols[0].Split('_');
-                    if (idParts.Length >= 3)
+                    string[] linesArray = File.ReadAllLines(readPath);
+                    float minX = 99999f, minZ = 99999f, maxX = -99999f, maxZ = -99999f;
+
+                    System.Collections.Generic.List<TempSpawnData> tempList = new System.Collections.Generic.List<TempSpawnData>();
+
+                    for (int i = 1; i < linesArray.Length; i++)
                     {
-                        float px = float.Parse(idParts[0]) / 10f;
-                        float pz = float.Parse(idParts[1]) / 10f;
-                        float py = float.Parse(idParts[2]) / 10f;
-                        
-                        float x = math.floor((px - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-                        float z = math.floor((pz - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-                        float y = math.floor((py - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+                        string[] cols = linesArray[i].Split(',');
 
-                        // 문자열 결합 최소화 (가장 빠른 속도)
-                        string uniqueKey = $"{x}_{y}_{z}";
-                        bool isReinforceLine = cols[10] == "Reinforcement";
-
-                        if (loadedIndex.TryGetValue(uniqueKey, out int existingIdx))
+                        if (cols.Length >= 12)
                         {
-                            // ⭐ 이미 이 좌표에 뭔가 있음: 기존 것이 Existing(원본)이면 지금 줄이 뭐든 무시 (원본 절대 보호)
-                            bool existingWasReinforce = tempList[existingIdx].IsReinforce > 0.5f;
-                            if (!existingWasReinforce) continue; // 기존이 원본이면 지금 줄(뭐든) 버림
-                            if (isReinforceLine) continue; // 기존도 보강, 지금도 보강이면 그냥 첫 번째 유지
+                            string[] idParts = cols[0].Split('_');
+                            if (idParts.Length >= 3)
+                            {
+                                float px = float.Parse(idParts[0]) / 10f;
+                                float pz = float.Parse(idParts[1]) / 10f;
+                                float py = float.Parse(idParts[2]) / 10f;
+                                
+                                float x = math.floor((px - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+                                float z = math.floor((pz - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+                                float y = math.floor((py - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
 
-                            // 기존이 보강인데 지금 줄이 원본이면, 원본으로 교체(원본 우선)
-                            float readIsReinforce = isReinforceLine ? 1f : 0f;
-                            string readMatSwap = cols[7].Replace("\0", "").Trim();
-                            tempList[existingIdx] = new TempSpawnData { Pos = new float3(x, y, z), IsReinforce = readIsReinforce, MatName = readMatSwap };
-                            continue;
+                                float isReinforce = cols[10] == "Reinforcement" ? 1f : 0f;
+                                string readMat = cols[7].Replace("\0", "").Trim();
+
+                                tempList.Add(new TempSpawnData { Pos = new float3(x, y, z), IsReinforce = isReinforce, MatName = readMat });
+
+                                if (x < minX) minX = x; if (x > maxX) maxX = x;
+                                if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+                            }
+                        }
+                    }
+                    
+                    if (tempList.Count > 0)
+                    {
+                        isYMode = true;
+                        blueprintOffsets.Clear();
+                        blueprintMaterials.Clear();
+
+                        tempList.Sort((a, b) => a.Pos.y.CompareTo(b.Pos.y));
+
+                        float centerX = 0f; float centerZ = 0f;
+                        
+                        // ⭐ [마법 발동] 절대 좌표 모드가 아닐 때만 마우스 중심점(Centering)을 계산!
+                        if (!isAbsolutePositionMode)
+                        {
+                            centerX = math.round(((minX + maxX) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                            centerZ = math.round(((minZ + maxZ) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
                         }
 
-                        float isReinforce = isReinforceLine ? 1f : 0f;
-                        string readMat = cols[7].Replace("\0", "").Trim();
+                        customCenterPos = new float3(centerX, 0f, centerZ);
+                        isCenterMoved = true;
 
-                        tempList.Add(new TempSpawnData { Pos = new float3(x, y, z), IsReinforce = isReinforce, MatName = readMat });
-                        loadedIndex[uniqueKey] = tempList.Count - 1;
-
-                        if (x < minX) minX = x; if (x > maxX) maxX = x;
-                        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+                        foreach (var data in tempList)
+                        {
+                            blueprintOffsets.Add(new float4(data.Pos.x - centerX, data.Pos.y, data.Pos.z - centerZ, data.IsReinforce));
+                            blueprintMaterials.Add(data.MatName);
+                        }
+                        UnityEngine.Debug.Log($"📦 [배달 완료] {targetLoadFile} 로드 완료! (F로 미리보기, G로 확정)");
                     }
                 }
             }
-            if (tempList.Count > 0)
-            {
-                isYMode = true;
-                blueprintOffsets.Clear();
-                blueprintMaterials.Clear();
-
-                // Y축 정렬
-                tempList.Sort((a, b) => a.Pos.y.CompareTo(b.Pos.y));
-
-                float centerX = math.round(((minX + maxX) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                float centerZ = math.round(((minZ + maxZ) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                customCenterPos = new float3(centerX, 0f, centerZ);
-                isCenterMoved = true;
-
-                foreach (var data in tempList)
-                {
-                    blueprintOffsets.Add(new float4(data.Pos.x - centerX, data.Pos.y, data.Pos.z - centerZ, data.IsReinforce));
-                    blueprintMaterials.Add(data.MatName);
-                }
-                UnityEngine.Debug.Log($"🏗️ [스마트 로드 완] {tempList.Count}개의 구조물과 재질 데이터가 장전되었습니다! F키로 확인해 보세요.");
-            }
         }
-    }
-}
 
         if (isYMode && !isBMode)
         {
@@ -493,7 +489,6 @@ if (loadDelayTimer > 0f)
                     float4 offset = blueprintOffsets.ElementAt(i);
                     blueprintOffsets[i] = new float4(-offset.z, offset.y, offset.x, offset.w);
                 }
-                UnityEngine.Debug.Log("🔄 Y도면이 왼쪽[Q]으로 90도 회전했습니다!");
             }
             if (Input.GetKeyDown(KeyCode.E))
             {
@@ -502,7 +497,6 @@ if (loadDelayTimer > 0f)
                     float4 offset = blueprintOffsets.ElementAt(i);
                     blueprintOffsets[i] = new float4(offset.z, offset.y, -offset.x, offset.w);
                 }
-                UnityEngine.Debug.Log("🔄 Y도면이 오른쪽[E]으로 90도 회전했습니다!");
             }
         }
 
@@ -588,10 +582,9 @@ if (loadDelayTimer > 0f)
         if (math.abs(mode - 1f) < 0.01f || math.abs(mode - 2f) < 0.01f) { float minX = math.min(start.x, end.x); float maxX = math.max(start.x, end.x) + blockSize; float minZ = math.min(start.z, end.z); float maxZ = math.max(start.z, end.z) + blockSize; float minY = start.y; float maxY = start.y + (heightParam * floorHeight); Vector3 p1 = new Vector3(minX, minY, minZ); Vector3 p2 = new Vector3(maxX, minY, minZ); Vector3 p3 = new Vector3(maxX, minY, maxZ); Vector3 p4 = new Vector3(minX, minY, maxZ); Debug.DrawLine(p1, p2, color); Debug.DrawLine(p2, p3, color); Debug.DrawLine(p3, p4, color); Debug.DrawLine(p4, p1, color); if (heightParam > 0f) { Vector3 t1 = new Vector3(minX, maxY, minZ); Vector3 t2 = new Vector3(maxX, maxY, minZ); Vector3 t3 = new Vector3(maxX, maxY, maxZ); Vector3 t4 = new Vector3(minX, maxY, maxZ); Debug.DrawLine(t1, t2, color); Debug.DrawLine(t2, t3, color); Debug.DrawLine(t3, t4, color); Debug.DrawLine(t4, t1, color); Debug.DrawLine(p1, t1, color); Debug.DrawLine(p2, t2, color); Debug.DrawLine(p3, t3, color); Debug.DrawLine(p4, t4, color); } }
         else if (math.abs(mode - 3f) < 0.01f || math.abs(mode - 4f) < 0.01f || math.abs(mode - 5f) < 0.01f) { float3 center = (start + end) / 2f; center.x += (blockSize / 2f); center.z += (blockSize / 2f); float radius = (math.distance(start, end) / 2f) + (blockSize / 2f); float minY = start.y; float maxY = start.y + (heightParam * floorHeight); float segments = 24f; float angleStep = (2f * math.PI) / segments; Vector3 prev = center + new float3(radius, 0f, 0f); prev.y = minY; for (float i = 1f; i <= segments; i += 1f) { Vector3 next = center + new float3(math.cos(i * angleStep) * radius, 0f, math.sin(i * angleStep) * radius); next.y = minY; Debug.DrawLine(prev, next, color); prev = next; } if (heightParam > 0f) Debug.DrawLine(new Vector3(center.x, minY, center.z), new Vector3(center.x, maxY, center.z), color); }
     }
-// 변경 코드
+
 private void RemoveDuplicateJoints(ref SystemState state)
 {
-    // 넉넉한 초기 용량을 확보하여 메모리 재할당으로 인한 프리징 원천 차단
     var seenPairs = new NativeHashSet<int2>(50000, Allocator.Temp);
     var ecb = new EntityCommandBuffer(Allocator.Temp);
 

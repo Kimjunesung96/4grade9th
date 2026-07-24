@@ -24,7 +24,6 @@ public class BudgetUIManager : MonoBehaviour
     private string floorCountInput = "1";
     public bool wantsReinforcement = false;
     
-    // ⭐ 철거 명령 예약용 깃발
     private bool pendingRemoveReinforcements = false;
     
     private bool isCheapON = false;
@@ -71,7 +70,6 @@ public class BudgetUIManager : MonoBehaviour
 
     void Update()
     {
-        // ⭐ 예약된 철거 명령을 안전한 타이밍에 실행
         if (pendingRemoveReinforcements)
         {
             pendingRemoveReinforcements = false;
@@ -255,7 +253,7 @@ public class BudgetUIManager : MonoBehaviour
         GUILayout.BeginVertical();
         GUILayout.Space(25);
         GUI.backgroundColor = new Color(1f, 0.4f, 0.4f);
-        if (GUILayout.Button("보강재 초기화\n(테스트용)", GUILayout.Height(55), GUILayout.Width(130))) 
+        if (GUILayout.Button("보강재 초기화\n(철거)", GUILayout.Height(55), GUILayout.Width(130))) 
         {
             pendingRemoveReinforcements = true; 
         }
@@ -301,6 +299,68 @@ public class BudgetUIManager : MonoBehaviour
         GUILayout.EndScrollView();
     }
 
+    // =========================================================================================
+    // 🚀 [십장님 알고리즘 완벽 적용] 유니티 스포너 대신 CSV 단계에서 먼저 중복을 숙청합니다!
+    // =========================================================================================
+    private void MergeToAfterReinforce()
+    {
+        string basePath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+        string planPath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
+        string afterPath = Path.Combine(Application.dataPath, "StressBlock", "after_reinforce.csv");
+
+        string header = "BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type";
+        List<string> allRawLines = new List<string>();
+
+        // 1. "두 파일을 에프러리인포스에서 그대로 합쳐" -> 둘 다 무식하게 읽어들입니다.
+        if (File.Exists(basePath))
+        {
+            var lines = File.ReadAllLines(basePath);
+            for (int i = 1; i < lines.Length; i++) if (!string.IsNullOrWhiteSpace(lines[i])) allRawLines.Add(lines[i]);
+        }
+        if (File.Exists(planPath))
+        {
+            var lines = File.ReadAllLines(planPath);
+            for (int i = 1; i < lines.Length; i++) if (!string.IsNullOrWhiteSpace(lines[i])) allRawLines.Add(lines[i]);
+        }
+
+        // ID를 기준으로 그룹화
+        Dictionary<string, List<string>> groupedById = new Dictionary<string, List<string>>();
+        foreach (var line in allRawLines)
+        {
+            var cols = line.Split(',');
+            if (cols.Length < 12) continue;
+            string id = cols[0];
+            if (!groupedById.ContainsKey(id)) groupedById[id] = new List<string>();
+            groupedById[id].Add(line);
+        }
+
+        List<string> finalList = new List<string> { header };
+        foreach (var kvp in groupedById)
+        {
+            var linesForId = kvp.Value;
+            if (linesForId.Count > 1) 
+            {
+                // 2. "그다음에 id가 같은 놈들 중에서 reinforce가 들어가 있는 줄을 지워버려!"
+                // 즉, "Reinforcement"가 아닌 원본 줄을 찾아서 그것만 살립니다.
+                string originalLine = linesForId.FirstOrDefault(l => l.Split(',')[10].Trim() != "Reinforcement");
+                if (originalLine != null) 
+                    finalList.Add(originalLine); // 원본 승리! (보강재 줄은 영원히 삭제됨)
+                else 
+                    finalList.Add(linesForId[0]);
+            }
+            else
+            {
+                // 안 겹친 정상 블록들은 그대로 통과!
+                finalList.Add(linesForId[0]);
+            }
+        }
+
+        // 3. 완벽하게 필터링된 완성본을 저장합니다.
+        File.WriteAllLines(afterPath, finalList);
+        File.WriteAllLines(csvPath, finalList);
+        Debug.Log("🏭 [데이터 전처리 완료] 겹치는 보강재를 CSV단에서 완벽히 삭제하고 after_reinforce.csv를 완성했습니다!");
+    }
+
     void OnConfirm()
     {
         float budget = float.TryParse(budgetInput, out float b) ? b : float.MaxValue;
@@ -316,22 +376,50 @@ public class BudgetUIManager : MonoBehaviour
         var rm = FindFirstObjectByType<ReinforcementManager>();
         if (rm != null) rm.CreatePlanExcel();
 
-        showPanel = false;
+        // 1. CSV 데이터 전처리 실행
+        MergeToAfterReinforce();
 
+        // 2. 씬 완전 철거 (전체 건물을 다시 예쁘게 깔아야 하므로 기존 찌꺼기 폭파)
+        SpawnerSystem.backupIDToQuery = -1f;
+        var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
+        em.DestroyEntity(em.CreateEntityQuery(typeof(BlockTag)));
+        em.DestroyEntity(em.CreateEntityQuery(typeof(JointTag)));
+        em.DestroyEntity(em.CreateEntityQuery(typeof(GhostBlockTag)));
+
+        showPanel = false;
         yKeyState = 0;
         SpawnerSystem.isUMode = false;
+        
+        // 3. 스포너에게 복잡한 논리 시키지 않고, 오직 '완성본(after_reinforce.csv)'만 띄우라고 지시!
+        SpawnerSystem.isAbsolutePositionMode = true;
+        SpawnerSystem.targetLoadFile = "after_reinforce.csv"; // ⭐ 핵심: 완성본 장전!
         SpawnerSystem.loadDelayTimer = 5f;
 
-        Debug.Log("✅ 설정 완료 적용 모드: " + currentMode + " / 보강 도면 장전 준비 완료!");
+        Debug.Log("✅ [장전 완료] 보강재가 결합된 '완전체 건물' 홀로그램을 화면에 띄웁니다! (G키로 타설하세요)");
     }
 
     void OnJustReinforce()
     {
+        // 1. CSV 데이터 전처리 실행
+        MergeToAfterReinforce();
+
+        // 2. 씬 완전 철거
+        SpawnerSystem.backupIDToQuery = -1f;
+        var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
+        em.DestroyEntity(em.CreateEntityQuery(typeof(BlockTag)));
+        em.DestroyEntity(em.CreateEntityQuery(typeof(JointTag)));
+        em.DestroyEntity(em.CreateEntityQuery(typeof(GhostBlockTag)));
+
         yKeyState = 0;
         showPanel = false;
         SpawnerSystem.isUMode = false;
+        
+        // 3. 스포너에게 복잡한 논리 시키지 않고, 오직 '완성본(after_reinforce.csv)'만 띄우라고 지시!
+        SpawnerSystem.isAbsolutePositionMode = true;
+        SpawnerSystem.targetLoadFile = "after_reinforce.csv"; // ⭐ 핵심: 완성본 장전!
         SpawnerSystem.loadDelayTimer = 5f;
-        Debug.Log("(just보강) 보강 도면 로드!");
+        
+        Debug.Log("(just보강) 보강재가 결합된 완전체 건물 장전 완료!");
     }
 
     void SaveBudgetMeta(float budget, string mode, int floors)
@@ -459,65 +547,20 @@ public class BudgetUIManager : MonoBehaviour
         }
 
         File.WriteAllLines(csvPath, output);
-        UnityEngine.Debug.Log("저장 완료 CurrentStress.csv 파일에 재질 변경 내역 저장 완료");
-
-        var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
-        var query = em.CreateEntityQuery(typeof(BlockMaterial), typeof(OriginalPosition));
-        var entities = query.ToEntityArray(Unity.Collections.Allocator.Temp);
-
-        foreach (var ent in entities)
-        {
-            var pos = em.GetComponentData<OriginalPosition>(ent).Value;
-
-            float ix = math.round(pos.x * 10f);
-            float iy = math.round(pos.y * 10f);
-            float iz = math.round(pos.z * 10f);
-
-            string strX = (ix < 0f ? "-" : "0") + math.abs(ix).ToString("000");
-            string strZ = (iz < 0f ? "-" : "0") + math.abs(iz).ToString("000");
-            string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
-            string id = strX + "_" + strZ + "_" + strY;
-
-            var targetBlock = blocks.FirstOrDefault(b => b.Cols[0] == id);
-            if (targetBlock != null)
-            {
-                var newMat = new BlockMaterial
-                {
-                    MaterialName = targetBlock.MatName,
-                    TensileStiffness = targetBlock.Tensile,
-                    CompressiveStiffness = targetBlock.Compressive
-                };
-                em.SetComponentData(ent, newMat);
-            }
-        }
-        entities.Dispose();
     }
 
-    // ⭐ [이름 정상 변경됨] 안전한 타이밍에 찌꺼기 없이 실행됩니다!
-void ExecuteRemoveReinforcements()
+    void ExecuteRemoveReinforcements()
     {
-        if (!File.Exists(csvPath))
-        {
-            Debug.LogWarning("⚠️ CurrentStress.csv 파일이 없습니다.");
-            return;
-        }
-
-        // ⭐ 제1원칙, 제3원칙: CurrentStress.csv와 Reinforcement_Plan.csv 양쪽 다 보강재 찌꺼기를 박멸합니다!
         string planPath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
-        if (File.Exists(planPath))
-        {
-            File.Delete(planPath);
-            Debug.Log("🗑️ [제1원칙] 보강 도면 파일(Reinforcement_Plan.csv) 완전 삭제 완료!");
-        }
+        string afterPath = Path.Combine(Application.dataPath, "StressBlock", "after_reinforce.csv");
+        if (File.Exists(planPath)) File.Delete(planPath);
+        if (File.Exists(afterPath)) File.Delete(afterPath);
 
         var lines = File.ReadAllLines(csvPath).ToList();
         if (lines.Count <= 1) return;
 
-        // ⭐ 제2원칙: ID를 유일한 키로 삼아 블록 중첩 생성 원천 차단
         HashSet<string> seenIDs = new HashSet<string>();
-        List<string> cleanLines = new List<string> { lines.First() }; // 헤더 추가
-        int restoredDestroyedCount = 0;
-        int skippedParseFailCount = 0;
+        List<string> cleanLines = new List<string> { lines.First() }; 
 
         for (int i = 1; i < lines.Count; i++)
         {
@@ -527,40 +570,22 @@ void ExecuteRemoveReinforcements()
                 string toolAttr = cols[10].Trim();
                 string id = cols[0];
 
-                // 제3원칙: 보강물(Reinforcement)이 아닌 원본(Existing 등)만 대상에 포함
-                // ⭐ [명시화] RiskLevel/좌표가 "DESTROYED"였던 원본 블록도 여기서 좌표를 ID로부터
-                // 재계산해서 복구 대상에 반드시 포함시킨다. (파괴 여부와 무관하게 원본이면 무조건 복구)
                 if (toolAttr != "Reinforcement")
                 {
                     bool wasDestroyed = cols[1].Trim() == "DESTROYED" || cols[5].Trim().Contains("Destroyed");
-
-                    // 제2원칙: 이미 처리된 ID라면 중복 추가 무조건 방지
                     if (seenIDs.Contains(id)) continue;
                     seenIDs.Add(id);
 
-                    // 제2원칙: ID에서 좌표를 정확히 파내어 완벽 복구
                     string[] idParts = id.Split('_');
-                    if (idParts.Length >= 3 &&
-                        float.TryParse(idParts[0], out float px) &&
-                        float.TryParse(idParts[1], out float pz) &&
-                        float.TryParse(idParts[2], out float py))
+                    if (idParts.Length >= 3 && float.TryParse(idParts[0], out float px) && float.TryParse(idParts[1], out float pz) && float.TryParse(idParts[2], out float py))
                     {
                         px /= 10f; pz /= 10f; py /= 10f;
-
                         string fixedLine = $"{id},{px:F2},{py:F2},{pz:F2},0.00,Safe,N,{cols[7]},{cols[8]},{cols[9]},{toolAttr},{cols[11]}";
                         cleanLines.Add(fixedLine);
-                        if (wasDestroyed) restoredDestroyedCount++;
-                    }
-                    else
-                    {
-                        skippedParseFailCount++;
-                        Debug.LogWarning($"⚠️ [복구 실패] ID 파싱 실패로 복구 대상에서 누락됨: {id}");
                     }
                 }
             }
         }
-
-        Debug.Log($"🧱 [원본 복구] 파괴됐던 원본 블록 {restoredDestroyedCount}개 포함 복구 완료! (파싱 실패로 누락된 블록: {skippedParseFailCount}개)");
 
         File.WriteAllLines(csvPath, cleanLines);
         
@@ -569,17 +594,14 @@ void ExecuteRemoveReinforcements()
         if (!Directory.Exists(Path.GetDirectoryName(genPath))) Directory.CreateDirectory(Path.GetDirectoryName(genPath));
         File.WriteAllLines(genPath, cleanLines);
 
-        // ⭐ [핵심 수정] V/B/N 테스트 시스템들이 실제로 읽는 경로는 여기(BuildingLogs)가 아니라
-        // Assets/StressBlock/Last_Building.csv였음! 여기가 업데이트 안 돼서 낡은 Reinforcement 태그가
-        // 제거 후에도 V/B/N 테스트 시 되살아나고 있었음 - 이 경로에도 반드시 정리된 결과를 같이 써준다.
         string stressBlockLastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
         File.WriteAllLines(stressBlockLastBuildPath, cleanLines);
 
-        // ⭐ [핵심 수정] BlueprintManager의 런타임 메모리 캐시(toolNameLookup)를 즉시 비움.
-        // 파일들은 정리해도 이 캐시가 안 지워지면, ID 매칭이 살짝 어긋날 때 낡은 Reinforcement 정보가 되살아남.
         var bpManagerForClear = FindFirstObjectByType<BlueprintManager>();
         if (bpManagerForClear != null) bpManagerForClear.ClearRuntimeCache();
 
+        SpawnerSystem.backupIDToQuery = -1f;
+        
         var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
         em.DestroyEntity(em.CreateEntityQuery(typeof(BlockTag)));
         em.DestroyEntity(em.CreateEntityQuery(typeof(JointTag)));
@@ -589,14 +611,15 @@ void ExecuteRemoveReinforcements()
 
         showPanel = false;
         yKeyState = 0;
+        SpawnerSystem.isUMode = false;
         
-        SpawnerSystem.isUMode = true;
-        SpawnerSystem.isOMode = false;
-        SpawnerSystem.isLMode = false;
-        
-        var gen = FindFirstObjectByType<BlueprintTargetGenerator>();
-        if (gen != null) gen.LoadLastBuildingForUMode();
+        SpawnerSystem.isAbsolutePositionMode = true;
+        SpawnerSystem.targetLoadFile = "Last_Building.csv"; // 철거 시에는 순수 원본으로 복구
+        SpawnerSystem.loadDelayTimer = 5f;
 
-        Debug.Log("🗑️ [완벽 초기화 완료] 보강 도면 삭제 + ID 중복 필터링 + 순정 원본 복구 완료!");
+        var dragController = FindFirstObjectByType<SimulationDragController>();
+        if (dragController != null) dragController.CancelDrag();
+
+        Debug.Log("🗑️ [완벽 철거] 융합 파일 삭제 후, 순수한 원본 데이터로 건물을 재구축 대기 중!");
     }
 }
