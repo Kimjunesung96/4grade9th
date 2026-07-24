@@ -175,6 +175,16 @@ public partial struct VibrationTestSystem : ISystem
                     ecb.RemoveComponent<VibrationTracker>(entity);
                 }
 
+                // ⭐ 버그 수정: 방금 지어서 VibrationTracker가 아직 안 붙은 블록은 위 루프에서 통째로
+                // 누락됨 → CurrentStress.csv에서 그대로 증발했었음. 추적 못 한 블록도 현재 위치/스트레스0
+                // (Safe)으로 최소한 기록은 남겨서 사라지지 않게 안전망을 깐다.
+                foreach (var (transform, mat, entity) in SystemAPI.Query<RefRO<LocalTransform>, RefRO<BlockMaterial>>().WithAll<BlockTag>().WithNone<VibrationTracker>().WithEntityAccess())
+                {
+                    finalPositions.Add(transform.ValueRO.Position);
+                    finalStresses.Add(0f);
+                    finalMaterials.Add(mat.ValueRO.MaterialName);
+                }
+
                 SaveVibrationExcel(finalPositions, finalStresses, finalMaterials);
 
                 finalPositions.Dispose(); finalStresses.Dispose(); finalMaterials.Dispose();
