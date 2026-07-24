@@ -358,6 +358,10 @@ public class BudgetUIManager : MonoBehaviour
         // 3. 완벽하게 필터링된 완성본을 저장합니다.
         File.WriteAllLines(afterPath, finalList);
         File.WriteAllLines(csvPath, finalList);
+        // ⭐ 버그 수정: 원본(Last_Building.csv)을 갱신 안 하면 다음 보강 라운드에서
+        // 이번에 붙인 보강재가 "원본에 없는 새 블록"으로 다시 취급돼서 중복/삭제가 꼬였음.
+        // 세 파일(after_reinforce, CurrentStress, Last_Building)을 항상 같은 상태로 동기화.
+        File.WriteAllLines(basePath, finalList);
         Debug.Log("🏭 [데이터 전처리 완료] 겹치는 보강재를 CSV단에서 완벽히 삭제하고 after_reinforce.csv를 완성했습니다!");
     }
 
@@ -572,7 +576,6 @@ public class BudgetUIManager : MonoBehaviour
 
                 if (toolAttr != "Reinforcement")
                 {
-                    bool wasDestroyed = cols[1].Trim() == "DESTROYED" || cols[5].Trim().Contains("Destroyed");
                     if (seenIDs.Contains(id)) continue;
                     seenIDs.Add(id);
 
