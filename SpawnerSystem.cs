@@ -502,6 +502,11 @@ public void OnUpdate(ref SystemState state)
         bool found = false;
 
         var toolMap = new System.Collections.Generic.Dictionary<string, string>();
+        // ⭐ 버그 수정: 이 매서드가 씬의 BlockMaterial 컴포넌트에서 재질을 그대로 가져와 버려서
+        // ApplyMaterialsToScene()이 방금 CSV에 새로 계산해둔 재질(저렴/고급 모드)이 통째로 무시되고
+        // 옛 재질로 덮어써지고 있었음. CSV에 이미 있는 블록은 그 재질을 그대로 쓰고,
+        // CSV에 아직 없는 신규 블록(방금 G로 지은 것)만 씬 컴포넌트에서 재질을 가져온다.
+        var matMap = new System.Collections.Generic.Dictionary<string, string>();
         string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
 
         // 🚀 건물 전체에서 보강재가 하나라도 있는지 전수 조사! (신분 세탁 원천 차단)
@@ -516,6 +521,7 @@ public void OnUpdate(ref SystemState state)
                 if (c.Length >= 12)
                 {
                     toolMap[c[0]] = c[10];
+                    matMap[c[0]] = c[7];
                     if (c[10] == "Reinforcement") isBuildingReinforced = true;
                 }
             }
@@ -548,7 +554,7 @@ public void OnUpdate(ref SystemState state)
                 toolTag = toolMap.ContainsKey(realId) ? toolMap[realId] : "Existing";
             }
 
-            string matName = mats[i].MaterialName.ToString().Replace("\0", "").Trim();
+            string matName = matMap.ContainsKey(realId) ? matMap[realId] : mats[i].MaterialName.ToString().Replace("\0", "").Trim();
 
             string lineData = realId + "," +
                               px.ToString("F2") + "," +
