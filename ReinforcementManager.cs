@@ -49,8 +49,6 @@ public class ReinforcementManager : MonoBehaviour
 
             // ⭐ 원본이 있는 자리는 피하도록 위치만 기억해 둡니다. (보강재 중복 스폰 방지)
             existingBlocks.Add(cleanId);
-            
-            // 🛑 기존 원본 블록을 planLines에 강제로 기입하던 로직을 완전 삭제! (십장님 논리 적용)
         }
 
         bool shouldReinforce = true;
@@ -86,9 +84,7 @@ public class ReinforcementManager : MonoBehaviour
                 float rawY = float.Parse(parts[2]);
 
                 if (cols[5] == "Danger" || cols[5] == "Danger_Destroyed")
-                    // ⭐ 버그 수정: flaggedPoints는 이후에 다시 /10f 하는 곳이 없어서
-                    // Y를 여기서 바로 실좌표로 변환해야 함 (quakePoints는 뒤에서 별도로 /10f 하므로 raw 유지)
-                    flaggedPoints.Add((new Vector3(cleanX, rawY / 10f, cleanZ), true));
+                    flaggedPoints.Add((new Vector3(cleanX, rawY, cleanZ), true));
                 else if (cols[5] == "Quake_Danger" || cols[5] == "Quake_Destroyed" || cols[5] == "Explosion_Danger" || cols[5] == "Explosion_Destroyed")
                     quakePoints.Add(new Vector3(cleanX, rawY, cleanZ));
             }
@@ -135,7 +131,7 @@ public class ReinforcementManager : MonoBehaviour
 
                     for (float ty = 1.5f; ty <= targetY; ty += 3.0f)
                     {
-                        float ix = Mathf.Round(towerX * 10f); float iz = Mathf.Round(towerZ * 10f); float iy = Mathf.Round(ty * 10f);
+                        float ix = Mathf.Round((towerX + 0.001f) * 10f); float iz = Mathf.Round((towerZ + 0.001f) * 10f); float iy = Mathf.Round((ty + 0.001f) * 10f);
                         string tId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
                         if (!existingBlocks.Contains(tId))
                         {
@@ -149,7 +145,7 @@ public class ReinforcementManager : MonoBehaviour
                             foreach (var off in crossOffsetsB)
                             {
                                 float armX = Snap(towerX + off.x); float armZ = Snap(towerZ + off.y);
-                                float aix = Mathf.Round(armX * 10f); float aiz = Mathf.Round(armZ * 10f);
+                                float aix = Mathf.Round((armX + 0.001f) * 10f); float aiz = Mathf.Round((armZ + 0.001f) * 10f);
                                 string aId = $"{(aix < 0f ? "-" : "0")}{Mathf.Abs(aix):000}_{(aiz < 0f ? "-" : "0")}{Mathf.Abs(aiz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
                                 if (!existingBlocks.Contains(aId))
                                 {
@@ -162,11 +158,11 @@ public class ReinforcementManager : MonoBehaviour
                         int floorIndex = Mathf.RoundToInt((ty - 1.5f) / 3.0f);
                         if (floorIndex % 2 == 0)
                         {
-                            for (int s = 2; s < steps; s++)
+                            for (int s = 1; s < steps; s++)
                             {
                                 float bridgeX = Snap(wallX + (dx * s / steps));
                                 float bridgeZ = Snap(wallZ + (dz * s / steps));
-                                float bix = Mathf.Round(bridgeX * 10f); float biz = Mathf.Round(bridgeZ * 10f); float biy = Mathf.Round(ty * 10f);
+                                float bix = Mathf.Round((bridgeX + 0.001f) * 10f); float biz = Mathf.Round((bridgeZ + 0.001f) * 10f); float biy = Mathf.Round((ty + 0.001f) * 10f);
                                 string bId = $"{(bix < 0f ? "-" : "0")}{Mathf.Abs(bix):000}_{(biz < 0f ? "-" : "0")}{Mathf.Abs(biz):000}_{(biy < 0f ? "-" : "0")}{Mathf.Abs(biy):000}";
                                 if (!existingBlocks.Contains(bId))
                                 {
@@ -202,7 +198,7 @@ public class ReinforcementManager : MonoBehaviour
                         
                         foreach (var offset in crossOffsets)
                         {
-                            float targetX = Snap(cleanX + offset.x); float targetZ = Snap(cleanZ + offset.z);
+                            float targetX = cleanX + offset.x; float targetZ = cleanZ + offset.z;
                             float ix = Mathf.Round((targetX + 0.001f) * 10f); float iz = Mathf.Round((targetZ + 0.001f) * 10f); float iy = currentY;
                             string targetId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
 
@@ -231,7 +227,7 @@ public class ReinforcementManager : MonoBehaviour
                                 for (int s = 1; s < 4; s++) 
                                 {
                                     Vector2 interpXZ = Vector2.Lerp(colA, colB, (float)s / 4);
-                                    float interpX = Snap(interpXZ.x); float interpZ = Snap(interpXZ.y);
+                                    float interpX = interpXZ.x; float interpZ = interpXZ.y;
                                     float ix = Mathf.Round((interpX + 0.001f) * 10f); float iz = Mathf.Round((interpZ + 0.001f) * 10f); float iy = meshY;
                                     string targetId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
 
@@ -275,7 +271,7 @@ public class ReinforcementManager : MonoBehaviour
 
                         foreach (var offset in offsets)
                         {
-                            float targetX = Snap(currentXZ.x + offset.x); float targetZ = Snap(currentXZ.y + offset.z);
+                            float targetX = currentXZ.x + offset.x; float targetZ = currentXZ.y + offset.z;
                             float ix = Mathf.Round((targetX + 0.001f) * 10f); float iz = Mathf.Round((targetZ + 0.001f) * 10f); float iy = currentY;
                             string targetId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
 

@@ -12,6 +12,7 @@ using System.Collections.Generic;
 using System.Linq;
 
 public struct OriginalPosition : IComponentData { public float3 Value; }
+public struct OriginalMass : IComponentData { public float InverseMass; public float3 InverseInertia; }
 
 [BurstCompile]
 public partial struct ResetStressJob : IJobEntity
@@ -272,9 +273,28 @@ public partial struct StressVisualizationSystem : ISystem
             }
         }
 
-        foreach (var (gravity, velocity, entity) in SystemAPI.Query<RefRW<PhysicsGravityFactor>, RefRW<PhysicsVelocity>>().WithAll<BlockTag>().WithEntityAccess())
+        foreach (var (gravity, velocity, mass, transform, entity) in SystemAPI.Query<RefRW<PhysicsGravityFactor>, RefRW<PhysicsVelocity>, RefRW<PhysicsMass>, RefRO<LocalTransform>>().WithAll<BlockTag>().WithEntityAccess())
         {
             if (badEntities.Contains(entity)) continue;
+
+            if (!SystemAPI.HasComponent<OriginalMass>(entity))
+            {
+                ecb.AddComponent(entity, new OriginalMass { InverseMass = mass.ValueRO.InverseMass, InverseInertia = mass.ValueRO.InverseInertia });
+            }
+
+            // ⭐ [버그 수정] VibrationTestSystem(B)과 동일하게 1층은 고정해야 함.
+            //    안 그러면 중력 켜지는 순간 1층이 미세하게 가라앉으면서 모든 조인트가
+            //    동시에 늘어나 연쇄적으로 끊어짐(구조 전체 붕괴, 1층만 남는 현상의 원인).
+            if (transform.ValueRO.Position.y <= 3.1f)
+            {
+                mass.ValueRW.InverseMass = 0f;
+                mass.ValueRW.InverseInertia = float3.zero;
+            }
+            else
+            {
+                mass.ValueRW.InverseMass = 0.1f;
+                mass.ValueRW.InverseInertia = new float3(0.1f, 0.1f, 0.1f);
+            }
 
             gravity.ValueRW.Value = 1.0f;
             velocity.ValueRW.Linear.y -= 0.01f;
@@ -290,11 +310,15 @@ public partial struct StressVisualizationSystem : ISystem
 
     private void StopPhysics(ref SystemState state)
     {
-        foreach (var (transform, velocity, gravity, originalPos) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<PhysicsVelocity>, RefRW<PhysicsGravityFactor>, RefRO<OriginalPosition>>())
+        foreach (var (transform, velocity, gravity, mass, originalPos, originalMass) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<PhysicsVelocity>, RefRW<PhysicsGravityFactor>, RefRW<PhysicsMass>, RefRO<OriginalPosition>, RefRO<OriginalMass>>())
         {
             gravity.ValueRW.Value = 0.0f; velocity.ValueRW.Linear = float3.zero; velocity.ValueRW.Angular = float3.zero;
             transform.ValueRW.Position = originalPos.ValueRO.Value;
             transform.ValueRW.Rotation = quaternion.identity;
+            // ⭐ [버그 수정] StartScan에서 걸어둔 1층 고정(InverseMass=0)을,
+            //    하드코딩값이 아니라 실제 원본 질량(재질별로 다름)으로 정확히 복구.
+            mass.ValueRW.InverseMass = originalMass.ValueRO.InverseMass;
+            mass.ValueRW.InverseInertia = originalMass.ValueRO.InverseInertia;
         }
     }
 
