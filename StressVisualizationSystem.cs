@@ -85,7 +85,9 @@ public partial struct StressVisualizationSystem : ISystem
     private float failureTickTimer;
     private const float FailureTickInterval = 1.0f;
 
-    private const float TensionStressScale = 5000.0f;
+    // ⭐ [설정 통합] 원본 하드코딩값(5000.0f)은 fallback으로 유지.
+    //    VibrationTestSystem, ShockwaveTestSystem과 동일한 설정값을 공유함.
+    private static float TensionStressScale => SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.TensionStressScale : 5000.0f;
 
     private NativeList<FixedString512Bytes> destroyedLines;
 
@@ -141,7 +143,9 @@ public partial struct StressVisualizationSystem : ISystem
 
     private void StartScan(ref SystemState state)
     {
-        scanTimer = 5.0f; isScanning = true; needsColorUpdate = false;
+        // ⭐ [설정 통합] 원본 하드코딩값(5.0f)은 fallback으로 유지
+        scanTimer = SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.gravityScanMaxTime : 5.0f;
+        isScanning = true; needsColorUpdate = false;
         failureTickTimer = FailureTickInterval;
         destroyedLines.Clear();
         var ecb = new EntityCommandBuffer(Allocator.Temp);

@@ -14,7 +14,9 @@ public struct ShockTracker : IComponentData { public float3 OriginalPos; public 
 public partial struct ShockwaveTestSystem : ISystem
 {
     public static bool IsNModeActive = false;
-    private bool isNMode; private bool isShocking; private float shockTimer; private const float MAX_SHOCK_TIME = 5.0f; private float3 epicenter;
+    private bool isNMode; private bool isShocking; private float shockTimer; private float3 epicenter;
+    // ⭐ [설정 통합] 원본 하드코딩값(5.0f)은 fallback으로 유지, 있으면 SimulationSettings 값 사용
+    private static float MAX_SHOCK_TIME => SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.shockwaveMaxTime : 5.0f;
 
     private static readonly int3[] gridDirs = new int3[] { new int3(1, 0, 0), new int3(0, 0, 1), new int3(0, 1, 0) };
     private static readonly float3[] internalDirs = new float3[] { new float3(1, 0, 0), new float3(0, 0, 1), new float3(0, 1, 0) };
@@ -112,7 +114,9 @@ public partial struct ShockwaveTestSystem : ISystem
                     float stretch = math.distance(pivotA, pivotB);
                     if (stretch > 0.05f) 
                     {
-                        float tensileStress = stretch * 5000.0f;
+                        // ⭐ [설정 통합] 원본 하드코딩값(5000.0f)은 fallback으로 유지 (VibrationTestSystem과 동일 값 공유)
+                        float tensionScale = SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.TensionStressScale : 5000.0f;
+                        float tensileStress = stretch * tensionScale;
                         float tensileDefense = (matA.TensileStiffness + matB.TensileStiffness) * 0.5f;
 
                         if (tensileStress > tensileDefense) { breakEcb.DestroyEntity(jointEntity); }
