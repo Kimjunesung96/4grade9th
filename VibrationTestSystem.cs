@@ -20,7 +20,9 @@ public partial struct VibrationTestSystem : ISystem
 {
     public static bool IsBModeActive = false;
     private bool isBMode; private int vibeLevel; private float actualVibePower;
-    private bool isVibrating; private float vibeTimer; private const float MAX_VIBE_TIME = 5.0f;
+    private bool isVibrating; private float vibeTimer;
+    // ⭐ [설정 통합] 원본 하드코딩값(5.0f)은 fallback으로 유지, 있으면 SimulationSettings 값 사용
+    private static float MAX_VIBE_TIME => SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.vibrationMaxTime : 5.0f;
 
     private static readonly int3[] gridDirs = new int3[] { new int3(1, 0, 0), new int3(0, 0, 1), new int3(0, 1, 0) };
     private static readonly float3[] internalDirs = new float3[] { new float3(1, 0, 0), new float3(0, 0, 1), new float3(0, 1, 0) };
@@ -122,7 +124,9 @@ public partial struct VibrationTestSystem : ISystem
                     float stretch = math.distance(pivotA, pivotB);
                     if (stretch > 0.05f) 
                     {
-                        float tensileStress = stretch * 5000.0f; 
+                        // ⭐ [설정 통합] 원본 하드코딩값(5000.0f)은 fallback으로 유지
+                        float tensionScale = SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.TensionStressScale : 5000.0f;
+                        float tensileStress = stretch * tensionScale; 
                         
                         // ⭐ [재질 강도 영향 반영] 
                         float tensileDefense = (matA.TensileStiffness + matB.TensileStiffness) * 0.5f * math.max(0.1f, (10.0f - actualVibePower));
