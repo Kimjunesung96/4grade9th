@@ -74,7 +74,6 @@ public partial struct TrackMaxDisplacementJob : IJobEntity
 }
 
 [UpdateInGroup(typeof(SimulationSystemGroup))]
-
 public partial struct StressVisualizationSystem : ISystem
 {
     private float scanTimer;
@@ -86,8 +85,6 @@ public partial struct StressVisualizationSystem : ISystem
     private float failureTickTimer;
     private const float FailureTickInterval = 1.0f;
 
-    // ⭐ [설정 통합] 원본 하드코딩값(5000.0f)은 fallback으로 유지.
-    //    VibrationTestSystem, ShockwaveTestSystem과 동일한 설정값을 공유함.
     private static float TensionStressScale => SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.TensionStressScale : 5000.0f;
 
     private NativeList<FixedString512Bytes> destroyedLines;
@@ -107,7 +104,6 @@ public partial struct StressVisualizationSystem : ISystem
     public void OnUpdate(ref SystemState state)
     {
         if (Input.GetKeyDown(KeyCode.V)) { isWeightScanMode = true; StartScan(ref state); }
-       // else if (Input.GetKeyDown(KeyCode.B)) { isWeightScanMode = false; StartScan(ref state); }
 
         if (isScanning)
         {
@@ -144,7 +140,6 @@ public partial struct StressVisualizationSystem : ISystem
 
     private void StartScan(ref SystemState state)
     {
-        // ⭐ [설정 통합] 원본 하드코딩값(5.0f)은 fallback으로 유지
         scanTimer = SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.gravityScanMaxTime : 5.0f;
         isScanning = true; needsColorUpdate = false;
         failureTickTimer = FailureTickInterval;
@@ -163,9 +158,6 @@ public partial struct StressVisualizationSystem : ISystem
         NativeHashSet<Entity> badEntities = new NativeHashSet<Entity>(allEntities.Length, Allocator.Temp);
         int badCount = 0;
 
-        // ==========================================================
-        // ⭐ 최적화: O(N^2) 이중 루프 → 공간 해시 그리드 기반 O(N) 처리
-        // ==========================================================
         NativeHashMap<int3, int> gridMap = new NativeHashMap<int3, int>(allEntities.Length, Allocator.Temp);
         for (int i = 0; i < allPositions.Length; i++)
         {
@@ -214,7 +206,6 @@ public partial struct StressVisualizationSystem : ISystem
 
         gridMap.Dispose();
         neighborOffsets.Dispose();
-        // ========================== 최적화 끝 ==========================
 
         foreach (var (jointPair, entity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
         {
@@ -282,9 +273,6 @@ public partial struct StressVisualizationSystem : ISystem
                 ecb.AddComponent(entity, new OriginalMass { InverseMass = mass.ValueRO.InverseMass, InverseInertia = mass.ValueRO.InverseInertia });
             }
 
-            // ⭐ [버그 수정] VibrationTestSystem(B)과 동일하게 1층은 고정해야 함.
-            //    안 그러면 중력 켜지는 순간 1층이 미세하게 가라앉으면서 모든 조인트가
-            //    동시에 늘어나 연쇄적으로 끊어짐(구조 전체 붕괴, 1층만 남는 현상의 원인).
             if (transform.ValueRO.Position.y <= 3.1f)
             {
                 mass.ValueRW.InverseMass = 0f;
@@ -301,7 +289,6 @@ public partial struct StressVisualizationSystem : ISystem
         }
 
         ecb.Playback(state.EntityManager);
-
         ecb.Dispose();
         allEntities.Dispose();
         allPositions.Dispose();
@@ -315,28 +302,89 @@ public partial struct StressVisualizationSystem : ISystem
             gravity.ValueRW.Value = 0.0f; velocity.ValueRW.Linear = float3.zero; velocity.ValueRW.Angular = float3.zero;
             transform.ValueRW.Position = originalPos.ValueRO.Value;
             transform.ValueRW.Rotation = quaternion.identity;
-            // ⭐ [버그 수정] StartScan에서 걸어둔 1층 고정(InverseMass=0)을,
-            //    하드코딩값이 아니라 실제 원본 질량(재질별로 다름)으로 정확히 복구.
-            mass.ValueRW.InverseMass = originalMass.ValueRO.InverseMass;
-            mass.ValueRW.InverseInertia = originalMass.ValueRO.InverseInertia;
+            
+            // ⭐ [물리 폭발 완벽 방지] 복구 시 무조건 Kinematic(0)으로 묶어버려야 합니다!
+            mass.ValueRW.InverseMass = 0.0f;
+            mass.ValueRW.InverseInertia = float3.zero;
         }
+        
+        // ⭐ [물리 폭발 완벽 방지] 끊어졌던 조인트를 다시 복구해주어야 폭발하지 않습니다!
+        RebuildAllJoints(ref state);
     }
 
-private void ApplyFailureCheck(ref SystemState state)
+    private void RebuildAllJoints(ref SystemState state)
+    {
+        var destroyEcb = new EntityCommandBuffer(Allocator.Temp);
+        foreach (var (pair, jointEntity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
+        {
+            destroyEcb.DestroyEntity(jointEntity);
+        }
+        destroyEcb.Playback(state.EntityManager);
+        destroyEcb.Dispose();
+
+        var gridMap = new NativeHashMap<int3, Entity>(4096, Allocator.Temp);
+        var posMap = new NativeHashMap<Entity, float3>(4096, Allocator.Temp);
+
+        foreach (var (transform, entity) in SystemAPI.Query<RefRO<LocalTransform>>().WithAll<BlockTag>().WithEntityAccess())
+        {
+            float3 pos = transform.ValueRO.Position;
+            int3 key = new int3(
+                (int)math.floor(pos.x / 3f + 0.5f),
+                (int)math.floor(pos.y / 3f + 0.5f),
+                (int)math.floor(pos.z / 3f + 0.5f));
+            gridMap.TryAdd(key, entity);
+            posMap.TryAdd(entity, pos);
+        }
+
+        var buildEcb = new EntityCommandBuffer(Allocator.Temp);
+        var keys = gridMap.GetKeyArray(Allocator.Temp);
+        
+        int3[] gridDirs = new int3[] { new int3(1, 0, 0), new int3(0, 0, 1), new int3(0, 1, 0) };
+        float3[] internalDirs = new float3[] { new float3(1, 0, 0), new float3(0, 0, 1), new float3(0, 1, 0) };
+
+        for (int k = 0; k < keys.Length; k++)
+        {
+            int3 key = keys[k];
+            Entity cur = gridMap[key];
+
+            for (int d = 0; d < 3; d++)
+            {
+                if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor) && neighbor != cur)
+                {
+                    CreateIndestructibleJoint(ref buildEcb, cur, neighbor, internalDirs[d] * 3.0f);
+                }
+            }
+        }
+
+        buildEcb.Playback(state.EntityManager);
+        buildEcb.Dispose();
+        keys.Dispose();
+        gridMap.Dispose();
+        posMap.Dispose();
+    }
+
+    private void CreateIndestructibleJoint(ref EntityCommandBuffer ecb, Entity entityA, Entity entityB, float3 offsetToB)
+    {
+        Entity jointEntity = ecb.CreateEntity();
+        ecb.AddSharedComponent(jointEntity, new PhysicsWorldIndex());
+        ecb.AddComponent<JointTag>(jointEntity);
+        ecb.AddComponent(jointEntity, new PhysicsConstrainedBodyPair(entityA, entityB, true));
+        ecb.AddComponent(jointEntity, PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f)));
+    }
+
+    private void ApplyFailureCheck(ref SystemState state)
     {
         var ecb = new EntityCommandBuffer(Allocator.Temp);
 
-        // ⭐ 최적화: 루프 진입 전 Lookup 구조체를 미리 받아와서 수만 번의 GetComponent 오버헤드를 제거합니다.
         var transformLookup = SystemAPI.GetComponentLookup<LocalTransform>(true);
         var materialLookup = SystemAPI.GetComponentLookup<BlockMaterial>(true);
-        var stressLookup = SystemAPI.GetComponentLookup<BlockStress>(false); // ReadWrite 접근
+        var stressLookup = SystemAPI.GetComponentLookup<BlockStress>(false); 
 
         foreach (var (jointPair, joint, rest, jointEntity) in SystemAPI.Query<
           RefRO<PhysicsConstrainedBodyPair>, RefRO<PhysicsJoint>, RefRO<JointRestLength>>().WithAll<JointTag>().WithEntityAccess())
         {
             Entity eA = jointPair.ValueRO.EntityA; Entity eB = jointPair.ValueRO.EntityB;
             
-            // 캐싱된 Lookup 배열을 사용하여 초고속 검증
             if (!transformLookup.HasComponent(eA) || !transformLookup.HasComponent(eB)) continue;
             if (!materialLookup.HasComponent(eA) || !materialLookup.HasComponent(eB)) continue;
 
@@ -356,7 +404,6 @@ private void ApplyFailureCheck(ref SystemState state)
 
             float ratio = tensileStress / math.max(1.0f, tensileDefense);
 
-            // Lookup을 통한 데이터 다이렉트 접근 및 갱신
             if (stressLookup.HasComponent(eA))
             {
                 var stressA = stressLookup[eA];
@@ -401,7 +448,6 @@ private void ApplyFailureCheck(ref SystemState state)
             toDestroy.Add(entity);
         }
 
-        // ⭐ 최적화 2: 파괴될 블록들을 O(1) 탐색이 가능한 HashSet에 담습니다. (이중 루프 제거)
         var destroySet = new NativeHashSet<Entity>(toDestroy.Length, Allocator.Temp);
         for (int i = 0; i < toDestroy.Length; i++)
         {
@@ -424,7 +470,7 @@ private void ApplyFailureCheck(ref SystemState state)
         ecb.Playback(state.EntityManager);
         ecb.Dispose();
         toDestroy.Dispose();
-        destroySet.Dispose(); // 다 쓴 메모리 정리
+        destroySet.Dispose(); 
     }
 
     private void UpdateResults(ref SystemState state)
@@ -467,7 +513,7 @@ private void ApplyFailureCheck(ref SystemState state)
                 if (c.Count >= 12)
                 {
                     string k = c.ElementAt(0);
-                    // ⭐ [보강 태그 우선 규칙] 이미 Reinforcement로 확인된 블록은 뒤에 읽는 파일이 Existing이라 해도 덮어쓰지 않음
+                    // ⭐ B키와 완벽 동일화: 이미 Reinforcement면 절대 안 뺏김!
                     if (toolMap.TryGetValue(k, out var existingTag) && existingTag == "Reinforcement" && c.ElementAt(10) != "Reinforcement") { }
                     else toolMap[k] = c.ElementAt(10);
                     typeMap[k] = c.ElementAt(11);
@@ -488,7 +534,7 @@ private void ApplyFailureCheck(ref SystemState state)
                 {
                     string k = c.ElementAt(0);
                     typeMap[k] = c.ElementAt(11);
-                    // ⭐ [보강 태그 우선 규칙] Last_Building.csv가 제일 나중에 읽혀서 무조건 이겼었음 - 이미 Reinforcement면 지키기
+                    // ⭐ B키와 완벽 동일화: 이미 Reinforcement면 절대 안 뺏김!
                     if (toolMap.TryGetValue(k, out var existingTag2) && existingTag2 == "Reinforcement" && c.ElementAt(10) != "Reinforcement") { }
                     else toolMap[k] = c.ElementAt(10);
                     matMap[k] = c.ElementAt(7);
@@ -496,11 +542,8 @@ private void ApplyFailureCheck(ref SystemState state)
             }
         }
 
-        // ⭐ [b와 동일하게 통일] CSV(계획 좌표)에 없는 ID는 BlueprintManager의 실제 스폰 좌표 기준
-        // toolNameLookup으로 최종 확인한다. (baseCenter 재정렬로 계획 ID와 실제 ID가 어긋나는 케이스 보정)
         var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
 
-        // ⭐ 최적화 3: StreamWriter를 없애고, 메모리 리스트에 먼저 기록해둡니다.
         System.Collections.Generic.List<string> linesToWrite = new System.Collections.Generic.List<string>();
         linesToWrite.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
 
@@ -596,12 +639,9 @@ private void ApplyFailureCheck(ref SystemState state)
 
         string savePath = path;
 
-        // ⭐ 최적화 4: 메모리에 모은 텍스트를 백그라운드 스레드에서 비동기로 파일에 저장합니다.
-        // 변경 코드
         System.Threading.Tasks.Task.Run(() =>
         {
             File.WriteAllLines(savePath, linesToWrite);
-            // ⭐ 최적화: 백그라운드 스레드 내에서의 유니티 콘솔 출력 스팸을 제거하여 크로스 스레드 컨텐션을 원천 차단합니다.
         });
 
         needsColorUpdate = false;
