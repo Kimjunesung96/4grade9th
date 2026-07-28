@@ -24,7 +24,6 @@ public class ReinforcementManager : MonoBehaviour
         if (lines.Count <= 1) return;
 
         HashSet<string> existingBlocks = new HashSet<string>();
-        // ⭐ 이 장부는 이제 오직 '보강재(Reinforcement)'만을 위한 전용 장부가 됩니다.
         List<string> planLines = new List<string> { "BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type" };
 
         for (int i = 1; i < lines.Count; i++)
@@ -38,16 +37,16 @@ public class ReinforcementManager : MonoBehaviour
             float pz = float.Parse(id.Split('_')[1]) / 10f;
             float py = float.Parse(id.Split('_')[2]) / 10f;
 
-            float snapX = Mathf.Round((px - 1.5f) / 3.0f) * 3.0f + 1.5f;
-            float snapZ = Mathf.Round((pz - 1.5f) / 3.0f) * 3.0f + 1.5f;
-            float snapY = Mathf.Round((py - 1.5f) / 3.0f) * 3.0f + 1.5f;
+            // ⭐ 스포너와 완벽히 동일한 사사오입(Floor + 0.5f) 방식으로 통일
+            float snapX = Mathf.Floor((px - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+            float snapZ = Mathf.Floor((pz - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+            float snapY = Mathf.Floor((py - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
             
-            float ix = Mathf.Round(snapX * 10f);
-            float iz = Mathf.Round(snapZ * 10f);
-            float iy = Mathf.Round(snapY * 10f);
+            float ix = Mathf.Round((snapX + 0.001f) * 10f);
+            float iz = Mathf.Round((snapZ + 0.001f) * 10f);
+            float iy = Mathf.Round((snapY + 0.001f) * 10f);
             string cleanId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
 
-            // ⭐ 원본이 있는 자리는 피하도록 위치만 기억해 둡니다. (보강재 중복 스폰 방지)
             existingBlocks.Add(cleanId);
         }
 
@@ -65,7 +64,8 @@ public class ReinforcementManager : MonoBehaviour
 
         if (shouldReinforce)
         {
-            float Snap(float val) => Mathf.Round((val - 1.5f) / 3.0f) * 3.0f + 1.5f;
+            // ⭐ 마의 구간 탈출: 은행원 반올림(Round) 대신 진짜 반올림(Floor + 0.5f) 적용!
+            float Snap(float val) => Mathf.Floor((val - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
 
             List<(Vector3 pos, bool isDanger)> flaggedPoints = new List<(Vector3 pos, bool isDanger)>();
             List<Vector3> quakePoints = new List<Vector3>();
@@ -198,7 +198,7 @@ public class ReinforcementManager : MonoBehaviour
                         
                         foreach (var offset in crossOffsets)
                         {
-                            float targetX = cleanX + offset.x; float targetZ = cleanZ + offset.z;
+                            float targetX = Snap(cleanX + offset.x); float targetZ = Snap(cleanZ + offset.z);
                             float ix = Mathf.Round((targetX + 0.001f) * 10f); float iz = Mathf.Round((targetZ + 0.001f) * 10f); float iy = currentY;
                             string targetId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
 
@@ -227,7 +227,7 @@ public class ReinforcementManager : MonoBehaviour
                                 for (int s = 1; s < 4; s++) 
                                 {
                                     Vector2 interpXZ = Vector2.Lerp(colA, colB, (float)s / 4);
-                                    float interpX = interpXZ.x; float interpZ = interpXZ.y;
+                                    float interpX = Snap(interpXZ.x); float interpZ = Snap(interpXZ.y);
                                     float ix = Mathf.Round((interpX + 0.001f) * 10f); float iz = Mathf.Round((interpZ + 0.001f) * 10f); float iy = meshY;
                                     string targetId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
 
@@ -271,7 +271,7 @@ public class ReinforcementManager : MonoBehaviour
 
                         foreach (var offset in offsets)
                         {
-                            float targetX = currentXZ.x + offset.x; float targetZ = currentXZ.y + offset.z;
+                            float targetX = Snap(currentXZ.x + offset.x); float targetZ = Snap(currentXZ.y + offset.z);
                             float ix = Mathf.Round((targetX + 0.001f) * 10f); float iz = Mathf.Round((targetZ + 0.001f) * 10f); float iy = currentY;
                             string targetId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
 
