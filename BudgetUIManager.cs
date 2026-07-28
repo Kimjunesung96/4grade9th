@@ -329,9 +329,24 @@ public class BudgetUIManager : MonoBehaviour
         {
             var cols = line.Split(',');
             if (cols.Length < 12) continue;
-            string id = cols[0];
-            if (!groupedById.ContainsKey(id)) groupedById[id] = new List<string>();
-            groupedById[id].Add(line);
+            string rawId = cols[0];
+
+            // ⭐ 원본 블록의 미세한 소수점 오차를 무시하고 3m 격자(Grid)에 맞춘 완벽한 ID(cleanId) 생성
+            float px = float.Parse(rawId.Split('_')[0]) / 10f;
+            float pz = float.Parse(rawId.Split('_')[1]) / 10f;
+            float py = float.Parse(rawId.Split('_')[2]) / 10f;
+
+            float snapX = Mathf.Round((px - 1.5f) / 3.0f) * 3.0f + 1.5f;
+            float snapZ = Mathf.Round((pz - 1.5f) / 3.0f) * 3.0f + 1.5f;
+            float snapY = Mathf.Round((py - 1.5f) / 3.0f) * 3.0f + 1.5f;
+            
+            float ix = Mathf.Round((snapX + 0.001f) * 10f);
+            float iz = Mathf.Round((snapZ + 0.001f) * 10f);
+            float iy = Mathf.Round((snapY + 0.001f) * 10f);
+            string cleanId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
+
+            if (!groupedById.ContainsKey(cleanId)) groupedById[cleanId] = new List<string>();
+            groupedById[cleanId].Add(line);
         }
 
         List<string> finalList = new List<string> { header };
@@ -358,10 +373,8 @@ public class BudgetUIManager : MonoBehaviour
         // 3. 완벽하게 필터링된 완성본을 저장합니다.
         File.WriteAllLines(afterPath, finalList);
         File.WriteAllLines(csvPath, finalList);
-        // ⭐ 버그 수정: 원본(Last_Building.csv)을 갱신 안 하면 다음 보강 라운드에서
-        // 이번에 붙인 보강재가 "원본에 없는 새 블록"으로 다시 취급돼서 중복/삭제가 꼬였음.
-        // 세 파일(after_reinforce, CurrentStress, Last_Building)을 항상 같은 상태로 동기화.
-        File.WriteAllLines(basePath, finalList);
+        
+        // ⭐ Last_Building.csv 덮어쓰기 코드 삭제 완료! 원본은 더이상 오염되지 않습니다.
         Debug.Log("🏭 [데이터 전처리 완료] 겹치는 보강재를 CSV단에서 완벽히 삭제하고 after_reinforce.csv를 완성했습니다!");
     }
 
