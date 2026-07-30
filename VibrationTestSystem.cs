@@ -238,7 +238,7 @@ public partial struct VibrationTestSystem : ISystem
             {
                 if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor) && neighbor != cur)
                 {
-                    CreateIndestructibleJoint(ref buildEcb, cur, neighbor, internalDirs[d] * 3.0f);
+                    CreateMaterialJoint(ref buildEcb, ref state, cur, neighbor, internalDirs[d] * 3.0f);
                     newJointCount++;
                 }
             }
@@ -260,6 +260,47 @@ public partial struct VibrationTestSystem : ISystem
         ecb.AddComponent<JointTag>(jointEntity);
         ecb.AddComponent(jointEntity, new PhysicsConstrainedBodyPair(entityA, entityB, true));
         ecb.AddComponent(jointEntity, PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f)));
+    }
+
+    // ⭐ [재질별 스프링 조인트] 완전 강체(Fixed) 대신, 인접한 두 블록의 재질을 평균 내서
+    //    SpringFrequency/SpringDamping을 적용한 "부드러운 고정" 조인트를 만든다.
+    //    RebuildAllJoints 시점엔 두 엔티티 모두 BlockMaterial이 이미 초기화되어 있어야 함
+    //    (스폰 직후 첫 프레임에 바로 호출되는 경로라면 0값 fallback으로 방어).
+    private void CreateMaterialJoint(ref EntityCommandBuffer ecb, ref SystemState state, Entity entityA, Entity entityB, float3 offsetToB)
+    {
+        Entity jointEntity = ecb.CreateEntity();
+        ecb.AddSharedComponent(jointEntity, new PhysicsWorldIndex());
+        ecb.AddComponent<JointTag>(jointEntity);
+        ecb.AddComponent(jointEntity, new PhysicsConstrainedBodyPair(entityA, entityB, true));
+
+        var joint = PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f));
+
+        float freq = 30f, damp = 0.3f; // 재질 정보가 아직 없을 때의 방어용 fallback (기존 강체에 가까운 값)
+        if (state.EntityManager.HasComponent<BlockMaterial>(entityA) && state.EntityManager.HasComponent<BlockMaterial>(entityB))
+        {
+            var matA = state.EntityManager.GetComponentData<BlockMaterial>(entityA);
+            var matB = state.EntityManager.GetComponentData<BlockMaterial>(entityB);
+            if (matA.SpringFrequency > 0f && matB.SpringFrequency > 0f)
+            {
+                freq = (matA.SpringFrequency + matB.SpringFrequency) * 0.5f;
+                damp = (matA.SpringDamping + matB.SpringDamping) * 0.5f;
+            }
+        }
+
+        var constraints = joint.GetConstraints();
+        for (int i = 0; i < constraints.Length; i++)
+        {
+            var c = constraints[i];
+            if (c.Type == ConstraintType.Linear) // 늘어남(인장/압축) 방향만 스프링화. 각도(Angular) 구속은 그대로 강체 유지.
+            {
+                c.SpringFrequency = freq;
+                c.DampingRatio = damp;
+            }
+            constraints[i] = c;
+        }
+        joint.SetConstraints(constraints);
+
+        ecb.AddComponent(jointEntity, joint);
     }
 
     private void SaveVibrationExcel(NativeList<float3> positions, NativeList<float> stresses, NativeList<FixedString32Bytes> materials)
