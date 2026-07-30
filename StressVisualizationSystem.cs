@@ -351,7 +351,7 @@ public partial struct StressVisualizationSystem : ISystem
             {
                 if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor) && neighbor != cur)
                 {
-                    CreateIndestructibleJoint(ref buildEcb, cur, neighbor, internalDirs[d] * 3.0f);
+                    CreateMaterialJoint(ref buildEcb, ref state, cur, neighbor, internalDirs[d] * 3.0f);
                 }
             }
         }
@@ -370,6 +370,44 @@ public partial struct StressVisualizationSystem : ISystem
         ecb.AddComponent<JointTag>(jointEntity);
         ecb.AddComponent(jointEntity, new PhysicsConstrainedBodyPair(entityA, entityB, true));
         ecb.AddComponent(jointEntity, PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f)));
+    }
+
+    // ⭐ [재질별 스프링 조인트] VibrationTestSystem.CreateMaterialJoint와 동일 패턴
+    private void CreateMaterialJoint(ref EntityCommandBuffer ecb, ref SystemState state, Entity entityA, Entity entityB, float3 offsetToB)
+    {
+        Entity jointEntity = ecb.CreateEntity();
+        ecb.AddSharedComponent(jointEntity, new PhysicsWorldIndex());
+        ecb.AddComponent<JointTag>(jointEntity);
+        ecb.AddComponent(jointEntity, new PhysicsConstrainedBodyPair(entityA, entityB, true));
+
+        var joint = PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f));
+
+        float freq = 30f, damp = 0.3f;
+        if (state.EntityManager.HasComponent<BlockMaterial>(entityA) && state.EntityManager.HasComponent<BlockMaterial>(entityB))
+        {
+            var matA = state.EntityManager.GetComponentData<BlockMaterial>(entityA);
+            var matB = state.EntityManager.GetComponentData<BlockMaterial>(entityB);
+            if (matA.SpringFrequency > 0f && matB.SpringFrequency > 0f)
+            {
+                freq = (matA.SpringFrequency + matB.SpringFrequency) * 0.5f;
+                damp = (matA.SpringDamping + matB.SpringDamping) * 0.5f;
+            }
+        }
+
+        var constraints = joint.GetConstraints();
+        for (int i = 0; i < constraints.Length; i++)
+        {
+            var c = constraints[i];
+            if (c.Type == ConstraintType.Linear)
+            {
+                c.SpringFrequency = freq;
+                c.DampingRatio = damp;
+            }
+            constraints[i] = c;
+        }
+        joint.SetConstraints(constraints);
+
+        ecb.AddComponent(jointEntity, joint);
     }
 
     private void ApplyFailureCheck(ref SystemState state)

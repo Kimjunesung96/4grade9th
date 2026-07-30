@@ -190,6 +190,7 @@ public void OnUpdate(ref SystemState state)
 
                 var gridMap = new NativeHashMap<int3, Entity>((int)countF, Allocator.Temp);
                 var posMap = new NativeHashMap<Entity, float3>((int)countF, Allocator.Temp);
+                var matNameMap = new NativeHashMap<Entity, FixedString32Bytes>((int)countF, Allocator.Temp); // ⭐ 스폰 직후(플레이백 전)라 컴포넌트 조회가 안 되므로 재질명을 따로 추적
 
                 for (int i = 0; i < (int)countF; i++)
                 {
@@ -223,6 +224,7 @@ public void OnUpdate(ref SystemState state)
                     }
 
                     ecb.AddComponent(instance, new BlockMaterial { MaterialName = matName });
+                    matNameMap.TryAdd(instance, new FixedString32Bytes(matName));
 
                     float hp = isReinforceBlock ? 2000f : 1000f;
                     float def = isReinforceBlock ? 600f : 400f;
@@ -287,14 +289,14 @@ public void OnUpdate(ref SystemState state)
                     foreach (var key in keys)
                     {
                         Entity cur = gridMap[key]; float3 curPos = posMap[cur];
-                        for (int d = 0; d < 3; d++) { if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor)) CreateIndestructibleJoint(ref ecb, cur, neighbor, internalDirs[d] * 3.0f); }
+                        for (int d = 0; d < 3; d++) { if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor)) CreateMaterialJoint(ref ecb, ref state, matNameMap, cur, neighbor, internalDirs[d] * 3.0f); }
                         
                         foreach (var anchorDir in allDirs) { 
                             RaycastInput ray = new RaycastInput { Start = curPos, End = curPos + anchorDir * 2.0f, Filter = CollisionFilter.Default }; 
                             if (physicsWorld.CastRay(ray, out Unity.Physics.RaycastHit hit)) { 
                                 if (hit.Entity != Entity.Null && !posMap.ContainsKey(hit.Entity) && SystemAPI.HasComponent<BlockTag>(hit.Entity)) { 
                                     float3 hitPos = SystemAPI.GetComponent<LocalTransform>(hit.Entity).Position; 
-                                    CreateIndestructibleJoint(ref ecb, hit.Entity, cur, curPos - hitPos); 
+                                    CreateMaterialJoint(ref ecb, ref state, matNameMap, hit.Entity, cur, curPos - hitPos); 
                                 } 
                             } 
                         }
@@ -326,7 +328,7 @@ public void OnUpdate(ref SystemState state)
                     nextStructureID += 1f;
                     pendingJointCleanup = true;
                 }
-                gridMap.Dispose(); posMap.Dispose();
+                gridMap.Dispose(); posMap.Dispose(); matNameMap.Dispose();
                 return;
             }
         }
@@ -628,5 +630,65 @@ private void RemoveDuplicateJoints(ref SystemState state)
     private void CreateIndestructibleJoint(ref EntityCommandBuffer ecb, Entity entityA, Entity entityB, float3 offsetToB)
     {
         Entity jointEntity = ecb.CreateEntity(); ecb.AddSharedComponent(jointEntity, new PhysicsWorldIndex()); ecb.AddComponent<JointTag>(jointEntity); ecb.AddComponent(jointEntity, new PhysicsConstrainedBodyPair(entityA, entityB, true)); ecb.AddComponent(jointEntity, PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f)));
+    }
+
+    // ⭐ [재질별 스프링 조인트] 스폰 직후(아직 ecb 플레이백 전이라 실체 없는) 엔티티와
+    //    이미 존재하는 실체 엔티티가 섞여서 들어올 수 있어, matNameMap(신규 스폰분) →
+    //    state.EntityManager의 BlockMaterial(기존 실체분) 순서로 재질명을 찾는다.
+    private void CreateMaterialJoint(ref EntityCommandBuffer ecb, ref SystemState state, NativeHashMap<Entity, FixedString32Bytes> matNameMap, Entity entityA, Entity entityB, float3 offsetToB)
+    {
+        Entity jointEntity = ecb.CreateEntity();
+        ecb.AddSharedComponent(jointEntity, new PhysicsWorldIndex());
+        ecb.AddComponent<JointTag>(jointEntity);
+        ecb.AddComponent(jointEntity, new PhysicsConstrainedBodyPair(entityA, entityB, true));
+
+        var joint = PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f));
+
+        GetSpringParams(ref state, matNameMap, entityA, out float freqA, out float dampA);
+        GetSpringParams(ref state, matNameMap, entityB, out float freqB, out float dampB);
+        float freq = (freqA + freqB) * 0.5f;
+        float damp = (dampA + dampB) * 0.5f;
+
+        var constraints = joint.GetConstraints();
+        for (int i = 0; i < constraints.Length; i++)
+        {
+            var c = constraints[i];
+            if (c.Type == ConstraintType.Linear)
+            {
+                c.SpringFrequency = freq;
+                c.DampingRatio = damp;
+            }
+            constraints[i] = c;
+        }
+        joint.SetConstraints(constraints);
+
+        ecb.AddComponent(jointEntity, joint);
+    }
+
+    // ⭐ 재질명 → 스프링값. MaterialPropertyInitSystem과 동일 공식(Bending/10 clamp, IsBrittle 기반 감쇠)을
+    //    MaterialDataManager.MaterialDict에서 직접 조회해 재사용. (fallback: 강체에 가까운 값)
+    private void GetSpringParams(ref SystemState state, NativeHashMap<Entity, FixedString32Bytes> matNameMap, Entity entity, out float freq, out float damp)
+    {
+        freq = 30f; damp = 0.3f;
+
+        FixedString32Bytes matName = default;
+        bool found = false;
+
+        if (matNameMap.IsCreated && matNameMap.TryGetValue(entity, out FixedString32Bytes nameFromSpawn))
+        {
+            matName = nameFromSpawn; found = true;
+        }
+        else if (state.EntityManager.HasComponent<BlockMaterial>(entity))
+        {
+            var bm = state.EntityManager.GetComponentData<BlockMaterial>(entity);
+            if (bm.SpringFrequency > 0f) { freq = bm.SpringFrequency; damp = bm.SpringDamping; return; }
+            matName = bm.MaterialName; found = true;
+        }
+
+        if (found && MaterialDataManager.Instance != null && MaterialDataManager.Instance.MaterialDict.TryGetValue(matName.ToString(), out var spec))
+        {
+            freq = math.clamp(spec.Bending / 10f, 5f, 60f);
+            damp = spec.IsBrittle ? 0.05f : 0.6f;
+        }
     }
 }
