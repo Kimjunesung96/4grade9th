@@ -106,7 +106,8 @@ public void OnUpdate(ref SystemState state)
         if (SystemAPI.HasSingleton<PhysicsStep>())
         {
             var physicsStep = SystemAPI.GetSingletonRW<PhysicsStep>();
-            physicsStep.ValueRW.SolverIterationCount = 2;
+            int solverIterations = SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.solverIterationCount : 2;
+            physicsStep.ValueRW.SolverIterationCount = solverIterations;
         }
 
         if (!SystemAPI.TryGetSingleton<PhysicsWorldSingleton>(out var physicsSingleton)) return;

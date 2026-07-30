@@ -35,7 +35,7 @@ public class SimulationSettingsUIManager : MonoBehaviour
         var settings = SimulationSettingsProvider.Instance;
 
         float panelW = 420f;
-        float panelH = 300f;
+        float panelH = 340f;
         float panelX = (Screen.width - panelW) / 2f;
         float panelY = (Screen.height - panelH) / 2f;
 
@@ -52,6 +52,9 @@ public class SimulationSettingsUIManager : MonoBehaviour
             return;
         }
 
+        DrawIntSlider("물리 솔버 반복 횟수", ref settings.solverIterationCount, 1, 10, "회");
+
+        GUILayout.Space(6);
         DrawIntSlider("응력 증폭 배율", ref settings.tensionStressScaleSteps, 1, 20,
             $"= {settings.TensionStressScale:0}");
 
