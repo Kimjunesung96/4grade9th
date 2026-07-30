@@ -23,8 +23,23 @@ public class SimulationDragController : MonoBehaviour
 
     void Update()
     {
+        // ===== [실험용 디버그 로그 START] =====
+        if (Camera.main == null)
+        {
+            Debug.Log("[DragDebug] Camera.main이 NULL입니다! MainCamera 태그 확인 필요.");
+            return;
+        }
+
         Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
-        if (!Physics.Raycast(ray, out RaycastHit hit, 1000f, groundLayer)) return;
+        bool hitSomething = Physics.Raycast(ray, out RaycastHit hit, 1000f, groundLayer);
+
+        if (Input.GetMouseButtonDown(0) || Input.GetMouseButton(0))
+        {
+            Debug.Log($"[DragDebug] 레이캐스트 결과: {hitSomething} | groundLayer mask: {groundLayer.value} | hit.collider: {(hitSomething ? hit.collider.name : "없음")}");
+        }
+        // ===== [실험용 디버그 로그 END] =====
+
+        if (!hitSomething) return;
         float3 hitPoint = hit.point;
 
         if (Input.GetMouseButtonDown(0)) { definedStart = SnapToGrid(hitPoint); definedEnd = definedStart; isSimulationActive = true; simulationPivot.gameObject.SetActive(true); SyncWithDOTS(); }
@@ -37,7 +52,11 @@ public class SimulationDragController : MonoBehaviour
     void SyncWithDOTS()
     {
         // 🚀 [추가된 코드] DOTS 월드가 아직 안 만들어졌으면(Null) 동기화를 건너뜁니다!
-        if (Unity.Entities.World.DefaultGameObjectInjectionWorld == null) return;
+        if (Unity.Entities.World.DefaultGameObjectInjectionWorld == null)
+        {
+            Debug.Log("[DragDebug] DefaultGameObjectInjectionWorld가 NULL입니다!");
+            return;
+        }
 
         var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
         var query = em.CreateEntityQuery(typeof(BuilderStateData));
@@ -46,6 +65,10 @@ public class SimulationDragController : MonoBehaviour
             var data = query.GetSingleton<BuilderStateData>();
             data.GuideStartPos = definedStart; data.GuideEndPos = definedEnd;
             query.SetSingleton(data);
+        }
+        else
+        {
+            Debug.Log("[DragDebug] BuilderStateData 싱글턴을 찾을 수 없습니다!");
         }
     }
 
