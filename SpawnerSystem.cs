@@ -106,8 +106,7 @@ public void OnUpdate(ref SystemState state)
         if (SystemAPI.HasSingleton<PhysicsStep>())
         {
             var physicsStep = SystemAPI.GetSingletonRW<PhysicsStep>();
-            int solverIterations = SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.solverIterationCount : 2;
-            physicsStep.ValueRW.SolverIterationCount = solverIterations;
+            physicsStep.ValueRW.SolverIterationCount = 2;
         }
 
         if (!SystemAPI.TryGetSingleton<PhysicsWorldSingleton>(out var physicsSingleton)) return;
@@ -691,5 +690,70 @@ private void RemoveDuplicateJoints(ref SystemState state)
             freq = math.clamp(spec.Bending / 10f, 5f, 60f);
             damp = spec.IsBrittle ? 0.05f : 0.6f;
         }
+    }
+}
+public static class GuideWireframeRenderer
+{
+    private static System.Collections.Generic.List<UnityEngine.LineRenderer> linePool = new System.Collections.Generic.List<UnityEngine.LineRenderer>();
+    private static int activeLineCount = 0;
+    private static UnityEngine.Material lineMat;
+
+    public static void ResetPool()
+    {
+        activeLineCount = 0;
+        for (int i = 0; i < linePool.Count; i++)
+        {
+            if (linePool[i] != null) linePool[i].gameObject.SetActive(false);
+        }
+    }
+
+    public static void DrawLine(UnityEngine.Vector3 start, UnityEngine.Vector3 end, UnityEngine.Color color)
+    {
+        if (lineMat == null)
+        {
+            // ⭐ 유니티 빌드 코어에 박혀있어 절대 삭제되지 않는 내장 셰이더 사용
+            UnityEngine.Shader hiddenShader = UnityEngine.Shader.Find("Hidden/Internal-Colored");
+            if (hiddenShader != null)
+            {
+                lineMat = new UnityEngine.Material(hiddenShader);
+                // ⭐ 벽이나 땅에 파묻혀도 무조건 보이게 투시(Always) 모드 적용
+                lineMat.SetInt("_ZTest", (int)UnityEngine.Rendering.CompareFunction.Always);
+            }
+        }
+
+        UnityEngine.LineRenderer lr;
+        if (activeLineCount < linePool.Count)
+        {
+            lr = linePool[activeLineCount];
+            if (lr == null)
+            {
+                linePool.RemoveAt(activeLineCount);
+                DrawLine(start, end, color);
+                return;
+            }
+        }
+        else
+        {
+            UnityEngine.GameObject go = new UnityEngine.GameObject("GuideLine_" + activeLineCount);
+            lr = go.AddComponent<UnityEngine.LineRenderer>();
+            
+            // 셰이더를 못 찾더라도 에러 뿜고 멈추는 일 없이, 핑크색 에러 선이라도 그리도록 방어!
+            if (lineMat != null) lr.material = lineMat; 
+            
+            lr.startWidth = 0.08f;
+            lr.endWidth = 0.08f;
+            lr.positionCount = 2;
+            lr.useWorldSpace = true;
+            linePool.Add(lr);
+        }
+
+        lr.gameObject.SetActive(true);
+        lr.SetPosition(0, start);
+        lr.SetPosition(1, end);
+        
+        lr.startColor = color;
+        lr.endColor = color;
+
+        activeLineCount++;
     }
 }
