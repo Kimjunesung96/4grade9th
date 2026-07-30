@@ -387,8 +387,50 @@ public class BudgetUIManager : MonoBehaviour
         if (isCheapON) currentMode = "Cheap";
         if (isExpensiveON) currentMode = "Expensive";
 
+        // ⭐ [신규] 싸게/비싸게가 켜지면 화면에 남아있는 수동 옵션(보강 YES/NO, 보강 모드, 보강재질,
+        //    벽/바닥 수동 재질 탭)은 전부 무시하고 이 두 모드의 자동 로직만 그대로 적용한다.
+        //    - 싸게: 스트레스 계산해서 가장 싼 재질/가장 싼 보강재로, "적게(가성비 핀포인트)" 방식만 최소 적용
+        //    - 비싸게: 예산(가격)을 무시하고 가장 강한 재질/가장 강한 보강재로, "많이(격자)" 방식으로 최대 안정성 확보
+        //    ⚠️ 벽/바닥 수동 재질(selectedWallMaterial/selectedFloorMaterial)은 ApplyMaterialsToScene의
+        //       Cheap/Expensive 분기가 애초에 참조하지 않으므로 이미 자동 무시됨 (Manual 모드에서만 사용).
+        if ((isCheapON || isExpensiveON) && MaterialDataManager.Instance != null)
+        {
+            var dict = MaterialDataManager.Instance.MaterialDict;
+            wantsReinforcement = true;
+
+            if (isCheapON)
+            {
+                reinforcementMaterial = dict.OrderBy(kv => kv.Value.Density * kv.Value.PricePerKg).First().Key;
+                reinforcementMode = 2; // 적게 [우산] — 가성비 핀포인트
+            }
+            else // isExpensiveON
+            {
+                reinforcementMaterial = dict.OrderByDescending(kv => math.min(kv.Value.Tensile, kv.Value.Compressive)).First().Key;
+                reinforcementMode = 1; // 많이 [격자] — 가격 무시하고 최대 안정성
+            }
+        }
+
         SaveBudgetMeta(budget, currentMode, floors);
         ApplyMaterialsToScene(currentMode, budget);
+
+        // ⭐ [신규] 싸게/비싸게 공통: 재질 배정 끝난 뒤, 위에서 강제로 켠 wantsReinforcement +
+        //    자동 선택된 reinforcementMode/reinforcementMaterial 그대로 보강 계획을 자동 생성.
+        //    (CurrentStress.csv의 RiskLevel은 이미 계산되어 있는 값을 그대로 재사용 —
+        //     ReinforcementManager.CreatePlanExcel()이 Danger/Quake_Danger 포인트만 골라 보강탑을 설계함)
+        if (currentMode == "Cheap" || currentMode == "Expensive")
+        {
+            var reinforcer = UnityEngine.Object.FindFirstObjectByType<ReinforcementManager>();
+            if (reinforcer != null)
+            {
+                reinforcer.CreatePlanExcel();
+                string label = currentMode == "Cheap" ? "💰 [싸게 모드] 최저가 재질 + 최소(적게) 보강" : "💎 [비싸게 모드] 가격 무시 최강 재질 + 최대(많이) 보강";
+                Debug.Log($"{label} 자동 적용 완료 (Y로 다시 열람 가능)");
+            }
+            else
+            {
+                Debug.LogWarning($"⚠ [{currentMode} 모드] ReinforcementManager를 씬에서 찾지 못해 자동 보강 계획을 생성하지 못했습니다.");
+            }
+        }
 
         // ⭐ [증발 버그 수정] 씬을 지우기 전에, 방금 G로 지은 것까지 포함해서
         // Last_Building.csv를 무조건 먼저 확정 저장한다. (backupIDToQuery 예약을 그냥

@@ -11,6 +11,13 @@ using UnityEngine;
 [CreateAssetMenu(fileName = "SimulationSettings", menuName = "VirtualConstruct/Simulation Settings")]
 public class SimulationSettings : ScriptableObject
 {
+    [Header("물리 솔버 반복 횟수 (성능 ↔ 안정성)")]
+    [Tooltip("PhysicsStep.SolverIterationCount. 원본 하드코딩값 = 2.\n" +
+             "낮을수록 빠르지만 스프링 조인트가 덜 정확하게 수렴함(떨림/어긋남 가능).\n" +
+             "Unity Physics 기본값은 4. 하중이 몰리는 구조/스프링 조인트가 많을수록 높여야 안정적.")]
+    [Range(1, 10)]
+    public int solverIterationCount = 2; // 원본값 그대로 (SpawnerSystem.cs 하드코딩값)
+
     [Header("응력 시각화 — 조인트 인장 스트레스 증폭 배율")]
     [Tooltip("500 단위 스텝. 기본값 10칸 = 5000 (원본 VibrationTestSystem/ShockwaveTestSystem 하드코딩값과 동일)")]
     [Range(1, 20)]
