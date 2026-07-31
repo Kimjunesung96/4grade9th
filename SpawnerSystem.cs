@@ -93,7 +93,7 @@ public void OnCreate(ref SystemState state)
 public void OnUpdate(ref SystemState state)
     {
         if (!UnityEngine.Application.isPlaying || Camera.main == null) return;
-
+GuideWireframeRenderer.ResetPool();
         if (pendingJointCleanup)
         {
             RemoveDuplicateJoints(ref state);
@@ -597,11 +597,30 @@ public void OnUpdate(ref SystemState state)
         for (float i = 0f; i < gridSize; i += 1f) { for (float j = 0f; j < gridSize; j += 1f) { float px = (x - half) + (i * step); float pz = (z - half) + (j * step); float3 p = new float3(px, 100f, pz); RaycastInput rayInput = new RaycastInput { Start = p, End = p + new float3(0f, -200f, 0f), Filter = CollisionFilter.Default }; if (physicsWorld.CastRay(rayInput, out Unity.Physics.RaycastHit hit)) { hitAnything = true; float snappedY = math.round((hit.Position.y - 1.5f) / 3.0f) * 3.0f + 1.5f; if (snappedY > highestY) { highestY = snappedY; hitEntity = hit.Entity; } } } }
     }
 
-    private void DrawGuideWireframe(float3 start, float3 end, float heightParam, float mode, float blockSize)
+   private void DrawGuideWireframe(float3 start, float3 end, float heightParam, float mode, float blockSize)
     {
         Color color = Color.green; float floorHeight = blockSize;
-        if (math.abs(mode - 1f) < 0.01f || math.abs(mode - 2f) < 0.01f) { float minX = math.min(start.x, end.x); float maxX = math.max(start.x, end.x) + blockSize; float minZ = math.min(start.z, end.z); float maxZ = math.max(start.z, end.z) + blockSize; float minY = start.y; float maxY = start.y + (heightParam * floorHeight); Vector3 p1 = new Vector3(minX, minY, minZ); Vector3 p2 = new Vector3(maxX, minY, minZ); Vector3 p3 = new Vector3(maxX, minY, maxZ); Vector3 p4 = new Vector3(minX, minY, maxZ); Debug.DrawLine(p1, p2, color); Debug.DrawLine(p2, p3, color); Debug.DrawLine(p3, p4, color); Debug.DrawLine(p4, p1, color); if (heightParam > 0f) { Vector3 t1 = new Vector3(minX, maxY, minZ); Vector3 t2 = new Vector3(maxX, maxY, minZ); Vector3 t3 = new Vector3(maxX, maxY, maxZ); Vector3 t4 = new Vector3(minX, maxY, maxZ); Debug.DrawLine(t1, t2, color); Debug.DrawLine(t2, t3, color); Debug.DrawLine(t3, t4, color); Debug.DrawLine(t4, t1, color); Debug.DrawLine(p1, t1, color); Debug.DrawLine(p2, t2, color); Debug.DrawLine(p3, t3, color); Debug.DrawLine(p4, t4, color); } }
-        else if (math.abs(mode - 3f) < 0.01f || math.abs(mode - 4f) < 0.01f || math.abs(mode - 5f) < 0.01f) { float3 center = (start + end) / 2f; center.x += (blockSize / 2f); center.z += (blockSize / 2f); float radius = (math.distance(start, end) / 2f) + (blockSize / 2f); float minY = start.y; float maxY = start.y + (heightParam * floorHeight); float segments = 24f; float angleStep = (2f * math.PI) / segments; Vector3 prev = center + new float3(radius, 0f, 0f); prev.y = minY; for (float i = 1f; i <= segments; i += 1f) { Vector3 next = center + new float3(math.cos(i * angleStep) * radius, 0f, math.sin(i * angleStep) * radius); next.y = minY; Debug.DrawLine(prev, next, color); prev = next; } if (heightParam > 0f) Debug.DrawLine(new Vector3(center.x, minY, center.z), new Vector3(center.x, maxY, center.z), color); }
+        if (math.abs(mode - 1f) < 0.01f || math.abs(mode - 2f) < 0.01f) { 
+            float minX = math.min(start.x, end.x); float maxX = math.max(start.x, end.x) + blockSize; float minZ = math.min(start.z, end.z); float maxZ = math.max(start.z, end.z) + blockSize; float minY = start.y; float maxY = start.y + (heightParam * floorHeight); 
+            Vector3 p1 = new Vector3(minX, minY, minZ); Vector3 p2 = new Vector3(maxX, minY, minZ); Vector3 p3 = new Vector3(maxX, minY, maxZ); Vector3 p4 = new Vector3(minX, minY, maxZ); 
+            
+            // ⭐ Debug.DrawLine을 모두 GuideWireframeRenderer.DrawLine으로 변경
+            GuideWireframeRenderer.DrawLine(p1, p2, color); GuideWireframeRenderer.DrawLine(p2, p3, color); GuideWireframeRenderer.DrawLine(p3, p4, color); GuideWireframeRenderer.DrawLine(p4, p1, color); 
+            if (heightParam > 0f) { 
+                Vector3 t1 = new Vector3(minX, maxY, minZ); Vector3 t2 = new Vector3(maxX, maxY, minZ); Vector3 t3 = new Vector3(maxX, maxY, maxZ); Vector3 t4 = new Vector3(minX, maxY, maxZ); 
+                GuideWireframeRenderer.DrawLine(t1, t2, color); GuideWireframeRenderer.DrawLine(t2, t3, color); GuideWireframeRenderer.DrawLine(t3, t4, color); GuideWireframeRenderer.DrawLine(t4, t1, color); 
+                GuideWireframeRenderer.DrawLine(p1, t1, color); GuideWireframeRenderer.DrawLine(p2, t2, color); GuideWireframeRenderer.DrawLine(p3, t3, color); GuideWireframeRenderer.DrawLine(p4, t4, color); 
+            } 
+        }
+        else if (math.abs(mode - 3f) < 0.01f || math.abs(mode - 4f) < 0.01f || math.abs(mode - 5f) < 0.01f) { 
+            float3 center = (start + end) / 2f; center.x += (blockSize / 2f); center.z += (blockSize / 2f); float radius = (math.distance(start, end) / 2f) + (blockSize / 2f); float minY = start.y; float maxY = start.y + (heightParam * floorHeight); float segments = 24f; float angleStep = (2f * math.PI) / segments; 
+            Vector3 prev = center + new float3(radius, 0f, 0f); prev.y = minY; 
+            for (float i = 1f; i <= segments; i += 1f) { 
+                Vector3 next = center + new float3(math.cos(i * angleStep) * radius, 0f, math.sin(i * angleStep) * radius); next.y = minY; 
+                GuideWireframeRenderer.DrawLine(prev, next, color); prev = next; 
+            } 
+            if (heightParam > 0f) GuideWireframeRenderer.DrawLine(new Vector3(center.x, minY, center.z), new Vector3(center.x, maxY, center.z), color); 
+        }
     }
 
 private void RemoveDuplicateJoints(ref SystemState state)
