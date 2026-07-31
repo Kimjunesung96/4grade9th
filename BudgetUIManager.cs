@@ -336,9 +336,13 @@ public class BudgetUIManager : MonoBehaviour
             float pz = float.Parse(rawId.Split('_')[1]) / 10f;
             float py = float.Parse(rawId.Split('_')[2]) / 10f;
 
-            float snapX = Mathf.Round((px - 1.5f) / 3.0f) * 3.0f + 1.5f;
-            float snapZ = Mathf.Round((pz - 1.5f) / 3.0f) * 3.0f + 1.5f;
-            float snapY = Mathf.Round((py - 1.5f) / 3.0f) * 3.0f + 1.5f;
+            // ⭐ [구멍 버그 수정] SpawnerSystem.SaveLastBuildingSnapshot()과 반올림 방식이 달라서
+            //    (여기는 Mathf.Round, 저기는 floor+0.5) 경계값에서 서로 다른 두 블록이 같은 cleanId로
+            //    잘못 충돌 → 아래 dedup 로직이 "겹친 것"으로 착각해 둘 중 하나를 영구 삭제 → 건물에 구멍.
+            //    SaveLastBuildingSnapshot과 완전히 동일한 floor+0.5 공식으로 통일해서 충돌 자체를 방지.
+            float snapX = Mathf.Floor((px - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+            float snapZ = Mathf.Floor((pz - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+            float snapY = Mathf.Floor((py - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
             
             float ix = Mathf.Round((snapX + 0.001f) * 10f);
             float iz = Mathf.Round((snapZ + 0.001f) * 10f);
@@ -357,7 +361,14 @@ public class BudgetUIManager : MonoBehaviour
             {
                 // 2. "그다음에 id가 같은 놈들 중에서 reinforce가 들어가 있는 줄을 지워버려!"
                 // 즉, "Reinforcement"가 아닌 원본 줄을 찾아서 그것만 살립니다.
-                string originalLine = linesForId.FirstOrDefault(l => l.Split(',')[10].Trim() != "Reinforcement");
+                var originals = linesForId.Where(l => l.Split(',')[10].Trim() != "Reinforcement").ToList();
+                if (originals.Count > 1)
+                {
+                    // ⭐ [안전장치] 원본끼리 충돌하는 건 정상 상황이 아님(스냅 공식 통일로 이제 거의 안 나야 함).
+                    //    조용히 버리면 다음에 또 구멍 버그가 나도 못 알아채니, 무조건 로그로 남긴다.
+                    Debug.LogWarning($"⚠ [Merge] 원본 블록끼리 같은 격자 ID({kvp.Key})에서 충돌! {originals.Count}개 중 1개만 살리고 나머지는 버립니다. 좌표 스냅 로직을 다시 확인하세요.");
+                }
+                string originalLine = originals.FirstOrDefault();
                 if (originalLine != null) 
                     finalList.Add(originalLine); // 원본 승리! (보강재 줄은 영원히 삭제됨)
                 else 
