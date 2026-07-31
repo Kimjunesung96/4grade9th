@@ -1,4 +1,5 @@
-﻿using UnityEngine;
+﻿// FILE: BlueprintTargetGenerator.cs
+using UnityEngine;
 using System.IO;
 using System.Collections.Generic;
 using System.Text;
@@ -42,6 +43,7 @@ public class BlueprintTargetGenerator : MonoBehaviour
         (234f, 179f, 8f,   4f), // #EAB308 4층
         (0f,   0f,   0f,   5f), // #000000 5층
     };
+
     void Start()
     {
         string projectPath = Directory.GetParent(Application.dataPath).FullName;
@@ -130,13 +132,26 @@ public class BlueprintTargetGenerator : MonoBehaviour
         GUI.Box(new Rect(Screen.width / 2f - boxWidth / 2f, Screen.height / 2f - boxHeight / 2f, boxWidth, boxHeight), "📂 현장 도면 관리소 (O키로 닫기)");
 
         GUILayout.BeginArea(new Rect(Screen.width / 2f - 330f, Screen.height / 2f - 230f, 310f, 500f));
+        
+        GUILayout.BeginHorizontal();
         GUI.color = Color.green;
-
-        if (GUILayout.Button("➕ [새로 만들기] 도면 이미지 또는 엑셀(CSV) 열기", GUILayout.Height(40f)))
+#if UNITY_EDITOR
+        if (GUILayout.Button("➕ [새로 만들기]\n도면 이미지 열기", GUILayout.Height(40f)))
+#else
+        if (GUILayout.Button("➕ [불러오기]\nImport 스캔", GUILayout.Height(40f)))
+#endif
         {
             showBlueprintUI = false;
             pendingImageScan = true; 
         }
+
+        // ⭐ 다운로드 폴더 자동 긁어오기(동기화) 버튼 추가!
+        GUI.color = new Color(0.4f, 0.8f, 1f);
+        if (GUILayout.Button("🔄 [다운로드 폴더]\n새 파일 긁어오기", GUILayout.Height(40f), GUILayout.Width(130f)))
+        {
+            SyncWithDownloads();
+        }
+        GUILayout.EndHorizontal();
 
         GUI.color = Color.white;
         GUILayout.Space(10f);
@@ -159,8 +174,6 @@ public class BlueprintTargetGenerator : MonoBehaviour
             GUI.color = new Color(1f, 0.5f, 0.5f);
             if (GUILayout.Button("🗑️", GUILayout.Width(40f), GUILayout.Height(30f)))
             {
-                // 🎯 [수정] 실제 파일 삭제 로직 완전 철거! (파일은 컴퓨터에 안전하게 남음)
-                
                 // 장바구니에 담겨있다면 빼기
                 selectedFloors.RemoveAll(path => path == filePath);
 
@@ -234,10 +247,93 @@ public class BlueprintTargetGenerator : MonoBehaviour
         }
     }
 
+    // ⭐ 다운로드 폴더 동기화 함수
+    private void SyncWithDownloads()
+    {
+        string downPath = @"C:\Users\skrkt\Downloads"; // 십장님 지정 다운로드 폴더
+        if (!Directory.Exists(downPath)) 
+        {
+            Debug.LogWarning($"[동기화 실패] 다운로드 폴더 경로를 찾을 수 없습니다: {downPath}");
+            return;
+        }
+
+        string importFolder = Path.Combine(stressBlockFolder, "Import");
+        if (!Directory.Exists(importFolder)) Directory.CreateDirectory(importFolder);
+
+        int copyCount = 0;
+
+        // 1. CSV 파일은 바로 도면 장바구니(SavedBlueprints)로 직행
+        string[] csvFiles = Directory.GetFiles(downPath, "*.csv");
+        foreach (var file in csvFiles)
+        {
+            string destFile = Path.Combine(savedBlueprintsFolder, Path.GetFileName(file));
+            if (!File.Exists(destFile))
+            {
+                File.Copy(file, destFile);
+                copyCount++;
+            }
+        }
+
+        // 2. PNG, JPG 이미지 파일은 스캔 대기소(Import)로 이동
+        string[] imgExts = new string[] { "*.png", "*.jpg", "*.jpeg" };
+        foreach (var ext in imgExts)
+        {
+            string[] imgFiles = Directory.GetFiles(downPath, ext);
+            foreach (var file in imgFiles)
+            {
+                string destFile = Path.Combine(importFolder, Path.GetFileName(file));
+                if (!File.Exists(destFile))
+                {
+                    File.Copy(file, destFile);
+                    copyCount++;
+                }
+            }
+        }
+
+        if (copyCount > 0)
+        {
+            Debug.Log($"📥 [다운로드 동기화] {copyCount}개의 새 파일을 긁어왔습니다!");
+            RefreshCsvList(); // 왼쪽 UI 리스트 즉시 새로고침
+        }
+        else
+        {
+            Debug.Log("📥 [다운로드 동기화] 다운로드 폴더에 새로 가져올 파일이 없습니다.");
+        }
+    }
+
     private void OpenAndCacheImage()
     {
+        string filePath = "";
+        string importFolder = Path.Combine(stressBlockFolder, "Import");
+        if (!Directory.Exists(importFolder)) Directory.CreateDirectory(importFolder);
+
 #if UNITY_EDITOR
-        string filePath = EditorUtility.OpenFilePanel("도면/엑셀 장부 선택", "", "png,jpg,jpeg,csv");
+        filePath = UnityEditor.EditorUtility.OpenFilePanel("도면/엑셀 장부 선택", "", "png,jpg,jpeg,csv");
+#else
+        // 1. 먼저 Import 폴더 스캔
+        string[] possibleFiles = Directory.GetFiles(importFolder);
+        
+        // 2. 만약 파일이 없다? 십장님 말씀대로 다운로드 폴더 자동 긁어오기!
+        if (possibleFiles.Length == 0)
+        {
+            Debug.Log("[자동 스캔] Import 폴더가 비어있어 다운로드 폴더를 확인합니다.");
+            SyncWithDownloads(); 
+            possibleFiles = Directory.GetFiles(importFolder); // 긁어온 후 다시 확인
+        }
+
+        if (possibleFiles.Length > 0)
+        {
+            filePath = possibleFiles[0]; // 폴더 내 첫 번째 이미지를 무조건 읽음
+            Debug.Log($"[빌드용 자동 로드] {filePath} 이미지를 스캔합니다.");
+        }
+        else
+        {
+            Debug.LogError($"[오류] 다운로드 폴더나 Import 폴더에 처리할 도면 이미지가 없습니다! (CSV는 왼쪽 리스트에 자동 추가됩니다)");
+            showBlueprintUI = true;
+            return;
+        }
+#endif
+
         if (!string.IsNullOrEmpty(filePath))
         {
             if (filePath.EndsWith(".csv", System.StringComparison.OrdinalIgnoreCase))
@@ -245,10 +341,7 @@ public class BlueprintTargetGenerator : MonoBehaviour
                 string fileName = Path.GetFileName(filePath);
                 string destPath = Path.Combine(savedBlueprintsFolder, fileName);
                 
-                if (filePath != destPath)
-                {
-                    File.Copy(filePath, destPath, true);
-                }
+                if (filePath != destPath) File.Copy(filePath, destPath, true);
 
                 selectedFloors.Add(destPath);
                 RefreshCsvList();
@@ -271,13 +364,14 @@ public class BlueprintTargetGenerator : MonoBehaviour
             currentPixels = processedTex.GetPixels32();
             texWidth = (float)processedTex.width;
             texHeight = (float)processedTex.height;
-            DestroyImmediate(rawTex);
-            DestroyImmediate(processedTex);
+            
+            // ⭐ 런타임 환경에서는 DestroyImmediate 대신 Destroy 사용
+            Destroy(rawTex); 
+            Destroy(processedTex);
 
             isWaitingForLimit = true;
             Debug.Log($"⚙️ [{pendingFileName}] 가공 완료! 숫자키[1~0]를 눌러 스캔 밀도를 확정하세요.");
         }
-#endif
     }
 
     private Texture2D ProcessImageInsideUnity(Texture2D src)
@@ -435,11 +529,6 @@ public class BlueprintTargetGenerator : MonoBehaviour
                     for (int k = 0; k < 12; k++) fixedCols[k] = (k < cols.Length) ? cols[k].Trim() : "";
                     if (string.IsNullOrEmpty(fixedCols[7])) fixedCols[7] = "Default";
 
-                    // ⭐ 버그 수정: X, Z 좌표를 3칸 격자에 스냅합니다.
-                    // 기존엔 CSV의 원본 좌표(임의 소수점)를 그대로 써서, AI 추출 CSV처럼
-                    // 격자에 안 맞는 좌표가 들어오면 블록이 미세하게 어긋난 위치에 스폰되고
-                    // 그 상태로 조인트가 걸리면서 물리 솔버가 침투를 밀어내다 "폭발"했습니다.
-                    // (LoadLastBuildingForUMode의 U키 로직과 동일하게 스냅을 맞춥니다.)
                     float rawX = float.Parse(fixedCols[1], CultureInfo.InvariantCulture);
                     float rawZ = float.Parse(fixedCols[3], CultureInfo.InvariantCulture);
                     float x = math.round((rawX - 1.5f) / 3.0f) * 3.0f + 1.5f;
@@ -614,46 +703,45 @@ public class BlueprintTargetGenerator : MonoBehaviour
     }
 
     private List<float3> Scan(Color32[] pixels, float w, float h, float size)
-{
-    List<float3> list = new List<float3>();
-    
-    for (float x = 0f; x <= w - size; x += size)
     {
-        for (float z = 0f; z <= h - size; z += size)
+        List<float3> list = new List<float3>();
+        
+        for (float x = 0f; x <= w - size; x += size)
         {
-            int px = (int)(x + size / 2f);
-            int pz = (int)(z + size / 2f);
-            Color32 p = pixels[pz * (int)w + px];
+            for (float z = 0f; z <= h - size; z += size)
+            {
+                int px = (int)(x + size / 2f);
+                int pz = (int)(z + size / 2f);
+                Color32 p = pixels[pz * (int)w + px];
 
-           if (p.a > 128) // 투명하지 않은 픽셀만 처리
-{
-    float r = p.r; float g = p.g; float b = p.b;
-float heightCount = 0f;
-
-// 흰색(빈칸) 배경은 매칭 자체를 시도하지 않음 — 안 그러면 가장 가까운 색(보통 회색/1층)으로 잘못 스냅됨
-if (!(r > 240f && g > 240f && b > 240f))
-{
-    float bestDist = float.MaxValue;
-    foreach (var entry in WallColorTable)
-    {
-        float d = (r - entry.r) * (r - entry.r) + (g - entry.g) * (g - entry.g) + (b - entry.b) * (b - entry.b);
-        if (d < bestDist) { bestDist = d; heightCount = entry.h; }
-    }
-}
-
-                // 판정된 층수만큼 유니티 3D 블록 적층 생성
-                if (heightCount > 0f)
+                if (p.a > 128) 
                 {
-                    for (float y = 0f; y < heightCount; y += 1f)
+                    float r = p.r; float g = p.g; float b = p.b;
+                    float heightCount = 0f;
+
+                    if (!(r > 240f && g > 240f && b > 240f))
                     {
-                        list.Add(new float3(((int)(x / size)) * 3f + 1.5f, y * 3f + 1.5f, ((int)(z / size)) * 3f + 1.5f));
+                        float bestDist = float.MaxValue;
+                        foreach (var entry in WallColorTable)
+                        {
+                            float d = (r - entry.r) * (r - entry.r) + (g - entry.g) * (g - entry.g) + (b - entry.b) * (b - entry.b);
+                            if (d < bestDist) { bestDist = d; heightCount = entry.h; }
+                        }
+                    }
+
+                    if (heightCount > 0f)
+                    {
+                        for (float y = 0f; y < heightCount; y += 1f)
+                        {
+                            list.Add(new float3(((int)(x / size)) * 3f + 1.5f, y * 3f + 1.5f, ((int)(z / size)) * 3f + 1.5f));
+                        }
                     }
                 }
             }
         }
+        return list;
     }
-    return list;
-}
+
     private void SaveProjectSnapshot()
     {
         string timestamp = System.DateTime.Now.ToString("yyyyMMdd_HHmmss");
