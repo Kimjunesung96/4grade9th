@@ -532,10 +532,18 @@ GuideWireframeRenderer.ResetPool();
         var query = em.CreateEntityQuery(ComponentType.ReadOnly<LocalTransform>(), ComponentType.ReadOnly<BlockMaterial>(), ComponentType.ReadOnly<BlockTag>());
         var transforms = query.ToComponentDataArray<LocalTransform>(Allocator.Temp);
         var mats = query.ToComponentDataArray<BlockMaterial>(Allocator.Temp);
+        var entities = query.ToEntityArray(Allocator.Temp);
 
         for (int i = 0; i < transforms.Length; i++)
         {
-            float3 pos = transforms[i].Position;
+            // ⭐ [구멍 버그 근본 수정] ID 계산은 반드시 "안 흔들리는" 좌표로 해야 함.
+            //    CurrentStress.csv / Reinforcement_Plan.csv는 이미 StressVisualizationSystem의
+            //    OriginalPosition(스폰 시 한 번만 캡처되는 고정 좌표)으로 ID를 계산하는데,
+            //    여기(Last_Building.csv)만 실시간 LocalTransform.Position(스프링 조인트로 처질 수 있는 값)으로
+            //    ID를 계산하고 있었음. 스폰 직후라 OriginalPosition이 아직 없는 블록만 LocalTransform으로 대체.
+            float3 pos = em.HasComponent<OriginalPosition>(entities[i])
+                ? em.GetComponentData<OriginalPosition>(entities[i]).Value
+                : transforms[i].Position;
             float px = math.floor((pos.x - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
             float py = math.floor((pos.y - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
             float pz = math.floor((pos.z - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
@@ -570,6 +578,7 @@ GuideWireframeRenderer.ResetPool();
 
         transforms.Dispose();
         mats.Dispose();
+        entities.Dispose();
 
         if (found)
         {
