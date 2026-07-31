@@ -32,6 +32,14 @@ public class ReinforcementManager : MonoBehaviour
             var cols = currentLine.Split(',').ToList();
             if (cols.Count < 12) continue;
 
+            // ⭐ [구멍 버그 수정] 이미 무너진(Destroyed) 블록은 existingBlocks에서 제외.
+            //    안 그러면 "그 자리엔 이미 블록이 있다"고 착각해서 보강재를 안 놓게 되고,
+            //    원본도 없고(이미 무너짐) 보강재도 안 생기니(existingBlocks에 있다고 착각) 영구 구멍이 됨.
+            //    하필 응력이 제일 몰려 파괴된, 보강이 제일 필요한 자리에서 이 문제가 집중적으로 발생함.
+            string riskLevel = cols.Count > 5 ? cols[5].Trim() : "";
+            bool isDestroyed = riskLevel.EndsWith("_Destroyed");
+            if (isDestroyed) continue;
+
             string id = cols.ElementAt(0);
             float px = float.Parse(id.Split('_')[0]) / 10f;
             float pz = float.Parse(id.Split('_')[1]) / 10f;
