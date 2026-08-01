@@ -274,8 +274,23 @@ public class ReinforcementManager : MonoBehaviour
                     if (Mathf.Abs(dir.x) >= Mathf.Abs(dir.y)) dir = new Vector2(Mathf.Sign(dir.x), 0f);
                     else dir = new Vector2(0f, Mathf.Sign(dir.y));
 
+                    // ⭐ [관통 버그 수정] 고정 12칸이 아니라, 실제로 원본과 안 겹치는(비어있는) 자리를
+                    // 3칸 단위로 늘려가며 찾음. (오목한 건물 형태에서 12칸 지점이 여전히 건물 안쪽일 수 있음)
                     float towerX = Snap(p.x + dir.x * 12.0f);
                     float towerZ = Snap(p.z + dir.y * 12.0f);
+                    for (float dist = 3.0f; dist <= 30.0f; dist += 3.0f)
+                    {
+                        float tryX = Snap(p.x + dir.x * dist);
+                        float tryZ = Snap(p.z + dir.y * dist);
+                        float baseIx = Mathf.Round((tryX + 0.001f) * 10f);
+                        float baseIz = Mathf.Round((tryZ + 0.001f) * 10f);
+                        string baseId = $"{(baseIx < 0f ? "-" : "0")}{Mathf.Abs(baseIx):000}_{(baseIz < 0f ? "-" : "0")}{Mathf.Abs(baseIz):000}_0015";
+                        if (!existingBlocks.Contains(baseId))
+                        {
+                            towerX = tryX; towerZ = tryZ;
+                            break;
+                        }
+                    }
                     float targetY = p.y / 10f; 
 
                     float wallX = dir.x != 0f ? p.x : towerX;
