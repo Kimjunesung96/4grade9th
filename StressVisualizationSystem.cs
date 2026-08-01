@@ -176,6 +176,11 @@ public partial struct StressVisualizationSystem : ISystem
         neighborOffsets[4] = new int3(0, 0, 1);
         neighborOffsets[5] = new int3(0, 0, -1);
 
+        // ⭐ [영구삭제 버그 수정] 지진/폭발 시뮬레이션 중엔 물리적으로 흔들리다가 순간적으로
+        // 이웃과 안 붙어있는 것처럼 보이는 블록도 있을 수 있음. 이때 여기서 영구삭제해버리면
+        // 시뮬레이션 종료 후 복구가 불가능해지므로, 시뮬레이션 중엔 이 진단(고립 파편 삭제)을 건너뜀.
+        if (!VibrationTestSystem.IsSimulationRunning)
+        {
         for (int i = 0; i < allEntities.Length; i++)
         {
             float3 myPos = allPositions[i];
@@ -202,6 +207,7 @@ public partial struct StressVisualizationSystem : ISystem
                     ecb.DestroyEntity(allEntities[i]);
                 }
             }
+        }
         }
 
         gridMap.Dispose();
@@ -461,6 +467,12 @@ public partial struct StressVisualizationSystem : ISystem
             }
         }
         var toDestroy = new NativeList<Entity>(Allocator.Temp);
+        // ⭐ [영구삭제 버그 수정] 지진/폭발 시뮬레이션 진행 중에는 압축파괴로 인한 완전삭제를 하지 않는다.
+        // (의도: 시뮬레이션 안에서만 "일시적으로 무너진 것처럼" 보이고, 시뮬레이션이 끝나면
+        //  VibrationTestSystem/ShockwaveTestSystem이 도면(ID) 기준 위치로 되돌림.
+        //  여기서 ecb.DestroyEntity로 완전히 지워버리면 그 복구 자체가 불가능해짐)
+        if (!VibrationTestSystem.IsSimulationRunning)
+        {
         foreach (var (stress, mat, pos, entity) in SystemAPI.Query<
           RefRO<BlockStress>, RefRO<BlockMaterial>, RefRO<OriginalPosition>>().WithEntityAccess())
         {
@@ -484,6 +496,7 @@ public partial struct StressVisualizationSystem : ISystem
 
             destroyedLines.Add(new FixedString512Bytes(destroyedLineStr));
             toDestroy.Add(entity);
+        }
         }
 
         var destroySet = new NativeHashSet<Entity>(toDestroy.Length, Allocator.Temp);

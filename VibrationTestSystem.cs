@@ -21,6 +21,7 @@ public partial struct VibrationTestSystem : ISystem
     public static bool IsBModeActive = false;
     private bool isBMode; private int vibeLevel; private float actualVibePower;
     private bool isVibrating; private float vibeTimer;
+    public static bool IsSimulationRunning = false; // ⭐ 지진 시뮬레이션 진행 중 여부 (StressVisualizationSystem이 이걸 보고 영구삭제를 잠시 멈춤)
     // ⭐ [설정 통합] 원본 하드코딩값(5.0f)은 fallback으로 유지, 있으면 SimulationSettings 값 사용
     private static float MAX_VIBE_TIME => SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.vibrationMaxTime : 5.0f;
 
@@ -48,6 +49,7 @@ public partial struct VibrationTestSystem : ISystem
             {
                 isBMode = false; IsBModeActive = false;
                 isVibrating = true; vibeTimer = MAX_VIBE_TIME;
+                IsSimulationRunning = true;
                 Debug.Log($"💥 [격발!] 진도 {vibeLevel} 강진 발생!!");
 
                 var initEcb = new EntityCommandBuffer(Allocator.Temp);
@@ -142,7 +144,7 @@ public partial struct VibrationTestSystem : ISystem
 
             if (vibeTimer <= 0f)
             {
-                isVibrating = false; Debug.Log("🛑 [지진 종료] 도면(ID) 기준 위치로 원상복구 완료!");
+                isVibrating = false; IsSimulationRunning = false; Debug.Log("🛑 [지진 종료] 도면(ID) 기준 위치로 원상복구 완료!");
 
                 var ecb = new EntityCommandBuffer(Allocator.Temp);
                 NativeList<float3> finalPositions = new NativeList<float3>(Allocator.Temp);
