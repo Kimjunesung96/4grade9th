@@ -97,8 +97,155 @@ public class ReinforcementManager : MonoBehaviour
                     quakePoints.Add(new Vector3(cleanX, rawY, cleanZ));
             }
 
-            if (quakePoints.Count > 0)
+            if (quakePoints.Count > 0 && currentMode == 1)
             {
+                // ⭐⭐⭐ [모드1: 신규 로직] ⭐⭐⭐
+                // 1. Quake_Danger/Quake_Destroyed 블록 둘레 한 칸 바깥에 벽 후보 계산
+                // 2. 원점(0,0)에서 가까운 순 정렬 -> 한 칸 짓고 한 칸 스킵 (안쪽까지 다 메우면 과보강이라 건너뜀)
+                // 3. 지어지는 자리는 바닥(1.5)부터 인접 위험블록 높이까지 통기둥
+                // 4. 후처리: 위험블록에서 5 이상 떨어지고, 파랑끼리도 5~7 사이 거리인 경우 그 사이를 브릿지로 메움
+                string MakeId(float x, float z, float y)
+                {
+                    float ix = Mathf.Round((x + 0.001f) * 10f);
+                    float iz = Mathf.Round((z + 0.001f) * 10f);
+                    float iy = Mathf.Round((y + 0.001f) * 10f);
+                    return $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
+                }
+
+                // 위험(Quake) 셀 수집: (ix,iz) 그리드 정수키 -> 해당 컬럼 최고 높이(raw*10)
+                Dictionary<(int ix, int iz), int> redCells = new Dictionary<(int, int), int>();
+                foreach (var p in quakePoints)
+                {
+                    int gx = Mathf.RoundToInt((p.x + 0.001f) * 10f);
+                    int gz = Mathf.RoundToInt((p.z + 0.001f) * 10f);
+                    int rawY = Mathf.RoundToInt(p.y);
+                    var key = (gx, gz);
+                    if (!redCells.ContainsKey(key) || rawY > redCells[key]) redCells[key] = rawY;
+                }
+
+                // 둘레(perimeter) 후보: 빨강의 4방향 이웃 중 빨강이 아닌 칸만
+                int step = 30; // 3.0 유닛 * 10
+                int[] dxArr = { step, -step, 0, 0 };
+                int[] dzArr = { 0, 0, step, -step };
+                Dictionary<(int ix, int iz), int> perimeter = new Dictionary<(int, int), int>();
+
+                foreach (var kv in redCells)
+                {
+                    var (rx, rz) = kv.Key;
+                    int height = kv.Value;
+                    for (int d = 0; d < 4; d++)
+                    {
+                        var nKey = (rx + dxArr[d], rz + dzArr[d]);
+                        if (redCells.ContainsKey(nKey)) continue;
+                        if (!perimeter.ContainsKey(nKey) || height > perimeter[nKey]) perimeter[nKey] = height;
+                    }
+                }
+
+                // 둘레를 실제로 도는 순서로 정렬 (그리디 최근접 이웃 워크)
+                // - 시작점: 원점에서 가장 가까운 칸
+                // - 이후: 아직 안 지나간 칸 중 가장 가까운 칸으로 계속 이동
+                // 이렇게 하면 "한 칸 짓고 한 칸 스킵"이 둘레를 따라 고르게 퍼져서
+                // 별도의 브릿지 보정 없이도 균일한 점선 패턴이 나옴
+                var remaining = perimeter
+                    .Select(kv => (x: kv.Key.ix / 10f, z: kv.Key.iz / 10f, rawY: kv.Value))
+                    .ToList();
+
+                List<(float x, float z, int rawY)> ringOrder = new List<(float, float, int)>();
+                if (remaining.Count > 0)
+                {
+                    int startIdx = 0;
+                    float bestStartDist = float.MaxValue;
+                    for (int i = 0; i < remaining.Count; i++)
+                    {
+                        float d = remaining[i].x * remaining[i].x + remaining[i].z * remaining[i].z;
+                        if (d < bestStartDist) { bestStartDist = d; startIdx = i; }
+                    }
+
+                    var current = remaining[startIdx];
+                    remaining.RemoveAt(startIdx);
+                    ringOrder.Add(current);
+
+                    while (remaining.Count > 0)
+                    {
+                        int nearestIdx = 0;
+                        float bestDist = float.MaxValue;
+                        for (int i = 0; i < remaining.Count; i++)
+                        {
+                            float dx = remaining[i].x - current.x;
+                            float dz = remaining[i].z - current.z;
+                            float d = dx * dx + dz * dz;
+                            if (d < bestDist) { bestDist = d; nearestIdx = i; }
+                        }
+                        current = remaining[nearestIdx];
+                        remaining.RemoveAt(nearestIdx);
+                        ringOrder.Add(current);
+                    }
+                }
+
+                // 한 칸 짓고 한 칸 스킵 (링을 따라가는 순서로, 모서리는 항상 지음)
+                HashSet<int> cornerIdx = new HashSet<int>();
+                for (int i = 1; i < ringOrder.Count - 1; i++)
+                {
+                    Vector2 dirPrev = new Vector2(ringOrder[i].x - ringOrder[i - 1].x, ringOrder[i].z - ringOrder[i - 1].z).normalized;
+                    Vector2 dirNext = new Vector2(ringOrder[i + 1].x - ringOrder[i].x, ringOrder[i + 1].z - ringOrder[i].z).normalized;
+                    if (Vector2.Dot(dirPrev, dirNext) < 0.99f) cornerIdx.Add(i); // 방향이 바뀌는 지점 = 모서리
+                }
+                bool build = true;
+                for (int i = 0; i < ringOrder.Count; i++)
+                {
+                    var cell = ringOrder[i];
+                    bool isCorner = cornerIdx.Contains(i);
+
+                    if (!build && !isCorner) { build = true; continue; } // 직선 구간 스킵
+                    if (!isCorner) build = false; // 모서리가 아니면 정상적으로 토글
+
+                    for (int ty = 15; ty <= cell.rawY; ty += 30)
+                    {
+                        float exactY = ty / 10f;
+                        string tId = MakeId(cell.x, cell.z, exactY);
+                        if (!existingBlocks.Contains(tId))
+                        {
+                            planLines.Add($"{tId},{cell.x:F2},{exactY:F2},{cell.z:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement");
+                            existingBlocks.Add(tId);
+                        }
+                    }
+                }
+
+                // ⭐ 2단계: 1단계 테두리 바깥으로 한 칸 더, 이번엔 스킵 없이 촘촘하게 둘러쌈
+                Dictionary<(int ix, int iz), int> outerPerimeter = new Dictionary<(int, int), int>();
+                foreach (var kv in perimeter)
+                {
+                    var (px, pz) = kv.Key;
+                    int height = kv.Value;
+                    for (int d = 0; d < 4; d++)
+                    {
+                        var nKey = (px + dxArr[d], pz + dzArr[d]);
+                        if (redCells.ContainsKey(nKey) || perimeter.ContainsKey(nKey)) continue; // 빨강이나 1단계 테두리는 제외
+                        if (!outerPerimeter.ContainsKey(nKey) || height > outerPerimeter[nKey]) outerPerimeter[nKey] = height;
+                    }
+                }
+
+                foreach (var kv in outerPerimeter)
+                {
+                    float ox = kv.Key.ix / 10f;
+                    float oz = kv.Key.iz / 10f;
+                    int oHeight = kv.Value;
+
+                    for (int ty = 15; ty <= oHeight; ty += 30)
+                    {
+                        float exactY = ty / 10f;
+                        string tId = MakeId(ox, oz, exactY);
+                        if (!existingBlocks.Contains(tId))
+                        {
+                            planLines.Add($"{tId},{ox:F2},{exactY:F2},{oz:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement");
+                            existingBlocks.Add(tId);
+                        }
+                    }
+                }
+            }
+            else if (quakePoints.Count > 0 && currentMode == 2)
+            {
+                // ⭐ [모드2: 기존 로직 그대로] 타워 세우고 벽으로 연결
                 float minX = 9999f, minZ = 9999f, maxX = -9999f, maxZ = -9999f;
                 foreach (var id in existingBlocks)
                 {
@@ -145,22 +292,6 @@ public class ReinforcementManager : MonoBehaviour
                         {
                             planLines.Add($"{tId},{towerX:F2},{ty:F2},{towerZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement");
                             existingBlocks.Add(tId);
-                        }
-
-                        if (currentMode == 1)
-                        {
-                            Vector2[] crossOffsetsB = new Vector2[] { new Vector2(3f, 0f), new Vector2(-3f, 0f), new Vector2(0f, 3f), new Vector2(0f, -3f) };
-                            foreach (var off in crossOffsetsB)
-                            {
-                                float armX = Snap(towerX + off.x); float armZ = Snap(towerZ + off.y);
-                                float aix = Mathf.Round((armX + 0.001f) * 10f); float aiz = Mathf.Round((armZ + 0.001f) * 10f);
-                                string aId = $"{(aix < 0f ? "-" : "0")}{Mathf.Abs(aix):000}_{(aiz < 0f ? "-" : "0")}{Mathf.Abs(aiz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
-                                if (!existingBlocks.Contains(aId))
-                                {
-                                    planLines.Add($"{aId},{armX:F2},{ty:F2},{armZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement");
-                                    existingBlocks.Add(aId);
-                                }
-                            }
                         }
 
                         int floorIndex = Mathf.RoundToInt((ty - 1.5f) / 3.0f);
