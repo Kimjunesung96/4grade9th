@@ -40,7 +40,7 @@ public partial struct ShockwaveTestSystem : ISystem
                 isNMode = false; IsNModeActive = false;
                 var ecb = new EntityCommandBuffer(Allocator.Temp); PhysicsWorld physicsWorld = SystemAPI.GetSingleton<PhysicsWorldSingleton>().PhysicsWorld;
                 int ghostCount = 0; foreach (var (ghost, entity) in SystemAPI.Query<RefRO<GhostBlockTag>>().WithEntityAccess()) { ghostCount++; ecb.DestroyEntity(entity); }
-                float explosionPower = ghostCount * 5.0f; float blastRadius = ghostCount * 1.5f; isShocking = true; shockTimer = MAX_SHOCK_TIME;
+                float explosionPower = ghostCount * 5.0f; float blastRadius = ghostCount * 1.5f; isShocking = true; shockTimer = MAX_SHOCK_TIME; VibrationTestSystem.IsSimulationRunning = true;
 
                 foreach (var (transform, mass, velocity, gravity, entity) in SystemAPI.Query<RefRO<LocalTransform>, RefRW<PhysicsMass>, RefRW<PhysicsVelocity>, RefRW<PhysicsGravityFactor>>().WithAll<BlockTag>().WithEntityAccess())
                 {
@@ -128,19 +128,23 @@ public partial struct ShockwaveTestSystem : ISystem
 
             if (shockTimer <= 0f)
             {
-                isShocking = false; Debug.Log("🛑 [폭발 종료] 위치가 원상복구되며, 파괴 여부는 색상으로 표시됩니다.");
+                isShocking = false; VibrationTestSystem.IsSimulationRunning = false; Debug.Log("🛑 [폭발 종료] 위치가 원상복구되며, 파괴 여부는 색상으로 표시됩니다.");
 
                 var ecb = new EntityCommandBuffer(Allocator.Temp);
                 NativeList<float3> finalPos = new NativeList<float3>(Allocator.Temp); NativeList<float> finalStresses = new NativeList<float>(Allocator.Temp);
                 NativeList<FixedString32Bytes> finalMaterials = new NativeList<FixedString32Bytes>(Allocator.Temp);
 
-                foreach (var (tr, tracker, vel, gravity, color, mat, ent) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<ShockTracker>, RefRW<PhysicsVelocity>, RefRW<PhysicsGravityFactor>, RefRW<URPMaterialPropertyBaseColor>, RefRO<BlockMaterial>>().WithAll<BlockTag>().WithEntityAccess())
+                foreach (var (tr, tracker, vel, gravity, mass, color, mat, ent) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<ShockTracker>, RefRW<PhysicsVelocity>, RefRW<PhysicsGravityFactor>, RefRW<PhysicsMass>, RefRW<URPMaterialPropertyBaseColor>, RefRO<BlockMaterial>>().WithAll<BlockTag>().WithEntityAccess())
                 {
                     tr.ValueRW.Position = tracker.ValueRO.OriginalPos; 
                     tr.ValueRW.Rotation = tracker.ValueRO.OriginalRot; 
                     vel.ValueRW.Linear = float3.zero; 
                     vel.ValueRW.Angular = float3.zero;
                     gravity.ValueRW.Value = 0.0f;
+                    // ⭐ [복구 불완전 버그 수정] VibrationTestSystem과 동일하게 질량을 고정(Kinematic)시켜야
+                    // 조인트가 재구성되기 전 프레임 사이에 물리엔진이 블록을 계속 흔들거나 밀어내지 않음
+                    mass.ValueRW.InverseMass = 0.0f;
+                    mass.ValueRW.InverseInertia = float3.zero;
 
                     float maxDisp = tracker.ValueRO.MaxDisplacement; 
                     float4 newCol = new float4(1, 1, 1, 1);
