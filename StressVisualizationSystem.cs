@@ -176,10 +176,9 @@ public partial struct StressVisualizationSystem : ISystem
         neighborOffsets[4] = new int3(0, 0, 1);
         neighborOffsets[5] = new int3(0, 0, -1);
 
-        // ⭐ [영구삭제 버그 수정] 지진/폭발 시뮬레이션 중엔 물리적으로 흔들리다가 순간적으로
-        // 이웃과 안 붙어있는 것처럼 보이는 블록도 있을 수 있음. 이때 여기서 영구삭제해버리면
-        // 시뮬레이션 종료 후 복구가 불가능해지므로, 시뮬레이션 중엔 이 진단(고립 파편 삭제)을 건너뜀.
-        if (!VibrationTestSystem.IsSimulationRunning)
+        // ⭐ [영구삭제 완전 제거] 파괴든 뭐든 블록이 영구적으로 사라지는 일은 절대 없어야 함.
+        // 예전엔 시뮬레이션 중에만 이 "고립 파편 자동삭제" 진단을 건너뛰었는데, 평상시에도
+        // 물리적으로 순간 흔들리며 이웃과 안 붙어있는 것처럼 오탐지될 수 있어 완전히 비활성화한다.
         {
         for (int i = 0; i < allEntities.Length; i++)
         {
@@ -204,7 +203,7 @@ public partial struct StressVisualizationSystem : ISystem
                 if (badEntities.Add(allEntities[i]))
                 {
                     badCount++;
-                    ecb.DestroyEntity(allEntities[i]);
+                    // ⭐ ecb.DestroyEntity(allEntities[i]); 는 더 이상 하지 않음 (영구삭제 완전 제거)
                 }
             }
         }
@@ -461,18 +460,18 @@ public partial struct StressVisualizationSystem : ISystem
                 stressLookup[eB] = stressB;
             }
 
-            if (tensileStress > tensileDefense)
-            {
-                ecb.DestroyEntity(jointEntity);
-            }
+            // ⭐ [영구삭제 완전 제거] 파괴(Destroyed) 판정이든 뭐든 조인트/블록을 영구 삭제하는 일은
+            // 절대 없어야 한다. 예전엔 인장응력 초과 시 여기서 조인트를 바로 끊어버렸는데,
+            // 이 시스템(정적 응력 스캔)엔 VibrationTestSystem 같은 "시뮬레이션 종료 후 재결합" 단계가
+            // 없어서 한 번 끊기면 영원히 복구가 안 됐음. 그래서 여기서는 조인트를 끊지 않고
+            // 그냥 놔둔다 (파괴 여부 판정/표시는 여전히 응력 수치로 계산되어 CSV/색상에 반영됨).
         }
         var toDestroy = new NativeList<Entity>(Allocator.Temp);
-        // ⭐ [영구삭제 버그 수정] 지진/폭발 시뮬레이션 진행 중에는 압축파괴로 인한 완전삭제를 하지 않는다.
-        // (의도: 시뮬레이션 안에서만 "일시적으로 무너진 것처럼" 보이고, 시뮬레이션이 끝나면
-        //  VibrationTestSystem/ShockwaveTestSystem이 도면(ID) 기준 위치로 되돌림.
-        //  여기서 ecb.DestroyEntity로 완전히 지워버리면 그 복구 자체가 불가능해짐)
-        if (!VibrationTestSystem.IsSimulationRunning)
-        {
+        // ⭐ [영구삭제 완전 제거] 파괴(Destroyed)든 뭐든 블록/조인트가 영구적으로 사라지는 일은
+        // 절대 없어야 함. 예전엔 지진/폭발 시뮬레이션 중에만 막았는데, 평상시(시뮬레이션 밖)에도
+        // 이 정적 응력 스캔이 압축파괴 기준을 넘기면 그대로 영구삭제했었음 — 이제는 시뮬레이션
+        // 여부와 무관하게 절대 삭제하지 않는다. (기록용 destroyedLines 로그만 남기고, 실제
+        // 엔티티/조인트 삭제는 하지 않음 — 파괴 여부 표시는 CSV의 RiskLevel/색상으로만 반영)
         foreach (var (stress, mat, pos, entity) in SystemAPI.Query<
           RefRO<BlockStress>, RefRO<BlockMaterial>, RefRO<OriginalPosition>>().WithEntityAccess())
         {
@@ -495,33 +494,12 @@ public partial struct StressVisualizationSystem : ISystem
                                       originPos.y.ToString("F2");
 
             destroyedLines.Add(new FixedString512Bytes(destroyedLineStr));
-            toDestroy.Add(entity);
-        }
-        }
-
-        var destroySet = new NativeHashSet<Entity>(toDestroy.Length, Allocator.Temp);
-        for (int i = 0; i < toDestroy.Length; i++)
-        {
-            destroySet.Add(toDestroy[i]);
-        }
-
-        foreach (var (jointPair, jointEntity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
-        {
-            if (destroySet.Contains(jointPair.ValueRO.EntityA) || destroySet.Contains(jointPair.ValueRO.EntityB))
-            {
-                ecb.DestroyEntity(jointEntity);
-            }
-        }
-
-        for (int i = 0; i < toDestroy.Length; i++)
-        {
-            ecb.DestroyEntity(toDestroy[i]);
+            // ⭐ toDestroy.Add(entity); 는 더 이상 하지 않음 (영구삭제 완전 제거)
         }
 
         ecb.Playback(state.EntityManager);
         ecb.Dispose();
         toDestroy.Dispose();
-        destroySet.Dispose(); 
     }
 
     private void UpdateResults(ref SystemState state)
