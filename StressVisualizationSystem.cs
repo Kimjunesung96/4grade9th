@@ -252,7 +252,17 @@ public partial struct StressVisualizationSystem : ISystem
 
             if (!SystemAPI.HasComponent<OriginalPosition>(entity))
             {
-                ecb.AddComponent(entity, new OriginalPosition { Value = transform.ValueRO.Position });
+                // ⭐ [그리드 불일치 근본 수정] 흔들린(드리프된) 실측 좌표를 그대로 박제하면,
+                // 이 값을 기준으로 ID를 계산하는 다른 파일들(Last_Building.csv/
+                // Reinforcement_Plan.csv는 그리드 스냅 O)과 ID가 어긋나며, 경계값 근처에서는
+                // 이웃 칸과 ID가 충돌해 MergeToAfterReinforce()가 원본 하나를 통째로 버리는
+                // 구멍 버그가 생김. 반드시 그리드에 정확히 스냅한 값을 박제해야 함.
+                float3 rawPos = transform.ValueRO.Position;
+                float3 snappedPos = new float3(
+                    math.floor((rawPos.x - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f,
+                    math.floor((rawPos.y - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f,
+                    math.floor((rawPos.z - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f);
+                ecb.AddComponent(entity, new OriginalPosition { Value = snappedPos });
             }
 
             float3 originForDisp = SystemAPI.HasComponent<OriginalPosition>(entity)
