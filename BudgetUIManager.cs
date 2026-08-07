@@ -634,52 +634,32 @@ public class BudgetUIManager : MonoBehaviour
         if (File.Exists(planPath)) File.Delete(planPath);
         if (File.Exists(afterPath)) File.Delete(afterPath);
 
-        var lines = File.ReadAllLines(csvPath).ToList();
-        if (lines.Count <= 1) return;
+        // ⭐ [증발 버그 근본 수정] 예전엔 CurrentStress.csv(텍스트)를 그대로 베껴서 Last_Building.csv를
+        // 만들었는데, CurrentStress.csv는 BlockDisplacement 등 특정 컴포넌트가 갖춰진 엔티티만
+        // 매 프레임 다시 써지는 "일시적" 파일이라, 그 순간 컴포넌트가 아직 안 붙은 블록은
+        // CurrentStress.csv에서 통째로 누락될 수 있음. 그 상태로 철거(전체 씬 삭제 후 재건축)하면
+        // 그 블록은 영원히 사라짐. 대신 SaveLastBuildingSnapshot()처럼 "지금 살아있는 엔티티"를
+        // 직접 조회해서 Last_Building.csv를 만들면, 살아있는 한 절대 누락되지 않음.
+        var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
+        SpawnerSystem.SaveLastBuildingSnapshot(em);
 
-        HashSet<string> seenIDs = new HashSet<string>();
-        List<string> cleanLines = new List<string> { lines.First() }; 
-
-        for (int i = 1; i < lines.Count; i++)
-        {
-            var cols = lines[i].Split(',');
-            if (cols.Length >= 12)
-            {
-                string toolAttr = cols[10].Trim();
-                string id = cols[0];
-
-                if (toolAttr != "Reinforcement")
-                {
-                    if (seenIDs.Contains(id)) continue;
-                    seenIDs.Add(id);
-
-                    string[] idParts = id.Split('_');
-                    if (idParts.Length >= 3 && float.TryParse(idParts[0], out float px) && float.TryParse(idParts[1], out float pz) && float.TryParse(idParts[2], out float py))
-                    {
-                        px /= 10f; pz /= 10f; py /= 10f;
-                        string fixedLine = $"{id},{px:F2},{py:F2},{pz:F2},0.00,Safe,N,{cols[7]},{cols[8]},{cols[9]},{toolAttr},{cols[11]}";
-                        cleanLines.Add(fixedLine);
-                    }
-                }
-            }
-        }
+        string stressBlockLastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+        if (!File.Exists(stressBlockLastBuildPath)) return;
+        var cleanLines = File.ReadAllLines(stressBlockLastBuildPath).ToList();
+        if (cleanLines.Count <= 1) return;
 
         File.WriteAllLines(csvPath, cleanLines);
-        
+
         string projectPath = Directory.GetParent(Application.dataPath).FullName;
         string genPath = Path.Combine(projectPath, "BuildingLogs", "Last_Building.csv");
         if (!Directory.Exists(Path.GetDirectoryName(genPath))) Directory.CreateDirectory(Path.GetDirectoryName(genPath));
         File.WriteAllLines(genPath, cleanLines);
-
-        string stressBlockLastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
-        File.WriteAllLines(stressBlockLastBuildPath, cleanLines);
 
         var bpManagerForClear = FindFirstObjectByType<BlueprintManager>();
         if (bpManagerForClear != null) bpManagerForClear.ClearRuntimeCache();
 
         SpawnerSystem.backupIDToQuery = -1f;
         
-        var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
         em.DestroyEntity(em.CreateEntityQuery(typeof(BlockTag)));
         em.DestroyEntity(em.CreateEntityQuery(typeof(JointTag)));
         em.DestroyEntity(em.CreateEntityQuery(typeof(GhostBlockTag)));
