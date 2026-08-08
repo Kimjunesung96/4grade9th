@@ -258,6 +258,7 @@ GuideWireframeRenderer.ResetPool();
                         ecb.AddComponent<BlockTag>(instance);
                         ecb.AddComponent<BlockStress>(instance);
                         ecb.AddComponent(instance, new StructureID { Value = (int)nextStructureID });
+                        ecb.AddComponent(instance, new OriginalPosition { Value = finalPos }); // ⭐ 추가!
 
                         ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = bColor });
 
