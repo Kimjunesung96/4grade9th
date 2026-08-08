@@ -252,11 +252,11 @@ public partial struct StressVisualizationSystem : ISystem
 
             if (!SystemAPI.HasComponent<OriginalPosition>(entity))
             {
-                // ⭐ [그리드 불일치 근본 수정] 흔들린(드리프된) 실측 좌표를 그대로 박제하면,
-                // 이 값을 기준으로 ID를 계산하는 다른 파일들(Last_Building.csv/
-                // Reinforcement_Plan.csv는 그리드 스냅 O)과 ID가 어긋나며, 경계값 근처에서는
-                // 이웃 칸과 ID가 충돌해 MergeToAfterReinforce()가 원본 하나를 통째로 버리는
-                // 구멍 버그가 생김. 반드시 그리드에 정확히 스냅한 값을 박제해야 함.
+                // ⭐ [원본 손상 버그 수정] 조인트에 매달려 스캔 시작 시점에 이미 미세하게 처져 있으면
+                //    그 처진 좌표가 그대로 박제되어, 이후 모든 ID 계산(SaveLastBuildingSnapshot,
+                //    ReinforcementManager, MergeToAfterReinforce)이 전부 floor+0.5 격자 스냅을 쓰는데
+                //    이 값만 안 스냅되어 있어서 경계에서 다른 격자 ID로 계산됨. 캡처 시점에 미리
+                //    동일한 floor+0.5 공식으로 스냅해서, 살아있는 한 항상 같은 격자 ID를 가리키게 함.
                 float3 rawPos = transform.ValueRO.Position;
                 float3 snappedPos = new float3(
                     math.floor((rawPos.x - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f,
