@@ -545,9 +545,10 @@ GuideWireframeRenderer.ResetPool();
             float3 pos = em.HasComponent<OriginalPosition>(entities[i])
                 ? em.GetComponentData<OriginalPosition>(entities[i]).Value
                 : transforms[i].Position;
-            float px = math.floor((pos.x - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-            float py = math.floor((pos.y - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-            float pz = math.floor((pos.z - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
+            // ⭐ [버섯 찢어짐 최종 해결] 스포너의 건축 좌표와 동일하게 math.round 사용 + 부동소수점 오차 방지
+            float px = math.round((pos.x - 1.5f) / 3.0f) * 3.0f + 1.5f;
+            float py = math.round((pos.y - 1.5f) / 3.0f) * 3.0f + 1.5f;
+            float pz = math.round((pos.z - 1.5f) / 3.0f) * 3.0f + 1.5f;
 
             string typeStr = py > 1.5f ? "Wall" : "Floor";
 
