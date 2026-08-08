@@ -11,6 +11,7 @@ using System.Text;
 using System.Linq;
 
 public struct GhostBlockTag : IComponentData { }
+public struct ReinforcementBlockTag : IComponentData { } // ⭐ [백신 3호] 보강재 전용 신분증 태그 추가!
 
 [UpdateInGroup(typeof(SimulationSystemGroup))]
 public partial struct SpawnerSystem : ISystem
@@ -258,7 +259,10 @@ GuideWireframeRenderer.ResetPool();
                         ecb.AddComponent<BlockTag>(instance);
                         ecb.AddComponent<BlockStress>(instance);
                         ecb.AddComponent(instance, new StructureID { Value = (int)nextStructureID });
-                        ecb.AddComponent(instance, new OriginalPosition { Value = finalPos }); // ⭐ 추가!
+                        ecb.AddComponent(instance, new OriginalPosition { Value = finalPos }); 
+
+                        // ⭐ [백신 3호] 보강 블록으로 태어났다면 영구적인 신분증(Tag) 발급!
+                        if (isReinforceBlock) ecb.AddComponent<ReinforcementBlockTag>(instance); // ⭐ 추가!
 
                         ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = bColor });
 
@@ -372,7 +376,8 @@ GuideWireframeRenderer.ResetPool();
                                 float z = math.floor((pz - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
                                 float y = math.floor((py - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
 
-                                float isReinforce = cols[10] == "Reinforcement" ? 1f : 0f;
+                                // ⭐ cols[10]에 들어있는 불순물(띄어쓰기 등)을 싹 지우고 검사해야 에러가 안 납니다!
+float isReinforce = cols[10].Trim().StartsWith("Reinforcement") ? 1f : 0f;
                                 string readMat = cols[7].Replace("\0", "").Trim();
 
                                 tempList.Add(new TempSpawnData { Pos = new float3(x, y, z), IsReinforce = isReinforce, MatName = readMat });
@@ -498,37 +503,11 @@ GuideWireframeRenderer.ResetPool();
     // 이 함수를 먼저 호출해서 마지막으로 지은 블록까지 확실히 Last_Building.csv에 반영되게 한다.
     // (예약만 걸어두고 -1f로 취소해버리면, 그 사이에 씬을 지워버리는 코드가 먼저 실행돼서
     //  방금 G로 지은 마지막 블록이 원본 장부에 한 번도 기록되지 못한 채 영원히 사라짐)
-    public static void SaveLastBuildingSnapshot(EntityManager em)
+  public static void SaveLastBuildingSnapshot(EntityManager em)
     {
         StringBuilder originalOnlyCsv = new StringBuilder();
         originalOnlyCsv.AppendLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
         bool found = false;
-
-        var toolMap = new System.Collections.Generic.Dictionary<string, string>();
-        // ⭐ 버그 수정: 이 매서드가 씬의 BlockMaterial 컴포넌트에서 재질을 그대로 가져와 버려서
-        // ApplyMaterialsToScene()이 방금 CSV에 새로 계산해둔 재질(저렴/고급 모드)이 통째로 무시되고
-        // 옛 재질로 덮어써지고 있었음. CSV에 이미 있는 블록은 그 재질을 그대로 쓰고,
-        // CSV에 아직 없는 신규 블록(방금 G로 지은 것)만 씬 컴포넌트에서 재질을 가져온다.
-        var matMap = new System.Collections.Generic.Dictionary<string, string>();
-        string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
-
-        // 🚀 건물 전체에서 보강재가 하나라도 있는지 전수 조사! (신분 세탁 원천 차단)
-        bool isBuildingReinforced = false;
-
-        if (File.Exists(currentPath))
-        {
-            var oldLines = File.ReadAllLines(currentPath);
-            for (int i = 1; i < oldLines.Length; i++)
-            {
-                var c = oldLines[i].Split(',');
-                if (c.Length >= 12)
-                {
-                    toolMap[c[0]] = c[10];
-                    matMap[c[0]] = c[7];
-                    if (c[10] == "Reinforcement") isBuildingReinforced = true;
-                }
-            }
-        }
 
         var query = em.CreateEntityQuery(ComponentType.ReadOnly<LocalTransform>(), ComponentType.ReadOnly<BlockMaterial>(), ComponentType.ReadOnly<BlockTag>());
         var transforms = query.ToComponentDataArray<LocalTransform>(Allocator.Temp);
@@ -537,15 +516,10 @@ GuideWireframeRenderer.ResetPool();
 
         for (int i = 0; i < transforms.Length; i++)
         {
-            // ⭐ [구멍 버그 근본 수정] ID 계산은 반드시 "안 흔들리는" 좌표로 해야 함.
-            //    CurrentStress.csv / Reinforcement_Plan.csv는 이미 StressVisualizationSystem의
-            //    OriginalPosition(스폰 시 한 번만 캡처되는 고정 좌표)으로 ID를 계산하는데,
-            //    여기(Last_Building.csv)만 실시간 LocalTransform.Position(스프링 조인트로 처질 수 있는 값)으로
-            //    ID를 계산하고 있었음. 스폰 직후라 OriginalPosition이 아직 없는 블록만 LocalTransform으로 대체.
             float3 pos = em.HasComponent<OriginalPosition>(entities[i])
                 ? em.GetComponentData<OriginalPosition>(entities[i]).Value
                 : transforms[i].Position;
-            // ⭐ [버섯 찢어짐 최종 해결] 스포너의 건축 좌표와 동일하게 math.round 사용 + 부동소수점 오차 방지
+
             float px = math.round((pos.x - 1.5f) / 3.0f) * 3.0f + 1.5f;
             float py = math.round((pos.y - 1.5f) / 3.0f) * 3.0f + 1.5f;
             float pz = math.round((pos.z - 1.5f) / 3.0f) * 3.0f + 1.5f;
@@ -560,13 +534,11 @@ GuideWireframeRenderer.ResetPool();
             string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
             string realId = $"{strX}_{strZ}_{strY}";
 
-            string toolTag = "Existing";
-            if (isBuildingReinforced)
-            {
-                toolTag = toolMap.ContainsKey(realId) ? toolMap[realId] : "Existing";
-            }
+            // ⭐ [백신 3호 핵심] 파일의 과거 찌꺼기 데이터에 절대 의존하지 않고, 
+            // 씬의 엔티티에 직접 각인된 '신분증 태그'를 100% 신뢰하여 검사합니다!
+            string toolTag = em.HasComponent<ReinforcementBlockTag>(entities[i]) ? "Reinforcement" : "Existing";
 
-            string matName = matMap.ContainsKey(realId) ? matMap[realId] : mats[i].MaterialName.ToString().Replace("\0", "").Trim();
+            string matName = mats[i].MaterialName.ToString().Replace("\0", "").Trim();
 
             string lineData = realId + "," +
                               px.ToString("F2") + "," +
@@ -586,11 +558,9 @@ GuideWireframeRenderer.ResetPool();
         {
             string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
             if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
-            // 동기 쓰기: 호출자가 이 함수에서 리턴받는 즉시 디스크 반영이 끝나있음을 보장.
             File.WriteAllText(path, originalOnlyCsv.ToString());
         }
     }
-
     private void ExecuteBuild(ref SystemState state, SpawnerData data, float3 actualStart, float3 actualEnd, float targetY, Entity hitEntity, bool isGhost)
     {
         bool hitExistingBlock = SystemAPI.HasComponent<BlockTag>(hitEntity); float3 hitEntityPos = hitExistingBlock ? SystemAPI.GetComponent<LocalTransform>(hitEntity).Position : float3.zero;
