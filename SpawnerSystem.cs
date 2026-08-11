@@ -11,20 +11,19 @@ using System.Text;
 using System.Linq;
 
 public struct GhostBlockTag : IComponentData { }
-public struct ReinforcementBlockTag : IComponentData { } // ⭐ [백신 3호] 보강재 전용 신분증 태그 추가!
+// ⭐ [누적 보강] 몇 번째 보강인지 기억하는 Phase 필드 추가!
+public struct ReinforcementBlockTag : IComponentData { public int Phase; } 
 
 [UpdateInGroup(typeof(SimulationSystemGroup))]
 public partial struct SpawnerSystem : ISystem
 {
     public static System.Collections.Generic.List<float3> ExternalBlueprintData = new System.Collections.Generic.List<float3>();
-
     public static System.Collections.Generic.List<string> blueprintMaterials = new System.Collections.Generic.List<string>();
 
     public static bool isOMode = false;
     public static bool isLMode = false;
     public static bool isUMode = false;
     
-    // ⭐ [신규 마법] 0,0,0 절대 좌표 고정 모드 (홀로그램 이동 금지)
     public static bool isAbsolutePositionMode = false;
     public static string targetLoadFile = "Reinforcement_Plan.csv";
 
@@ -57,6 +56,7 @@ public partial struct SpawnerSystem : ISystem
         public float3 Pos;
         public float IsReinforce;
         public string MatName;
+        public int Phase; // ⭐ CSV에서 읽어온 보강 차수
     }
 
     private string GetToolName(float mode)
@@ -69,7 +69,7 @@ public partial struct SpawnerSystem : ISystem
         else return "Unknown_Tool";
     }
 
-public void OnCreate(ref SystemState state)
+    public void OnCreate(ref SystemState state)
     {
         currentBuildMode = 1f; guideHeight = 1f; isGuideActive = false; nextStructureID = 1f;
         isCenterMoved = false; customCenterPos = float3.zero;
@@ -91,10 +91,11 @@ public void OnCreate(ref SystemState state)
         if (blueprintOffsets.IsCreated) blueprintOffsets.Dispose();
     }
 
-public void OnUpdate(ref SystemState state)
+    public void OnUpdate(ref SystemState state)
     {
         if (!UnityEngine.Application.isPlaying || Camera.main == null) return;
-GuideWireframeRenderer.ResetPool();
+        GuideWireframeRenderer.ResetPool();
+        
         if (pendingJointCleanup)
         {
             RemoveDuplicateJoints(ref state);
@@ -107,7 +108,8 @@ GuideWireframeRenderer.ResetPool();
         if (SystemAPI.HasSingleton<PhysicsStep>())
         {
             var physicsStep = SystemAPI.GetSingletonRW<PhysicsStep>();
-            physicsStep.ValueRW.SolverIterationCount = 2;
+            int solverCount = SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.solverIterationCount : 2;
+            physicsStep.ValueRW.SolverIterationCount = solverCount;
         }
 
         if (!SystemAPI.TryGetSingleton<PhysicsWorldSingleton>(out var physicsSingleton)) return;
@@ -118,7 +120,7 @@ GuideWireframeRenderer.ResetPool();
 
         PhysicsWorld physicsWorld = physicsSingleton.PhysicsWorld;
 
-       if (backupIDToQuery > -1f)
+        if (backupIDToQuery > -1f)
         {
             SaveLastBuildingSnapshot(state.EntityManager);
             backupIDToQuery = -1f;
@@ -183,7 +185,6 @@ GuideWireframeRenderer.ResetPool();
 
                 float3 baseCenter = new float3(math.round((customCenterPos.x - 1.5f) / 3.0f) * 3.0f + 1.5f, 0f, math.round((customCenterPos.z - 1.5f) / 3.0f) * 3.0f + 1.5f);
                 
-                // ⭐ [마법 발동] 절대 좌표 모드일 땐 마우스(baseCenter)를 무시하고 무조건 (0,0,0) 적용!
                 if (isYMode && isAbsolutePositionMode)
                 {
                     baseCenter = float3.zero;
@@ -191,18 +192,18 @@ GuideWireframeRenderer.ResetPool();
 
                 var gridMap = new NativeHashMap<int3, Entity>((int)countF, Allocator.Temp);
                 var posMap = new NativeHashMap<Entity, float3>((int)countF, Allocator.Temp);
-                var matNameMap = new NativeHashMap<Entity, FixedString32Bytes>((int)countF, Allocator.Temp); // ⭐ 스폰 직후(플레이백 전)라 컴포넌트 조회가 안 되므로 재질명을 따로 추적
+                var matNameMap = new NativeHashMap<Entity, FixedString32Bytes>((int)countF, Allocator.Temp);
 
                 for (int i = 0; i < (int)countF; i++)
                 {
                     float3 posOffset;
-                    bool isReinforceBlock = false;
+                    int currentPhase = 0;
 
                     if (isYMode)
                     {
                         float4 data = blueprintOffsets.ElementAt(i);
                         posOffset = new float3(data.x, data.y, data.z);
-                        isReinforceBlock = data.w > 0.5f;
+                        currentPhase = (int)math.round(data.w); // ⭐ w에 담겨온 Phase 꺼내기
                     }
                     else
                     {
@@ -221,15 +222,15 @@ GuideWireframeRenderer.ResetPool();
                     }
                     else
                     {
-                        matName = isReinforceBlock ? "Steel" : "Concrete";
+                        matName = currentPhase > 0 ? "Steel" : "Concrete";
                     }
 
                     ecb.AddComponent(instance, new BlockMaterial { MaterialName = matName });
                     matNameMap.TryAdd(instance, new FixedString32Bytes(matName));
 
-                    float hp = isReinforceBlock ? 2000f : 1000f;
-                    float def = isReinforceBlock ? 600f : 400f;
-                    float4 bColor = isReinforceBlock ? new float4(0.2f, 0.5f, 1.0f, 1f) : new float4(0.7f, 0.7f, 0.7f, 1f);
+                    float hp = currentPhase > 0 ? 2000f : 1000f;
+                    float def = currentPhase > 0 ? 600f : 400f;
+                    float4 bColor = currentPhase > 0 ? new float4(0.2f, 0.5f, 1.0f, 1f) : new float4(0.7f, 0.7f, 0.7f, 1f);
 
                     if (MaterialDataManager.Instance != null && MaterialDataManager.Instance.MaterialDict.TryGetValue(matName, out var spec))
                     {
@@ -251,7 +252,7 @@ GuideWireframeRenderer.ResetPool();
                         ecb.RemoveComponent<PhysicsVelocity>(instance);
                         ecb.RemoveComponent<PhysicsMass>(instance);
 
-                        bColor.w = isReinforceBlock ? 0.8f : 0.4f;
+                        bColor.w = currentPhase > 0 ? 0.8f : 0.4f;
                         ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = bColor });
                     }
                     else
@@ -261,8 +262,11 @@ GuideWireframeRenderer.ResetPool();
                         ecb.AddComponent(instance, new StructureID { Value = (int)nextStructureID });
                         ecb.AddComponent(instance, new OriginalPosition { Value = finalPos }); 
 
-                        // ⭐ [백신 3호] 보강 블록으로 태어났다면 영구적인 신분증(Tag) 발급!
-                        if (isReinforceBlock) ecb.AddComponent<ReinforcementBlockTag>(instance); // ⭐ 추가!
+                        // ⭐ [컴포넌트 각인] 보강 차수를 씬 엔티티에 영구적으로 새깁니다!
+                        if (currentPhase > 0) 
+                        {
+                            ecb.AddComponent(instance, new ReinforcementBlockTag { Phase = currentPhase });
+                        }
 
                         ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = bColor });
 
@@ -277,7 +281,7 @@ GuideWireframeRenderer.ResetPool();
                             var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
                             if (bpManager != null) { 
                                 string id = bpManager.VectorToID(new UnityEngine.Vector3(finalPos.x, finalPos.y, finalPos.z)); 
-                                string properTool = isReinforceBlock ? "Reinforcement" : "Existing"; 
+                                string properTool = currentPhase > 0 ? "Reinforcement" : "Existing"; 
                                 bpManager.AddReinforcementBlock(id, properTool, new UnityEngine.Vector3(finalPos.x, finalPos.y, finalPos.z)); 
                             }
                         }
@@ -317,7 +321,6 @@ GuideWireframeRenderer.ResetPool();
                         blueprintMaterials.Clear(); 
                         isYMode = false;
                         
-                        // ⭐ 타설 완료 후 씬의 상태 갱신 + 마법 해제
                         backupIDToQuery = 1f; 
                         isAbsolutePositionMode = false;
                         UnityEngine.Debug.Log("🏗️ [타설 완료] 지점에 오차 없이 융합되었습니다!");
@@ -349,7 +352,6 @@ GuideWireframeRenderer.ResetPool();
             loadDelayTimer -= 1f;
             if (loadDelayTimer <= 0f)
             {
-                // 🚀 매니저가 명령한 파일(보강재 or 복구용 원본)만 딱 읽어옵니다.
                 string readPath = Path.Combine(Application.dataPath, "StressBlock", targetLoadFile);
                 
                 if (File.Exists(readPath))
@@ -376,11 +378,15 @@ GuideWireframeRenderer.ResetPool();
                                 float z = math.floor((pz - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
                                 float y = math.floor((py - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
 
-                                // ⭐ cols[10]에 들어있는 불순물(띄어쓰기 등)을 싹 지우고 검사해야 에러가 안 납니다!
-float isReinforce = cols[10].Trim().StartsWith("Reinforcement") ? 1f : 0f;
+                                // ⭐ [Phase 추출] CSV 13번째 컬럼에서 보강 차수 획득
+                                int phase = 0;
+                                if (cols.Length > 12 && int.TryParse(cols[12].Trim(), out int p)) phase = p;
+                                else if (cols[10].Trim() == "Reinforcement") phase = 1; // 하위 호환
+
+                                float isReinforce = phase > 0 ? 1f : 0f;
                                 string readMat = cols[7].Replace("\0", "").Trim();
 
-                                tempList.Add(new TempSpawnData { Pos = new float3(x, y, z), IsReinforce = isReinforce, MatName = readMat });
+                                tempList.Add(new TempSpawnData { Pos = new float3(x, y, z), IsReinforce = isReinforce, MatName = readMat, Phase = phase });
 
                                 if (x < minX) minX = x; if (x > maxX) maxX = x;
                                 if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
@@ -398,7 +404,6 @@ float isReinforce = cols[10].Trim().StartsWith("Reinforcement") ? 1f : 0f;
 
                         float centerX = 0f; float centerZ = 0f;
                         
-                        // ⭐ [마법 발동] 절대 좌표 모드가 아닐 때만 마우스 중심점(Centering)을 계산!
                         if (!isAbsolutePositionMode)
                         {
                             centerX = math.round(((minX + maxX) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
@@ -410,7 +415,8 @@ float isReinforce = cols[10].Trim().StartsWith("Reinforcement") ? 1f : 0f;
 
                         foreach (var data in tempList)
                         {
-                            blueprintOffsets.Add(new float4(data.Pos.x - centerX, data.Pos.y, data.Pos.z - centerZ, data.IsReinforce));
+                            // float4.w 자리에 Phase를 실어서 전달합니다.
+                            blueprintOffsets.Add(new float4(data.Pos.x - centerX, data.Pos.y, data.Pos.z - centerZ, data.Phase));
                             blueprintMaterials.Add(data.MatName);
                         }
                         UnityEngine.Debug.Log($"📦 [배달 완료] {targetLoadFile} 로드 완료! (F로 미리보기, G로 확정)");
@@ -498,16 +504,27 @@ float isReinforce = cols[10].Trim().StartsWith("Reinforcement") ? 1f : 0f;
         }
     }
 
-    // ⭐ [증발 버그 수정] 원래 backupIDToQuery 예약 처리 안에 있던 로직을 그대로 뽑아낸 것.
-    // BudgetUIManager 등 다른 MonoBehaviour에서, 씬의 BlockTag 엔티티를 파괴하기 "직전"에
-    // 이 함수를 먼저 호출해서 마지막으로 지은 블록까지 확실히 Last_Building.csv에 반영되게 한다.
-    // (예약만 걸어두고 -1f로 취소해버리면, 그 사이에 씬을 지워버리는 코드가 먼저 실행돼서
-    //  방금 G로 지은 마지막 블록이 원본 장부에 한 번도 기록되지 못한 채 영원히 사라짐)
-  public static void SaveLastBuildingSnapshot(EntityManager em)
+    // ⭐ [최종 진화] 문자열 버리고 컴포넌트로 완벽한 스냅샷을 만듭니다!
+// ⭐ [최종 진화] 문자열 버리고 컴포넌트로 완벽한 스냅샷을 만듭니다!
+    public static void SaveLastBuildingSnapshot(EntityManager em)
     {
         StringBuilder originalOnlyCsv = new StringBuilder();
-        originalOnlyCsv.AppendLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
+        // 헤더에 Phase 추가!
+        originalOnlyCsv.AppendLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type,Phase");
         bool found = false;
+
+        // ⭐ [백신 4호] BudgetUIManager가 방금 바꿔놓은 '최신 재질' 정보를 읽어옵니다!
+        var matMap = new System.Collections.Generic.Dictionary<string, string>();
+        string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
+        if (File.Exists(currentPath))
+        {
+            var oldLines = File.ReadAllLines(currentPath);
+            for (int i = 1; i < oldLines.Length; i++)
+            {
+                var c = oldLines[i].Split(',');
+                if (c.Length >= 8) matMap[c[0]] = c[7]; // 7번 인덱스가 Material(재질)
+            }
+        }
 
         var query = em.CreateEntityQuery(ComponentType.ReadOnly<LocalTransform>(), ComponentType.ReadOnly<BlockMaterial>(), ComponentType.ReadOnly<BlockTag>());
         var transforms = query.ToComponentDataArray<LocalTransform>(Allocator.Temp);
@@ -534,20 +551,26 @@ float isReinforce = cols[10].Trim().StartsWith("Reinforcement") ? 1f : 0f;
             string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
             string realId = $"{strX}_{strZ}_{strY}";
 
-            // ⭐ [백신 3호 핵심] 파일의 과거 찌꺼기 데이터에 절대 의존하지 않고, 
-            // 씬의 엔티티에 직접 각인된 '신분증 태그'를 100% 신뢰하여 검사합니다!
-            string toolTag = em.HasComponent<ReinforcementBlockTag>(entities[i]) ? "Reinforcement" : "Existing";
+            // ⭐ 오직 컴포넌트(신분증)만 믿고 Phase와 Tool 태그를 기록합니다!
+            int phase = 0;
+            string toolTag = "Existing";
+            if (em.HasComponent<ReinforcementBlockTag>(entities[i]))
+            {
+                toolTag = "Reinforcement";
+                phase = em.GetComponentData<ReinforcementBlockTag>(entities[i]).Phase;
+            }
 
-            string matName = mats[i].MaterialName.ToString().Replace("\0", "").Trim();
+            // ⭐ 씬의 옛날 재질 대신, 예산 매니저가 엑셀에 적어둔 최신 재질을 우선 적용합니다!
+            string matName = matMap.ContainsKey(realId) ? matMap[realId] : mats[i].MaterialName.ToString().Replace("\0", "").Trim();
 
             string lineData = realId + "," +
                               px.ToString("F2") + "," +
                               py.ToString("F2") + "," +
                               pz.ToString("F2") + "," +
-                              "0.00,Safe,N," + matName + ",0.0,0.0," + toolTag + "," + typeStr;
+                              "0.00,Safe,N," + matName + ",0.0,0.0," + toolTag + "," + typeStr + "," + phase;
 
             found = true;
-            if (toolTag != "Reinforcement") originalOnlyCsv.AppendLine(lineData);
+            originalOnlyCsv.AppendLine(lineData); // ⭐ 누락 없이 모든 블록을 스냅샷에 보존!
         }
 
         transforms.Dispose();

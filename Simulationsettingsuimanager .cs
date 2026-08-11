@@ -55,7 +55,8 @@ public class SimulationSettingsUIManager : MonoBehaviour
         DrawIntSlider("물리 솔버 반복 횟수", ref settings.solverIterationCount, 1, 10, "회");
 
         GUILayout.Space(6);
-        DrawIntSlider("응력 증폭 배율", ref settings.tensionStressScaleSteps, 1, 20,
+        // ⭐ 슬라이더의 최소 범위를 0으로 변경!
+        DrawIntSlider("응력 증폭 배율", ref settings.tensionStressScaleSteps, 0, 20,
             $"= {settings.TensionStressScale:0}");
 
         GUILayout.Space(6);

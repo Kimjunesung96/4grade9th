@@ -19,11 +19,12 @@ public class SimulationSettings : ScriptableObject
     public int solverIterationCount = 2; // 원본값 그대로 (SpawnerSystem.cs 하드코딩값)
 
     [Header("응력 시각화 — 조인트 인장 스트레스 증폭 배율")]
-    [Tooltip("500 단위 스텝. 기본값 10칸 = 5000 (원본 VibrationTestSystem/ShockwaveTestSystem 하드코딩값과 동일)")]
-    [Range(1, 20)]
-    public int tensionStressScaleSteps = 10; // 10 * 500 = 5000 (원본값 그대로)
+    [Tooltip("0 = 1배(증폭 없음), 1부터는 500 단위 스텝. 기본값 10칸 = 5000")]
+    [Range(0, 20)] // ⭐ 최소값을 0으로 변경!
+    public int tensionStressScaleSteps = 10; 
 
-    public float TensionStressScale => tensionStressScaleSteps * 500f;
+    // ⭐ 0일 때는 증폭 없이 순수 1배율(1.0f) 적용!
+    public float TensionStressScale => tensionStressScaleSteps == 0 ? 1.0f : tensionStressScaleSteps * 500f;
 
     [Header("테스트 지속시간 (초, 정수)")]
     [Tooltip("StressVisualizationSystem.StartScan() 의 scanTimer 원본값 = 5")]
