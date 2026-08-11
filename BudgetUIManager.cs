@@ -1,4 +1,5 @@
 using UnityEngine;
+using System;
 using System.IO;
 using System.Collections.Generic;
 using System.Linq;
@@ -39,9 +40,13 @@ public class BudgetUIManager : MonoBehaviour
     private string metaPath;
 
     public int reinforcementMode = 1; 
-
     public string reinforcementMaterial = "H_Beam";
     private static readonly string[] reinforcementMaterialOptions = new string[] { "H_Beam" };
+
+    private Dictionary<int, float> phaseCosts = new Dictionary<int, float>();
+    private float totalCost = 0f;
+    private float originalCost = 0f;
+    private int currentMaxPhase = 0;
 
     private class BlockData
     {
@@ -66,6 +71,7 @@ public class BudgetUIManager : MonoBehaviour
         csvPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
         metaPath = Path.Combine(Application.dataPath, "StressBlock", "Budget_Meta.csv");
         LoadMaterialLists();
+        CalculateCurrentCosts();
     }
 
     void Update()
@@ -75,6 +81,64 @@ public class BudgetUIManager : MonoBehaviour
             pendingRemoveReinforcements = false;
             ExecuteRemoveReinforcements();
         }
+
+        // ⭐ G키(확정)나 R키(철거)를 누르면 0.1초(아주 빠릿하게) 뒤에 영수증을 갱신합니다!
+        if (Input.GetKeyDown(KeyCode.G) || Input.GetKeyDown(KeyCode.R))
+        {
+            Invoke(nameof(CalculateCurrentCosts), 0.1f);
+        }
+    }
+
+    // ⭐ [반응속도 해결] 엉뚱한 장부 대신, G키가 즉각 반영되는 Last_Building.csv를 읽습니다!
+    void CalculateCurrentCosts()
+    {
+        string targetCsv = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+        if (!File.Exists(targetCsv)) targetCsv = csvPath; // 없으면 예비로 CurrentStress 사용
+        if (!File.Exists(targetCsv)) return;
+        
+        try 
+        {
+            var lines = File.ReadAllLines(targetCsv);
+            if (MaterialDataManager.Instance == null) return;
+            var dict = MaterialDataManager.Instance.MaterialDict;
+
+            float tempOriginal = 0f;
+            float tempTotal = 0f;
+            int tempMaxPhase = 0;
+            Dictionary<int, float> tempPhaseCosts = new Dictionary<int, float>();
+
+            for (int i = 1; i < lines.Length; i++)
+            {
+                var cols = lines[i].Split(',');
+                if (cols.Length < 8) continue; // 최소 길이 방어
+
+                string matName = cols[7].Trim();
+                int phase = 0;
+                if (cols.Length >= 13) int.TryParse(cols[12].Trim(), out phase);
+
+                if (phase > tempMaxPhase) tempMaxPhase = phase;
+
+                float price = 0f;
+                if (dict.TryGetValue(matName, out var spec))
+                {
+                    price = spec.Density * spec.PricePerKg * 3.375f;
+                }
+
+                if (phase == 0) tempOriginal += price;
+                else 
+                {
+                    if (!tempPhaseCosts.ContainsKey(phase)) tempPhaseCosts[phase] = 0f;
+                    tempPhaseCosts[phase] += price;
+                }
+                tempTotal += price;
+            }
+
+            originalCost = tempOriginal;
+            phaseCosts = tempPhaseCosts;
+            totalCost = tempTotal;
+            currentMaxPhase = tempMaxPhase;
+        } 
+        catch (Exception) { /* 0.1초 딜레이 중 파일 쓰기 충돌 방어 */ }
     }
 
     void LoadMaterialLists()
@@ -123,20 +187,34 @@ public class BudgetUIManager : MonoBehaviour
         }
     }
 
-    public void SetReinforcementModeMany()
-    {
-        reinforcementMode = 1;
-        UnityEngine.Debug.Log("보강 모드: 많이 (바둑판 물량 공세)");
-    }
-
-    public void SetReinforcementModeFew()
-    {
-        reinforcementMode = 2;
-        UnityEngine.Debug.Log("보강 모드: 적게 (가성비 핀포인트)");
-    }
+    public void SetReinforcementModeMany() { reinforcementMode = 1; }
+    public void SetReinforcementModeFew() { reinforcementMode = 2; }
 
     void OnGUI()
     {
+        if (totalCost > 0)
+        {
+            float receiptW = 240f;
+            float receiptH = 75f + (currentMaxPhase * 25f);
+            float receiptX = Screen.width - receiptW - 20f;
+            float receiptY = 20f;
+
+            GUILayout.BeginArea(new Rect(receiptX, receiptY, receiptW, receiptH), "🧾 누적 공사 비용", GUI.skin.window);
+            GUILayout.Space(5);
+            GUILayout.Label($"뼈대(원본): <color=#AADDFF>{originalCost:N0} 원</color>", new GUIStyle(GUI.skin.label) { richText = true });
+            
+            for (int i = 1; i <= currentMaxPhase; i++)
+            {
+                if (phaseCosts.ContainsKey(i))
+                {
+                    GUILayout.Label($"{i}차 보강: <color=#FFAAAA>{phaseCosts[i]:N0} 원</color>", new GUIStyle(GUI.skin.label) { richText = true });
+                }
+            }
+            GUILayout.Space(5);
+            GUILayout.Label($"<color=yellow><b>총 누적 예산: {totalCost:N0} 원</b></color>", new GUIStyle(GUI.skin.label) { richText = true });
+            GUILayout.EndArea();
+        }
+
         if (!showPanel) return;
 
         float panelW = 860f;
@@ -251,13 +329,20 @@ public class BudgetUIManager : MonoBehaviour
         GUILayout.FlexibleSpace();
 
         GUILayout.BeginVertical();
-        GUILayout.Space(25);
+        GUILayout.Space(12);
+        GUI.backgroundColor = new Color(1f, 0.6f, 0.2f);
+        if (GUILayout.Button("⏪ 최근 보강 취소\n(Ctrl+Z)", GUILayout.Height(40), GUILayout.Width(130))) 
+        {
+            UndoLastReinforcement(); 
+        }
+        GUILayout.Space(5);
         GUI.backgroundColor = new Color(1f, 0.4f, 0.4f);
-        if (GUILayout.Button("보강재 초기화\n(철거)", GUILayout.Height(55), GUILayout.Width(130))) 
+        if (GUILayout.Button("보강 전체 초기화\n(모두 철거)", GUILayout.Height(40), GUILayout.Width(130))) 
         {
             pendingRemoveReinforcements = true; 
         }
         GUILayout.EndVertical();
+        
         GUILayout.FlexibleSpace();
 
         GUILayout.BeginVertical();
@@ -299,47 +384,31 @@ public class BudgetUIManager : MonoBehaviour
         GUILayout.EndScrollView();
     }
 
-    // =========================================================================================
-    // 🚀 [십장님 알고리즘 완벽 적용] 유니티 스포너 대신 CSV 단계에서 먼저 중복을 숙청합니다!
-    // =========================================================================================
+    // ⭐ [물리 대폭발 방지] 동일한 자리에 블록이 여러 개 겹치면 차수(Phase)가 가장 높은 '최신' 블록만 살려냅니다!
     private void MergeToAfterReinforce()
     {
         string basePath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
         string planPath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
         string afterPath = Path.Combine(Application.dataPath, "StressBlock", "after_reinforce.csv");
 
-        string header = "BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type";
-        List<string> allRawLines = new List<string>();
+        List<string> allLines = new List<string>();
+        if (File.Exists(basePath)) allLines.AddRange(File.ReadAllLines(basePath).Skip(1));
+        if (File.Exists(planPath)) allLines.AddRange(File.ReadAllLines(planPath).Skip(1));
 
-        // 1. "두 파일을 에프러리인포스에서 그대로 합쳐" -> 둘 다 무식하게 읽어들입니다.
-        if (File.Exists(basePath))
-        {
-            var lines = File.ReadAllLines(basePath);
-            for (int i = 1; i < lines.Length; i++) if (!string.IsNullOrWhiteSpace(lines[i])) allRawLines.Add(lines[i]);
-        }
-        if (File.Exists(planPath))
-        {
-            var lines = File.ReadAllLines(planPath);
-            for (int i = 1; i < lines.Length; i++) if (!string.IsNullOrWhiteSpace(lines[i])) allRawLines.Add(lines[i]);
-        }
+        Dictionary<string, string> bestBlocks = new Dictionary<string, string>();
+        Dictionary<string, int> bestPhases = new Dictionary<string, int>();
 
-        // ID를 기준으로 그룹화
-        Dictionary<string, List<string>> groupedById = new Dictionary<string, List<string>>();
-        foreach (var line in allRawLines)
+        foreach (var line in allLines)
         {
+            if (string.IsNullOrWhiteSpace(line)) continue;
             var cols = line.Split(',');
             if (cols.Length < 12) continue;
+            
             string rawId = cols[0];
-
-            // ⭐ 원본 블록의 미세한 소수점 오차를 무시하고 3m 격자(Grid)에 맞춘 완벽한 ID(cleanId) 생성
             float px = float.Parse(rawId.Split('_')[0]) / 10f;
             float pz = float.Parse(rawId.Split('_')[1]) / 10f;
             float py = float.Parse(rawId.Split('_')[2]) / 10f;
-
-            // ⭐ [구멍 버그 수정] SpawnerSystem.SaveLastBuildingSnapshot()과 반올림 방식이 달라서
-            //    (여기는 Mathf.Round, 저기는 floor+0.5) 경계값에서 서로 다른 두 블록이 같은 cleanId로
-            //    잘못 충돌 → 아래 dedup 로직이 "겹친 것"으로 착각해 둘 중 하나를 영구 삭제 → 건물에 구멍.
-            //    SaveLastBuildingSnapshot과 완전히 동일한 floor+0.5 공식으로 통일해서 충돌 자체를 방지.
+            
             float snapX = Mathf.Floor((px - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
             float snapZ = Mathf.Floor((pz - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
             float snapY = Mathf.Floor((py - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
@@ -349,44 +418,25 @@ public class BudgetUIManager : MonoBehaviour
             float iy = Mathf.Round((snapY + 0.001f) * 10f);
             string cleanId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
 
-            if (!groupedById.ContainsKey(cleanId)) groupedById[cleanId] = new List<string>();
-            groupedById[cleanId].Add(line);
-        }
+            int phase = 0;
+            if (cols.Length >= 13 && int.TryParse(cols[12].Trim(), out int p)) phase = p;
+            else if (cols[10].Trim() == "Reinforcement") phase = 1;
 
-        List<string> finalList = new List<string> { header };
-        foreach (var kvp in groupedById)
-        {
-            var linesForId = kvp.Value;
-            if (linesForId.Count > 1) 
+            // 중복된 자리라면 차수(Phase)가 더 높은 녀석으로 덮어씁니다!
+            if (!bestBlocks.ContainsKey(cleanId) || phase > bestPhases[cleanId])
             {
-                // 2. "그다음에 id가 같은 놈들 중에서 reinforce가 들어가 있는 줄을 지워버려!"
-                // 즉, "Reinforcement"가 아닌 원본 줄을 찾아서 그것만 살립니다.
-                var originals = linesForId.Where(l => l.Split(',')[10].Trim() != "Reinforcement").ToList();
-                if (originals.Count > 1)
-                {
-                    // ⭐ [안전장치] 원본끼리 충돌하는 건 정상 상황이 아님(스냅 공식 통일로 이제 거의 안 나야 함).
-                    //    조용히 버리면 다음에 또 구멍 버그가 나도 못 알아채니, 무조건 로그로 남긴다.
-                    Debug.LogWarning($"⚠ [Merge] 원본 블록끼리 같은 격자 ID({kvp.Key})에서 충돌! {originals.Count}개 중 1개만 살리고 나머지는 버립니다. 좌표 스냅 로직을 다시 확인하세요.");
-                }
-                string originalLine = originals.FirstOrDefault();
-                if (originalLine != null) 
-                    finalList.Add(originalLine); // 원본 승리! (보강재 줄은 영원히 삭제됨)
-                else 
-                    finalList.Add(linesForId[0]);
-            }
-            else
-            {
-                // 안 겹친 정상 블록들은 그대로 통과!
-                finalList.Add(linesForId[0]);
+                bestBlocks[cleanId] = line;
+                bestPhases[cleanId] = phase;
             }
         }
 
-        // 3. 완벽하게 필터링된 완성본을 저장합니다.
+        List<string> finalList = new List<string> { "BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type,Phase" };
+        finalList.AddRange(bestBlocks.Values);
+
         File.WriteAllLines(afterPath, finalList);
         File.WriteAllLines(csvPath, finalList);
         
-        // ⭐ Last_Building.csv 덮어쓰기 코드 삭제 완료! 원본은 더이상 오염되지 않습니다.
-        Debug.Log("🏭 [데이터 전처리 완료] 겹치는 보강재를 CSV단에서 완벽히 삭제하고 after_reinforce.csv를 완성했습니다!");
+        Debug.Log("🏭 [데이터 전처리 완료] 겹치는 블록 중 최신 보강재만 살려서 대폭발 버그를 차단했습니다!");
     }
 
     void OnConfirm()
@@ -398,12 +448,6 @@ public class BudgetUIManager : MonoBehaviour
         if (isCheapON) currentMode = "Cheap";
         if (isExpensiveON) currentMode = "Expensive";
 
-        // ⭐ [신규] 싸게/비싸게가 켜지면 화면에 남아있는 수동 옵션(보강 YES/NO, 보강 모드, 보강재질,
-        //    벽/바닥 수동 재질 탭)은 전부 무시하고 이 두 모드의 자동 로직만 그대로 적용한다.
-        //    - 싸게: 스트레스 계산해서 가장 싼 재질/가장 싼 보강재로, "적게(가성비 핀포인트)" 방식만 최소 적용
-        //    - 비싸게: 예산(가격)을 무시하고 가장 강한 재질/가장 강한 보강재로, "많이(격자)" 방식으로 최대 안정성 확보
-        //    ⚠️ 벽/바닥 수동 재질(selectedWallMaterial/selectedFloorMaterial)은 ApplyMaterialsToScene의
-        //       Cheap/Expensive 분기가 애초에 참조하지 않으므로 이미 자동 무시됨 (Manual 모드에서만 사용).
         if ((isCheapON || isExpensiveON) && MaterialDataManager.Instance != null)
         {
             var dict = MaterialDataManager.Instance.MaterialDict;
@@ -412,49 +456,34 @@ public class BudgetUIManager : MonoBehaviour
             if (isCheapON)
             {
                 reinforcementMaterial = dict.OrderBy(kv => kv.Value.Density * kv.Value.PricePerKg).First().Key;
-                reinforcementMode = 2; // 적게 [우산] — 가성비 핀포인트
+                reinforcementMode = 2;
             }
-            else // isExpensiveON
+            else 
             {
                 reinforcementMaterial = dict.OrderByDescending(kv => math.min(kv.Value.Tensile, kv.Value.Compressive)).First().Key;
-                reinforcementMode = 1; // 많이 [격자] — 가격 무시하고 최대 안정성
+                reinforcementMode = 1; 
             }
         }
 
         SaveBudgetMeta(budget, currentMode, floors);
         ApplyMaterialsToScene(currentMode, budget);
 
-        // ⭐ [신규] 싸게/비싸게 공통: 재질 배정 끝난 뒤, 위에서 강제로 켠 wantsReinforcement +
-        //    자동 선택된 reinforcementMode/reinforcementMaterial 그대로 보강 계획을 자동 생성.
-        //    (CurrentStress.csv의 RiskLevel은 이미 계산되어 있는 값을 그대로 재사용 —
-        //     ReinforcementManager.CreatePlanExcel()이 Danger/Quake_Danger 포인트만 골라 보강탑을 설계함)
         if (currentMode == "Cheap" || currentMode == "Expensive")
         {
             var reinforcer = UnityEngine.Object.FindFirstObjectByType<ReinforcementManager>();
             if (reinforcer != null)
             {
                 reinforcer.CreatePlanExcel();
-                string label = currentMode == "Cheap" ? "💰 [싸게 모드] 최저가 재질 + 최소(적게) 보강" : "💎 [비싸게 모드] 가격 무시 최강 재질 + 최대(많이) 보강";
-                Debug.Log($"{label} 자동 적용 완료 (Y로 다시 열람 가능)");
-            }
-            else
-            {
-                Debug.LogWarning($"⚠ [{currentMode} 모드] ReinforcementManager를 씬에서 찾지 못해 자동 보강 계획을 생성하지 못했습니다.");
             }
         }
 
-        // ⭐ [증발 버그 수정] 씬을 지우기 전에, 방금 G로 지은 것까지 포함해서
-        // Last_Building.csv를 무조건 먼저 확정 저장한다. (backupIDToQuery 예약을 그냥
-        // -1f로 취소해버리면 마지막 건설분이 원본 장부에 한 번도 안 남고 사라짐)
         SpawnerSystem.SaveLastBuildingSnapshot(Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager);
 
         var rm = FindFirstObjectByType<ReinforcementManager>();
         if (rm != null) rm.CreatePlanExcel();
 
-        // 1. CSV 데이터 전처리 실행
         MergeToAfterReinforce();
 
-        // 2. 씬 완전 철거 (전체 건물을 다시 예쁘게 깔아야 하므로 기존 찌꺼기 폭파)
         SpawnerSystem.backupIDToQuery = -1f;
         var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
         em.DestroyEntity(em.CreateEntityQuery(typeof(BlockTag)));
@@ -465,23 +494,20 @@ public class BudgetUIManager : MonoBehaviour
         yKeyState = 0;
         SpawnerSystem.isUMode = false;
         
-        // 3. 스포너에게 복잡한 논리 시키지 않고, 오직 '완성본(after_reinforce.csv)'만 띄우라고 지시!
         SpawnerSystem.isAbsolutePositionMode = true;
-        SpawnerSystem.targetLoadFile = "after_reinforce.csv"; // ⭐ 핵심: 완성본 장전!
+        SpawnerSystem.targetLoadFile = "after_reinforce.csv"; 
         SpawnerSystem.loadDelayTimer = 5f;
 
+        Invoke(nameof(CalculateCurrentCosts), 0.5f); // 타설 후 영수증 갱신
         Debug.Log("✅ [장전 완료] 보강재가 결합된 '완전체 건물' 홀로그램을 화면에 띄웁니다! (G키로 타설하세요)");
     }
 
     void OnJustReinforce()
     {
-        // ⭐ [증발 버그 수정] 씬을 지우기 전에 마지막 G까지 반드시 Last_Building.csv에 반영
         SpawnerSystem.SaveLastBuildingSnapshot(Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager);
 
-        // 1. CSV 데이터 전처리 실행
         MergeToAfterReinforce();
 
-        // 2. 씬 완전 철거
         SpawnerSystem.backupIDToQuery = -1f;
         var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
         em.DestroyEntity(em.CreateEntityQuery(typeof(BlockTag)));
@@ -492,11 +518,11 @@ public class BudgetUIManager : MonoBehaviour
         showPanel = false;
         SpawnerSystem.isUMode = false;
         
-        // 3. 스포너에게 복잡한 논리 시키지 않고, 오직 '완성본(after_reinforce.csv)'만 띄우라고 지시!
         SpawnerSystem.isAbsolutePositionMode = true;
-        SpawnerSystem.targetLoadFile = "after_reinforce.csv"; // ⭐ 핵심: 완성본 장전!
+        SpawnerSystem.targetLoadFile = "after_reinforce.csv"; 
         SpawnerSystem.loadDelayTimer = 5f;
         
+        Invoke(nameof(CalculateCurrentCosts), 0.5f); // 타설 후 영수증 갱신
         Debug.Log("(just보강) 보강재가 결합된 완전체 건물 장전 완료!");
     }
 
@@ -627,6 +653,72 @@ public class BudgetUIManager : MonoBehaviour
         File.WriteAllLines(csvPath, output);
     }
 
+    void UndoLastReinforcement()
+    {
+        var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
+        SpawnerSystem.SaveLastBuildingSnapshot(em);
+
+        string stressBlockLastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+        if (!File.Exists(stressBlockLastBuildPath)) return;
+
+        var allLines = File.ReadAllLines(stressBlockLastBuildPath);
+        int maxPhase = 0;
+        
+        for (int i = 1; i < allLines.Length; i++)
+        {
+            var c = allLines[i].Split(',');
+            if (c.Length >= 13 && int.TryParse(c[12].Trim(), out int p))
+            {
+                if (p > maxPhase) maxPhase = p;
+            }
+        }
+
+        if (maxPhase == 0)
+        {
+            Debug.LogWarning("⚠ 취소할 보강 내역이 없습니다. (현재 건물은 순수 원본입니다)");
+            return;
+        }
+
+        var cleanLines = allLines.Where(line => 
+        {
+            var c = line.Split(',');
+            if (c.Length < 13) return true;
+            if (c[0] == "BlockID") return true; 
+            int.TryParse(c[12].Trim(), out int p);
+            return p != maxPhase; 
+        }).ToList();
+
+        File.WriteAllLines(csvPath, cleanLines);
+        File.WriteAllLines(stressBlockLastBuildPath, cleanLines);
+        
+        string projectPath = Directory.GetParent(Application.dataPath).FullName;
+        string genPath = Path.Combine(projectPath, "BuildingLogs", "Last_Building.csv");
+        if (!Directory.Exists(Path.GetDirectoryName(genPath))) Directory.CreateDirectory(Path.GetDirectoryName(genPath));
+        File.WriteAllLines(genPath, cleanLines);
+
+        var bpManagerForClear = FindFirstObjectByType<BlueprintManager>();
+        if (bpManagerForClear != null) bpManagerForClear.ClearRuntimeCache();
+
+        SpawnerSystem.backupIDToQuery = -1f;
+        em.DestroyEntity(em.CreateEntityQuery(typeof(BlockTag)));
+        em.DestroyEntity(em.CreateEntityQuery(typeof(JointTag)));
+        em.DestroyEntity(em.CreateEntityQuery(typeof(GhostBlockTag)));
+        
+        showPanel = false;
+        yKeyState = 0;
+        SpawnerSystem.isUMode = false;
+        
+        SpawnerSystem.isAbsolutePositionMode = true;
+        SpawnerSystem.targetLoadFile = "Last_Building.csv"; 
+        SpawnerSystem.loadDelayTimer = 5f;
+
+        var dragController = FindFirstObjectByType<SimulationDragController>();
+        if (dragController != null) dragController.CancelDrag();
+
+        Debug.Log($"⏪ [{maxPhase}차 보강 취소] 가장 최근의 보강 작업을 취소했습니다!");
+        Invoke(nameof(CalculateCurrentCosts), 0.5f);
+    }
+
     void ExecuteRemoveReinforcements()
     {
         string planPath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
@@ -634,21 +726,24 @@ public class BudgetUIManager : MonoBehaviour
         if (File.Exists(planPath)) File.Delete(planPath);
         if (File.Exists(afterPath)) File.Delete(afterPath);
 
-        // ⭐ [증발 버그 근본 수정] 예전엔 CurrentStress.csv(텍스트)를 그대로 베껴서 Last_Building.csv를
-        // 만들었는데, CurrentStress.csv는 BlockDisplacement 등 특정 컴포넌트가 갖춰진 엔티티만
-        // 매 프레임 다시 써지는 "일시적" 파일이라, 그 순간 컴포넌트가 아직 안 붙은 블록은
-        // CurrentStress.csv에서 통째로 누락될 수 있음. 그 상태로 철거(전체 씬 삭제 후 재건축)하면
-        // 그 블록은 영원히 사라짐. 대신 SaveLastBuildingSnapshot()처럼 "지금 살아있는 엔티티"를
-        // 직접 조회해서 Last_Building.csv를 만들면, 살아있는 한 절대 누락되지 않음.
         var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
         SpawnerSystem.SaveLastBuildingSnapshot(em);
 
         string stressBlockLastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
         if (!File.Exists(stressBlockLastBuildPath)) return;
-        var cleanLines = File.ReadAllLines(stressBlockLastBuildPath).ToList();
+
+        var cleanLines = File.ReadAllLines(stressBlockLastBuildPath).Where(line => 
+        {
+            var c = line.Split(',');
+            if (c.Length < 11) return true;
+            if (c[0] == "BlockID") return true; 
+            return c[10].Trim() != "Reinforcement"; 
+        }).ToList();
+
         if (cleanLines.Count <= 1) return;
 
         File.WriteAllLines(csvPath, cleanLines);
+        File.WriteAllLines(stressBlockLastBuildPath, cleanLines);
 
         string projectPath = Directory.GetParent(Application.dataPath).FullName;
         string genPath = Path.Combine(projectPath, "BuildingLogs", "Last_Building.csv");
@@ -671,12 +766,13 @@ public class BudgetUIManager : MonoBehaviour
         SpawnerSystem.isUMode = false;
         
         SpawnerSystem.isAbsolutePositionMode = true;
-        SpawnerSystem.targetLoadFile = "Last_Building.csv"; // 철거 시에는 순수 원본으로 복구
+        SpawnerSystem.targetLoadFile = "Last_Building.csv"; 
         SpawnerSystem.loadDelayTimer = 5f;
 
         var dragController = FindFirstObjectByType<SimulationDragController>();
         if (dragController != null) dragController.CancelDrag();
 
-        Debug.Log("🗑️ [완벽 철거] 융합 파일 삭제 후, 순수한 원본 데이터로 건물을 재구축 대기 중!");
+        Debug.Log("🗑️ [완벽 철거] 모든 회차의 보강재를 제거하고 순수 원본 뼈대만 남겼습니다!");
+        Invoke(nameof(CalculateCurrentCosts), 0.5f);
     }
 }
