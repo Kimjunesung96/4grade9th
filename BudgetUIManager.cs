@@ -656,7 +656,7 @@ public class BudgetUIManager : MonoBehaviour
     void UndoLastReinforcement()
     {
         var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
-        SpawnerSystem.SaveLastBuildingSnapshot(em);
+
 
         string stressBlockLastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
         if (!File.Exists(stressBlockLastBuildPath)) return;
@@ -727,7 +727,7 @@ public class BudgetUIManager : MonoBehaviour
         if (File.Exists(afterPath)) File.Delete(afterPath);
 
         var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
-        SpawnerSystem.SaveLastBuildingSnapshot(em);
+        
 
         string stressBlockLastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
         if (!File.Exists(stressBlockLastBuildPath)) return;
