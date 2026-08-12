@@ -740,7 +740,8 @@ public static class GuideWireframeRenderer
             {
                 lineMat = new UnityEngine.Material(hiddenShader);
                 // ⭐ 벽이나 땅에 파묻혀도 무조건 보이게 투시(Always) 모드 적용
-                lineMat.SetInt("_ZTest", (int)UnityEngine.Rendering.CompareFunction.Always);
+                // ⭐ 추가: 유니티가 이 임시 핑크/초록 선을 에셋으로 보존하려다 에디터 혼자 뻗는 것을 원천 차단!
+                lineMat.hideFlags = HideFlags.HideAndDontSave;
             }
         }
 

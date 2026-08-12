@@ -1,3 +1,4 @@
+﻿// FILE: ReinforcementManager.cs
 ﻿using UnityEngine;
 using System.IO;
 using System.Collections.Generic;
@@ -23,8 +24,24 @@ public class ReinforcementManager : MonoBehaviour
         var lines = File.ReadAllLines(stressCsvPath).ToList();
         if (lines.Count <= 1) return;
 
+        // ⭐ [누적 보강 차수 배정] 새 보강이 몇 차인지는 Last_Building.csv에서 직접 계산합니다.
+        // Last_Building.csv는 엔티티의 ReinforcementBlockTag 컴포넌트에서 직접 뽑은 값이라 유일하게 신뢰할 수 있습니다.
+        // (CurrentStress.csv는 진동/충격파 테스트가 돌 때마다 Phase 컬럼 없이 통째로 덮어쓰이므로 여기서 읽으면 매번 0으로 리셋됩니다.)
+        int maxPhase = 0;
+        string lastBuildingPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+        if (File.Exists(lastBuildingPath))
+        {
+            var lastLines = File.ReadAllLines(lastBuildingPath);
+            for (int i = 1; i < lastLines.Length; i++)
+            {
+                var c = lastLines[i].Split(',');
+                if (c.Length > 12 && int.TryParse(c[12].Trim(), out int p) && p > maxPhase) maxPhase = p;
+            }
+        }
+        int nextPhase = maxPhase + 1;
+
         HashSet<string> existingBlocks = new HashSet<string>();
-        List<string> planLines = new List<string> { "BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type" };
+        List<string> planLines = new List<string> { "BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type,Phase" };
 
        for (int i = 1; i < lines.Count; i++)
         {
@@ -203,7 +220,7 @@ public class ReinforcementManager : MonoBehaviour
                         string tId = MakeId(cell.x, cell.z, exactY);
                         if (!existingBlocks.Contains(tId))
                         {
-                            planLines.Add($"{tId},{cell.x:F2},{exactY:F2},{cell.z:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement");
+                            planLines.Add($"{tId},{cell.x:F2},{exactY:F2},{cell.z:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
                             existingBlocks.Add(tId);
                         }
                     }
@@ -235,7 +252,7 @@ public class ReinforcementManager : MonoBehaviour
                         string tId = MakeId(ox, oz, exactY);
                         if (!existingBlocks.Contains(tId))
                         {
-                            planLines.Add($"{tId},{ox:F2},{exactY:F2},{oz:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement");
+                            planLines.Add($"{tId},{ox:F2},{exactY:F2},{oz:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
                             existingBlocks.Add(tId);
                         }
                     }
@@ -303,7 +320,7 @@ public class ReinforcementManager : MonoBehaviour
                         string tId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
                         if (!existingBlocks.Contains(tId))
                         {
-                            planLines.Add($"{tId},{towerX:F2},{ty:F2},{towerZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement");
+                            planLines.Add($"{tId},{towerX:F2},{ty:F2},{towerZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
                             existingBlocks.Add(tId);
                         }
 
@@ -318,7 +335,7 @@ public class ReinforcementManager : MonoBehaviour
                                 string bId = $"{(bix < 0f ? "-" : "0")}{Mathf.Abs(bix):000}_{(biz < 0f ? "-" : "0")}{Mathf.Abs(biz):000}_{(biy < 0f ? "-" : "0")}{Mathf.Abs(biy):000}";
                                 if (!existingBlocks.Contains(bId))
                                 {
-                                    planLines.Add($"{bId},{bridgeX:F2},{ty:F2},{bridgeZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement");
+                                    planLines.Add($"{bId},{bridgeX:F2},{ty:F2},{bridgeZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
                                     existingBlocks.Add(bId);
                                 }
                             }
@@ -356,7 +373,7 @@ public class ReinforcementManager : MonoBehaviour
 
                             if (!existingBlocks.Contains(targetId))
                             {
-                                planLines.Add($"{targetId},{targetX:F2},{exactY:F2},{targetZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement");
+                                planLines.Add($"{targetId},{targetX:F2},{exactY:F2},{targetZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
                                 existingBlocks.Add(targetId);
                             }
                         }
@@ -385,7 +402,7 @@ public class ReinforcementManager : MonoBehaviour
 
                                     if (!existingBlocks.Contains(targetId))
                                     {
-                                        planLines.Add($"{targetId},{interpX:F2},{exactY:F2},{interpZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement");
+                                        planLines.Add($"{targetId},{interpX:F2},{exactY:F2},{interpZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
                                         existingBlocks.Add(targetId);
                                     }
                                 }
@@ -429,7 +446,7 @@ public class ReinforcementManager : MonoBehaviour
 
                             if (!existingBlocks.Contains(targetId))
                             {
-                                planLines.Add($"{targetId},{targetX:F2},{exactY:F2},{targetZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement");
+                                planLines.Add($"{targetId},{targetX:F2},{exactY:F2},{targetZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
                                 existingBlocks.Add(targetId);
                             }
                         }
