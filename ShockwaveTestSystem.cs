@@ -345,6 +345,14 @@ public partial struct ShockwaveTestSystem : ISystem
             currentLines.Add(lineData);
         }
 
-        File.WriteAllLines(historyPath, currentLines); File.WriteAllLines(currentPath, currentLines);
+        string saveHistoryPath = historyPath;
+        string saveCurrentPath = currentPath;
+        System.Collections.Generic.List<string> linesToWrite = new System.Collections.Generic.List<string>(currentLines);
+
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            File.WriteAllLines(saveHistoryPath, linesToWrite);
+            File.WriteAllLines(saveCurrentPath, linesToWrite);
+        });
     }
 }
