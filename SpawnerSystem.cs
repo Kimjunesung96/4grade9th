@@ -14,18 +14,33 @@ public struct GhostBlockTag : IComponentData { }
 // ⭐ [누적 보강] 몇 번째 보강인지 기억하는 Phase 필드 추가!
 public struct ReinforcementBlockTag : IComponentData { public int Phase; } 
 
-[UpdateInGroup(typeof(SimulationSystemGroup))]
-public partial struct SpawnerSystem : ISystem
+// ⭐ 1. 여기에 관리형 데이터를 담을 C# 클래스를 새로 추가합니다!
+public static class SpawnerSharedData
 {
     public static System.Collections.Generic.List<float3> ExternalBlueprintData = new System.Collections.Generic.List<float3>();
     public static System.Collections.Generic.List<string> blueprintMaterials = new System.Collections.Generic.List<string>();
+    public static string targetLoadFile = "Reinforcement_Plan.csv";
+}
+
+[UpdateInGroup(typeof(SimulationSystemGroup))]
+public partial struct SpawnerSystem : ISystem
+{
+    // ⭐ 2. 지워진 빈 공간에 아래 프로퍼티(연결 고리)들을 채워 넣습니다!
+    public static System.Collections.Generic.List<float3> ExternalBlueprintData 
+    { get => SpawnerSharedData.ExternalBlueprintData; set => SpawnerSharedData.ExternalBlueprintData = value; }
+    
+    public static System.Collections.Generic.List<string> blueprintMaterials 
+    { get => SpawnerSharedData.blueprintMaterials; set => SpawnerSharedData.blueprintMaterials = value; }
+
+    public static string targetLoadFile 
+    { get => SpawnerSharedData.targetLoadFile; set => SpawnerSharedData.targetLoadFile = value; }
 
     public static bool isOMode = false;
     public static bool isLMode = false;
     public static bool isUMode = false;
     
     public static bool isAbsolutePositionMode = false;
-    public static string targetLoadFile = "Reinforcement_Plan.csv";
+
 
     public static bool isManualModeEnabled = true;
     public static bool isAimMoveEnabled = true;

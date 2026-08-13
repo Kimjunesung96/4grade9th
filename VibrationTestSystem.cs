@@ -21,8 +21,8 @@ public partial struct VibrationTestSystem : ISystem
     public static bool IsBModeActive = false;
     private bool isBMode; private int vibeLevel; private float actualVibePower;
     private bool isVibrating; private float vibeTimer;
-    public static bool IsSimulationRunning = false; // ⭐ 지진 시뮬레이션 진행 중 여부 (StressVisualizationSystem이 이걸 보고 영구삭제를 잠시 멈춤)
-    // ⭐ [설정 통합] 원본 하드코딩값(5.0f)은 fallback으로 유지, 있으면 SimulationSettings 값 사용
+    public static bool IsSimulationRunning = false; 
+    
     private static float MAX_VIBE_TIME => SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.vibrationMaxTime : 5.0f;
 
     private static readonly int3[] gridDirs = new int3[] { new int3(1, 0, 0), new int3(0, 0, 1), new int3(0, 1, 0) };
@@ -84,15 +84,13 @@ public partial struct VibrationTestSystem : ISystem
             var random = Unity.Mathematics.Random.CreateFromIndex((uint)(vibeTimer * 1000f + 1));
 
             float3 groundAccel = new float3(math.sin(vibeTimer * 10.0f) * actualVibePower, 0, 0);
-            foreach (var (transform, tracker, velocity, mass, color, entity) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<VibrationTracker>, RefRW<PhysicsVelocity>, RefRO<PhysicsMass>, RefRW<URPMaterialPropertyBaseColor>>().WithAll<BlockTag>().WithEntityAccess())
+            foreach (var (transform, tracker, velocity, color) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<VibrationTracker>, RefRW<PhysicsVelocity>, RefRW<URPMaterialPropertyBaseColor>>().WithAll<BlockTag>())
             {
                 float currentDist = math.distance(transform.ValueRO.Position, tracker.ValueRO.OriginalPos);
                 if (currentDist > tracker.ValueRW.MaxDisplacement) tracker.ValueRW.MaxDisplacement = currentDist;
 
                 if (vibeTimer > 0f)
                 {
-                    // ⭐ [지진 물리 개선] 1층(지면)은 완전히 고정 상태로 두고(속도 강제주입 X),
-                    // 위층 블록에만 "관성력"(질량 무관, 그냥 더하기)을 매 프레임 누적 적용 → 조인트가 자연스럽게 저항/전달
                     if (transform.ValueRO.Position.y > 3.1f)
                     {
                         velocity.ValueRW.Linear += groundAccel * SystemAPI.Time.DeltaTime;
@@ -111,7 +109,6 @@ public partial struct VibrationTestSystem : ISystem
                 Entity eA = jointPair.ValueRO.EntityA; 
                 Entity eB = jointPair.ValueRO.EntityB;
 
-                // ⭐ [에러 수정] 바닥(맨땅)과 용접되어 Entity.Null 상태인 조인트를 검사하려다 뻗는 현상 방지!
                 if (eA == Entity.Null || eB == Entity.Null) continue;
 
                 if (transLookup.HasComponent(eA) && transLookup.HasComponent(eB) &&
@@ -126,11 +123,9 @@ public partial struct VibrationTestSystem : ISystem
                     float stretch = math.distance(pivotA, pivotB);
                     if (stretch > 0.05f) 
                     {
-                        // ⭐ [설정 통합] 원본 하드코딩값(5000.0f)은 fallback으로 유지
                         float tensionScale = SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.TensionStressScale : 5000.0f;
                         float tensileStress = stretch * tensionScale; 
                         
-                        // ⭐ [재질 강도 영향 반영] 
                         float tensileDefense = (matA.TensileStiffness + matB.TensileStiffness) * 0.5f * math.max(0.1f, (10.0f - actualVibePower));
 
                         if (tensileStress > tensileDefense) 
@@ -153,7 +148,6 @@ public partial struct VibrationTestSystem : ISystem
 
                 foreach (var (transform, tracker, velocity, gravity, mass, color, mat, entity) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<VibrationTracker>, RefRW<PhysicsVelocity>, RefRW<PhysicsGravityFactor>, RefRW<PhysicsMass>, RefRW<URPMaterialPropertyBaseColor>, RefRO<BlockMaterial>>().WithAll<BlockTag>().WithEntityAccess())
                 {
-                    // ⭐ 도면의 본래 위치(ID 기반)로 강제 귀환! (공중분해 버그 원천 차단)
                     transform.ValueRW.Position = tracker.ValueRO.OriginalPos;
                     transform.ValueRW.Rotation = tracker.ValueRO.OriginalRot;
                     velocity.ValueRW.Linear = float3.zero;
@@ -165,7 +159,6 @@ public partial struct VibrationTestSystem : ISystem
                     float maxDisp = tracker.ValueRO.MaxDisplacement; 
                     string mName = mat.ValueRO.MaterialName.ToString();
 
-                    // ⭐ [색상 롤백] 스트레스 비주얼 모드와 똑같이 충격량 분수(t)로 부드러운 그라데이션 칠하기!
                     float4 baseCol = new float4(0.7f, 0.7f, 0.7f, 1.0f);
                     if (mName.Contains("Steel")) baseCol = new float4(0.2f, 0.5f, 1.0f, 1.0f); 
                     else if (mName.Contains("Wood") || mName.Contains("Timber")) baseCol = new float4(0.6f, 0.4f, 0.2f, 1.0f); 
@@ -181,9 +174,6 @@ public partial struct VibrationTestSystem : ISystem
                     ecb.RemoveComponent<VibrationTracker>(entity);
                 }
 
-                // ⭐ 버그 수정: 방금 지어서 VibrationTracker가 아직 안 붙은 블록은 위 루프에서 통째로
-                // 누락됨 → CurrentStress.csv에서 그대로 증발했었음. 추적 못 한 블록도 현재 위치/스트레스0
-                // (Safe)으로 최소한 기록은 남겨서 사라지지 않게 안전망을 깐다.
                 foreach (var (transform, mat, entity) in SystemAPI.Query<RefRO<LocalTransform>, RefRO<BlockMaterial>>().WithAll<BlockTag>().WithNone<VibrationTracker>().WithEntityAccess())
                 {
                     finalPositions.Add(transform.ValueRO.Position);
@@ -196,13 +186,11 @@ public partial struct VibrationTestSystem : ISystem
                 finalPositions.Dispose(); finalStresses.Dispose(); finalMaterials.Dispose();
                 ecb.Playback(state.EntityManager); ecb.Dispose();
 
-                // ⭐ [조인트 전면 재구성] 살아남은/끊어진 조인트 다 지우고, 현재(=복구된) 위치 기준으로 그리드 스캔해서 새로 싹 다 묶음
                 RebuildAllJoints(ref state);
             }
         }
     }
 
-    // ⭐ 3유닛 그리드 기준으로 인접한 블록들을 전부 다시 조인트로 묶는다 (O(N) 공간 해시, SpawnerSystem의 조인트 생성 로직과 동일한 방식)
     private void RebuildAllJoints(ref SystemState state)
     {
         var destroyEcb = new EntityCommandBuffer(Allocator.Temp);
@@ -229,7 +217,13 @@ public partial struct VibrationTestSystem : ISystem
 
         var buildEcb = new EntityCommandBuffer(Allocator.Temp);
         var keys = gridMap.GetKeyArray(Allocator.Temp);
+        
+        int3[] localGridDirs = new int3[] { new int3(1, 0, 0), new int3(0, 0, 1), new int3(0, 1, 0) };
+        float3[] localInternalDirs = new float3[] { new float3(1, 0, 0), new float3(0, 0, 1), new float3(0, 1, 0) };
+
         int newJointCount = 0;
+        
+        var matLookup = SystemAPI.GetComponentLookup<BlockMaterial>(true);
 
         for (int k = 0; k < keys.Length; k++)
         {
@@ -238,9 +232,9 @@ public partial struct VibrationTestSystem : ISystem
 
             for (int d = 0; d < 3; d++)
             {
-                if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor) && neighbor != cur)
+                if (gridMap.TryGetValue(key + localGridDirs[d], out Entity neighbor) && neighbor != cur)
                 {
-                    CreateMaterialJoint(ref buildEcb, ref state, cur, neighbor, internalDirs[d] * 3.0f);
+                    CreateMaterialJoint(ref buildEcb, ref matLookup, cur, neighbor, localInternalDirs[d] * 3.0f);
                     newJointCount++;
                 }
             }
@@ -251,24 +245,11 @@ public partial struct VibrationTestSystem : ISystem
         keys.Dispose();
         gridMap.Dispose();
         posMap.Dispose();
-
-        Debug.Log($"🔧 [조인트 전면 재구성] 기존 조인트 삭제 후 인접 블록 {newJointCount}쌍 재결합 완료!");
+        
+        UnityEngine.Debug.Log($"🔧 [조인트 전면 재구성] 기존 조인트 삭제 후 인접 블록 {newJointCount}쌍 재결합 완료!");
     }
 
-    private void CreateIndestructibleJoint(ref EntityCommandBuffer ecb, Entity entityA, Entity entityB, float3 offsetToB)
-    {
-        Entity jointEntity = ecb.CreateEntity();
-        ecb.AddSharedComponent(jointEntity, new PhysicsWorldIndex());
-        ecb.AddComponent<JointTag>(jointEntity);
-        ecb.AddComponent(jointEntity, new PhysicsConstrainedBodyPair(entityA, entityB, true));
-        ecb.AddComponent(jointEntity, PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f)));
-    }
-
-    // ⭐ [재질별 스프링 조인트] 완전 강체(Fixed) 대신, 인접한 두 블록의 재질을 평균 내서
-    //    SpringFrequency/SpringDamping을 적용한 "부드러운 고정" 조인트를 만든다.
-    //    RebuildAllJoints 시점엔 두 엔티티 모두 BlockMaterial이 이미 초기화되어 있어야 함
-    //    (스폰 직후 첫 프레임에 바로 호출되는 경로라면 0값 fallback으로 방어).
-    private void CreateMaterialJoint(ref EntityCommandBuffer ecb, ref SystemState state, Entity entityA, Entity entityB, float3 offsetToB)
+    private void CreateMaterialJoint(ref EntityCommandBuffer ecb, ref ComponentLookup<BlockMaterial> matLookup, Entity entityA, Entity entityB, float3 offsetToB)
     {
         Entity jointEntity = ecb.CreateEntity();
         ecb.AddSharedComponent(jointEntity, new PhysicsWorldIndex());
@@ -277,11 +258,12 @@ public partial struct VibrationTestSystem : ISystem
 
         var joint = PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f));
 
-        float freq = 30f, damp = 0.3f; // 재질 정보가 아직 없을 때의 방어용 fallback (기존 강체에 가까운 값)
-        if (state.EntityManager.HasComponent<BlockMaterial>(entityA) && state.EntityManager.HasComponent<BlockMaterial>(entityB))
+        float freq = 30f, damp = 0.3f; 
+        
+        if (matLookup.HasComponent(entityA) && matLookup.HasComponent(entityB))
         {
-            var matA = state.EntityManager.GetComponentData<BlockMaterial>(entityA);
-            var matB = state.EntityManager.GetComponentData<BlockMaterial>(entityB);
+            var matA = matLookup[entityA];
+            var matB = matLookup[entityB];
             if (matA.SpringFrequency > 0f && matB.SpringFrequency > 0f)
             {
                 freq = (matA.SpringFrequency + matB.SpringFrequency) * 0.5f;
@@ -293,7 +275,7 @@ public partial struct VibrationTestSystem : ISystem
         for (int i = 0; i < constraints.Length; i++)
         {
             var c = constraints[i];
-            if (c.Type == ConstraintType.Linear) // 늘어남(인장/압축) 방향만 스프링화. 각도(Angular) 구속은 그대로 강체 유지.
+            if (c.Type == ConstraintType.Linear) 
             {
                 c.SpringFrequency = freq;
                 c.DampingRatio = damp;
@@ -303,7 +285,7 @@ public partial struct VibrationTestSystem : ISystem
         joint.SetConstraints(constraints);
 
         ecb.AddComponent(jointEntity, joint);
-    }
+    }  
 
     private void SaveVibrationExcel(NativeList<float3> positions, NativeList<float> stresses, NativeList<FixedString32Bytes> materials)
     {
@@ -314,7 +296,6 @@ public partial struct VibrationTestSystem : ISystem
         string historyPath = Path.Combine(vibDir, "Vibration_All_" + dateStamp + ".csv");
         string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
 
-        // ⭐ [속성 보존 추가] 기존 장부를 먼저 읽어와서 기존에 보강재였던 녀석들을 뇌리에 각인!
         var toolMap = new System.Collections.Generic.Dictionary<string, string>();
         if (File.Exists(currentPath))
         {
@@ -326,8 +307,6 @@ public partial struct VibrationTestSystem : ISystem
             }
         }
 
-        // ⭐ [v와 동일하게 통일] CurrentStress.csv에는 아직 없는 신규 보강 블록도
-        // Reinforcement_Plan.csv에서 찾아서 태그를 확정한다. (b가 먼저 실행돼도 안전하게)
         string reinforcePath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
         if (File.Exists(reinforcePath))
         {
@@ -337,13 +316,11 @@ public partial struct VibrationTestSystem : ISystem
                 var c = rLines[i].Split(',');
                 if (c.Length < 12) continue;
                 string k = c[0];
-                // 이미 Reinforcement로 확정된 태그는 다른 값으로 덮어쓰지 않음 (v와 동일한 우선순위 규칙)
                 if (toolMap.TryGetValue(k, out var existingTag) && existingTag == "Reinforcement" && c[10] != "Reinforcement") continue;
                 toolMap[k] = c[10];
             }
         }
 
-        // ⭐ [v와 완전 동일화] Last_Building.csv까지 마저 병합 (StressVisualizationSystem과 3파일 소스 통일)
         string lastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
         if (File.Exists(lastBuildPath))
         {
@@ -370,7 +347,6 @@ public partial struct VibrationTestSystem : ISystem
             string strX = (ix < 0 ? "-" : "0") + math.abs(ix).ToString("000"); string strZ = (iz < 0 ? "-" : "0") + math.abs(iz).ToString("000"); string strY = (iy < 0 ? "-" : "0") + math.abs(iy).ToString("000");
             string id = strX + "_" + strZ + "_" + strY;
 
-            // ⭐ [기록용 로직] 2.0을 초과하면 posXYZ 칸에 "DESTROYED" 기록!
             string posX = stress >= 2.0f ? "DESTROYED" : pos.x.ToString("F2");
             string posY = stress >= 2.0f ? "DESTROYED" : pos.y.ToString("F2");
             string posZ = stress >= 2.0f ? "DESTROYED" : pos.z.ToString("F2");
@@ -383,6 +359,15 @@ public partial struct VibrationTestSystem : ISystem
             string lineData = id + "," + posX + "," + posY + "," + posZ + "," + stress.ToString("F2") + "," + risk + "," + pres + "," + mat + ",0.0,0.0," + toolTag + "," + typeStr;
             currentLines.Add(lineData);
         }
-        File.WriteAllLines(historyPath, currentLines); File.WriteAllLines(currentPath, currentLines);
+        
+        string saveHistoryPath = historyPath;
+        string saveCurrentPath = currentPath;
+        System.Collections.Generic.List<string> linesToWrite = new System.Collections.Generic.List<string>(currentLines);
+
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            File.WriteAllLines(saveHistoryPath, linesToWrite);
+            File.WriteAllLines(saveCurrentPath, linesToWrite);
+        });
     }
 }

@@ -327,7 +327,7 @@ public partial struct StressVisualizationSystem : ISystem
         RebuildAllJoints(ref state);
     }
 
-    private void RebuildAllJoints(ref SystemState state)
+private void RebuildAllJoints(ref SystemState state)
     {
         var destroyEcb = new EntityCommandBuffer(Allocator.Temp);
         foreach (var (pair, jointEntity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
@@ -354,8 +354,12 @@ public partial struct StressVisualizationSystem : ISystem
         var buildEcb = new EntityCommandBuffer(Allocator.Temp);
         var keys = gridMap.GetKeyArray(Allocator.Temp);
         
-        int3[] gridDirs = new int3[] { new int3(1, 0, 0), new int3(0, 0, 1), new int3(0, 1, 0) };
-        float3[] internalDirs = new float3[] { new float3(1, 0, 0), new float3(0, 0, 1), new float3(0, 1, 0) };
+        int3[] localGridDirs = new int3[] { new int3(1, 0, 0), new int3(0, 0, 1), new int3(0, 1, 0) };
+        float3[] localInternalDirs = new float3[] { new float3(1, 0, 0), new float3(0, 0, 1), new float3(0, 1, 0) };
+
+        int newJointCount = 0;
+        
+        var matLookup = SystemAPI.GetComponentLookup<BlockMaterial>(true);
 
         for (int k = 0; k < keys.Length; k++)
         {
@@ -364,9 +368,10 @@ public partial struct StressVisualizationSystem : ISystem
 
             for (int d = 0; d < 3; d++)
             {
-                if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor) && neighbor != cur)
+                if (gridMap.TryGetValue(key + localGridDirs[d], out Entity neighbor) && neighbor != cur)
                 {
-                    CreateMaterialJoint(ref buildEcb, ref state, cur, neighbor, internalDirs[d] * 3.0f);
+                    CreateMaterialJoint(ref buildEcb, ref matLookup, cur, neighbor, localInternalDirs[d] * 3.0f);
+                    newJointCount++;
                 }
             }
         }
@@ -376,19 +381,11 @@ public partial struct StressVisualizationSystem : ISystem
         keys.Dispose();
         gridMap.Dispose();
         posMap.Dispose();
+        
+        UnityEngine.Debug.Log($"🔧 [조인트 전면 재구성] 기존 조인트 삭제 후 인접 블록 {newJointCount}쌍 재결합 완료!");
     }
 
-    private void CreateIndestructibleJoint(ref EntityCommandBuffer ecb, Entity entityA, Entity entityB, float3 offsetToB)
-    {
-        Entity jointEntity = ecb.CreateEntity();
-        ecb.AddSharedComponent(jointEntity, new PhysicsWorldIndex());
-        ecb.AddComponent<JointTag>(jointEntity);
-        ecb.AddComponent(jointEntity, new PhysicsConstrainedBodyPair(entityA, entityB, true));
-        ecb.AddComponent(jointEntity, PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f)));
-    }
-
-    // ⭐ [재질별 스프링 조인트] VibrationTestSystem.CreateMaterialJoint와 동일 패턴
-    private void CreateMaterialJoint(ref EntityCommandBuffer ecb, ref SystemState state, Entity entityA, Entity entityB, float3 offsetToB)
+    private void CreateMaterialJoint(ref EntityCommandBuffer ecb, ref ComponentLookup<BlockMaterial> matLookup, Entity entityA, Entity entityB, float3 offsetToB)
     {
         Entity jointEntity = ecb.CreateEntity();
         ecb.AddSharedComponent(jointEntity, new PhysicsWorldIndex());
@@ -397,11 +394,12 @@ public partial struct StressVisualizationSystem : ISystem
 
         var joint = PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f));
 
-        float freq = 30f, damp = 0.3f;
-        if (state.EntityManager.HasComponent<BlockMaterial>(entityA) && state.EntityManager.HasComponent<BlockMaterial>(entityB))
+        float freq = 30f, damp = 0.3f; 
+        
+        if (matLookup.HasComponent(entityA) && matLookup.HasComponent(entityB))
         {
-            var matA = state.EntityManager.GetComponentData<BlockMaterial>(entityA);
-            var matB = state.EntityManager.GetComponentData<BlockMaterial>(entityB);
+            var matA = matLookup[entityA];
+            var matB = matLookup[entityB];
             if (matA.SpringFrequency > 0f && matB.SpringFrequency > 0f)
             {
                 freq = (matA.SpringFrequency + matB.SpringFrequency) * 0.5f;
@@ -413,7 +411,7 @@ public partial struct StressVisualizationSystem : ISystem
         for (int i = 0; i < constraints.Length; i++)
         {
             var c = constraints[i];
-            if (c.Type == ConstraintType.Linear)
+            if (c.Type == ConstraintType.Linear) 
             {
                 c.SpringFrequency = freq;
                 c.DampingRatio = damp;
@@ -423,7 +421,16 @@ public partial struct StressVisualizationSystem : ISystem
         joint.SetConstraints(constraints);
 
         ecb.AddComponent(jointEntity, joint);
+    }  private void CreateIndestructibleJoint(ref EntityCommandBuffer ecb, Entity entityA, Entity entityB, float3 offsetToB)
+    {
+        Entity jointEntity = ecb.CreateEntity();
+        ecb.AddSharedComponent(jointEntity, new PhysicsWorldIndex());
+        ecb.AddComponent<JointTag>(jointEntity);
+        ecb.AddComponent(jointEntity, new PhysicsConstrainedBodyPair(entityA, entityB, true));
+        ecb.AddComponent(jointEntity, PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f)));
     }
+
+    // ⭐ [재질별 스프링 조인트] VibrationTestSystem.CreateMaterialJoint와 동일 패턴
 
     private void ApplyFailureCheck(ref SystemState state)
     {
