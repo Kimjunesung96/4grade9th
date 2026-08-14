@@ -405,18 +405,12 @@ public class BudgetUIManager : MonoBehaviour
             if (cols.Length < 12) continue;
             
             string rawId = cols[0];
-            float px = float.Parse(rawId.Split('_')[0]) / 10f;
-            float pz = float.Parse(rawId.Split('_')[1]) / 10f;
-            float py = float.Parse(rawId.Split('_')[2]) / 10f;
-            
-            float snapX = Mathf.Floor((px - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-            float snapZ = Mathf.Floor((pz - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-            float snapY = Mathf.Floor((py - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-            
-            float ix = Mathf.Round((snapX + 0.001f) * 10f);
-            float iz = Mathf.Round((snapZ + 0.001f) * 10f);
-            float iy = Mathf.Round((snapY + 0.001f) * 10f);
-            string cleanId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
+            var idParts = rawId.Split('_');
+            float px = float.Parse(idParts[0]) / 10f;
+            float pz = float.Parse(idParts[1]) / 10f;
+            float py = float.Parse(idParts[2]) / 10f;
+
+            string cleanId = GridUtility.ToBlockID(px, py, pz);
 
             int phase = 0;
             if (cols.Length >= 13 && int.TryParse(cols[12].Trim(), out int p)) phase = p;

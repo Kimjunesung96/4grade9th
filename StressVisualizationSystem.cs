@@ -258,10 +258,7 @@ public partial struct StressVisualizationSystem : ISystem
                 //    이 값만 안 스냅되어 있어서 경계에서 다른 격자 ID로 계산됨. 캡처 시점에 미리
                 //    동일한 floor+0.5 공식으로 스냅해서, 살아있는 한 항상 같은 격자 ID를 가리키게 함.
                 float3 rawPos = transform.ValueRO.Position;
-                float3 snappedPos = new float3(
-                    math.floor((rawPos.x - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f,
-                    math.floor((rawPos.y - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f,
-                    math.floor((rawPos.z - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f);
+                float3 snappedPos = GridUtility.Snap(rawPos);
                 ecb.AddComponent(entity, new OriginalPosition { Value = snappedPos });
             }
 
@@ -496,11 +493,7 @@ private void RebuildAllJoints(ref SystemState state)
             if (compStress <= mat.ValueRO.CompressiveStiffness) continue;
 
             float3 originPos = pos.ValueRO.Value;
-            float ix = math.round(originPos.x * 10f); float iy = math.round(originPos.y * 10f); float iz = math.round(originPos.z * 10f);
-            string strX = (ix < 0f ? "-" : "0") + math.abs(ix).ToString("000");
-            string strZ = (iz < 0f ? "-" : "0") + math.abs(iz).ToString("000");
-            string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
-            string id = strX + "_" + strZ + "_" + strY;
+            string id = GridUtility.ToBlockID(originPos);
             string mName = mat.ValueRO.MaterialName.ToString().Replace("\0", "").Trim();
 
             string destroyedLineStr = id + "|" +
@@ -601,12 +594,7 @@ private void RebuildAllJoints(ref SystemState state)
           RefRO<BlockDisplacement>>())
         {
             float3 originPos = pos.ValueRO.Value;
-            float ix = math.round(originPos.x * 10f); float iy = math.round(originPos.y * 10f); float iz = math.round(originPos.z * 10f);
-
-            string strX = (ix < 0f ? "-" : "0") + math.abs(ix).ToString("000");
-            string strZ = (iz < 0f ? "-" : "0") + math.abs(iz).ToString("000");
-            string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
-            string id = strX + "_" + strZ + "_" + strY;
+            string id = GridUtility.ToBlockID(originPos);
 
             float3 p = disp.ValueRO.MaxDist > 0.0f ? disp.ValueRO.MaxPos : originPos;
 

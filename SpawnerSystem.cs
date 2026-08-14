@@ -541,42 +541,39 @@ public partial struct SpawnerSystem : ISystem
             }
         }
 
-        var query = em.CreateEntityQuery(ComponentType.ReadOnly<LocalTransform>(), ComponentType.ReadOnly<BlockMaterial>(), ComponentType.ReadOnly<BlockTag>());
-        var transforms = query.ToComponentDataArray<LocalTransform>(Allocator.Temp);
-        var mats = query.ToComponentDataArray<BlockMaterial>(Allocator.Temp);
+ var query = em.CreateEntityQuery(ComponentType.ReadOnly<LocalTransform>(), ComponentType.ReadOnly<BlockMaterial>(), ComponentType.ReadOnly<BlockTag>());
+        
+        // ⭐ [2번 문제 해결] 무거운 컴포넌트 배열 전체 복사(메모리 낭비) 방지! 
+        // 엔티티 참조 배열 하나만 가져온 뒤 직접 조회합니다.
         var entities = query.ToEntityArray(Allocator.Temp);
 
-        for (int i = 0; i < transforms.Length; i++)
+        for (int i = 0; i < entities.Length; i++)
         {
-            float3 pos = em.HasComponent<OriginalPosition>(entities[i])
-                ? em.GetComponentData<OriginalPosition>(entities[i]).Value
-                : transforms[i].Position;
+            Entity currentEntity = entities[i];
+            float3 pos = em.HasComponent<OriginalPosition>(currentEntity)
+                ? em.GetComponentData<OriginalPosition>(currentEntity).Value
+                : em.GetComponentData<LocalTransform>(currentEntity).Position;
 
-            float px = math.round((pos.x - 1.5f) / 3.0f) * 3.0f + 1.5f;
-            float py = math.round((pos.y - 1.5f) / 3.0f) * 3.0f + 1.5f;
-            float pz = math.round((pos.z - 1.5f) / 3.0f) * 3.0f + 1.5f;
+            float3 snappedPos = GridUtility.Snap(pos);
+            
+            float px = snappedPos.x;
+            float py = snappedPos.y;
+            float pz = snappedPos.z;
 
             string typeStr = py > 1.5f ? "Wall" : "Floor";
+            string realId = GridUtility.ToBlockID(snappedPos);
 
-            float ix = math.round(px * 10f);
-            float iy = math.round(py * 10f);
-            float iz = math.round(pz * 10f);
-            string strX = (ix < 0f ? "-" : "0") + math.abs(ix).ToString("000");
-            string strZ = (iz < 0f ? "-" : "0") + math.abs(iz).ToString("000");
-            string strY = (iy < 0f ? "-" : "0") + math.abs(iy).ToString("000");
-            string realId = $"{strX}_{strZ}_{strY}";
-
-            // ⭐ 오직 컴포넌트(신분증)만 믿고 Phase와 Tool 태그를 기록합니다!
             int phase = 0;
             string toolTag = "Existing";
-            if (em.HasComponent<ReinforcementBlockTag>(entities[i]))
+            if (em.HasComponent<ReinforcementBlockTag>(currentEntity))
             {
                 toolTag = "Reinforcement";
-                phase = em.GetComponentData<ReinforcementBlockTag>(entities[i]).Phase;
+                phase = em.GetComponentData<ReinforcementBlockTag>(currentEntity).Phase;
             }
 
-            // ⭐ 씬의 옛날 재질 대신, 예산 매니저가 엑셀에 적어둔 최신 재질을 우선 적용합니다!
-            string matName = matMap.ContainsKey(realId) ? matMap[realId] : mats[i].MaterialName.ToString().Replace("\0", "").Trim();
+            // ⭐ 직접 컴포넌트를 조회하여 순간적인 메모리 폭발(GC 스파이크) 억제
+            var mat = em.GetComponentData<BlockMaterial>(currentEntity);
+            string matName = matMap.ContainsKey(realId) ? matMap[realId] : mat.MaterialName.ToString().Replace("\0", "").Trim();
 
             string lineData = realId + "," +
                               px.ToString("F2") + "," +
@@ -585,18 +582,23 @@ public partial struct SpawnerSystem : ISystem
                               "0.00,Safe,N," + matName + ",0.0,0.0," + toolTag + "," + typeStr + "," + phase;
 
             found = true;
-            originalOnlyCsv.AppendLine(lineData); // ⭐ 누락 없이 모든 블록을 스냅샷에 보존!
+            originalOnlyCsv.AppendLine(lineData); 
         }
 
-        transforms.Dispose();
-        mats.Dispose();
         entities.Dispose();
 
         if (found)
         {
             string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
-            if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
-            File.WriteAllText(path, originalOnlyCsv.ToString());
+            string csvContent = originalOnlyCsv.ToString(); // 백그라운드 스레드로 넘기기 위해 미리 문자열로 추출
+            
+            // ⭐ [1번 문제 해결] 메인 스레드 렉(프리징) 방지를 위한 비동기 백그라운드 저장
+            System.Threading.Tasks.Task.Run(() => 
+            {
+                if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
+                File.WriteAllText(path, csvContent);
+                UnityEngine.Debug.Log("💾 [백그라운드 저장 완료] 스냅샷 기록을 완료했습니다!");
+            });
         }
     }
     private void ExecuteBuild(ref SystemState state, SpawnerData data, float3 actualStart, float3 actualEnd, float targetY, Entity hitEntity, bool isGhost)

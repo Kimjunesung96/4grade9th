@@ -134,15 +134,6 @@ public class BlueprintManager : MonoBehaviour
 
     public string VectorToID(Vector3 pos)
     {
-        // ⭐ 십장님 훈수 반영: ID 생성 규칙 스포너/스트레스 측정기들과 완벽 통일
-        float ix = Mathf.Round(pos.x * 10f);
-        float iy = Mathf.Round(pos.y * 10f);
-        float iz = Mathf.Round(pos.z * 10f);
-
-        string strX = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}";
-        string strZ = $"{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}";
-        string strY = $"{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
-
-        return $"{strX}_{strZ}_{strY}";
+        return GridUtility.ToBlockID(pos);
     }
 }

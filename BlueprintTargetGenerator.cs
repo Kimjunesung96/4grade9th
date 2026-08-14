@@ -531,8 +531,8 @@ public class BlueprintTargetGenerator : MonoBehaviour
 
                     float rawX = float.Parse(fixedCols[1], CultureInfo.InvariantCulture);
                     float rawZ = float.Parse(fixedCols[3], CultureInfo.InvariantCulture);
-                    float x = math.round((rawX - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                    float z = math.round((rawZ - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                    float x = GridUtility.Snap(rawX);
+                    float z = GridUtility.Snap(rawZ);
 
                     float yOffset = i * 15.0f;
                     float y = float.Parse(fixedCols[2], CultureInfo.InvariantCulture) + yOffset;
@@ -565,15 +565,7 @@ public class BlueprintTargetGenerator : MonoBehaviour
 
     private string GetBlockID(float3 pos)
     {
-        float ix = math.round(pos.x * 10f);
-        float iy = math.round(pos.y * 10f);
-        float iz = math.round(pos.z * 10f);
-
-        string strX = (ix < 0 ? "-" : "0") + math.abs(ix).ToString("000");
-        string strZ = (iz < 0 ? "-" : "0") + math.abs(iz).ToString("000");
-        string strY = (iy < 0 ? "-" : "0") + math.abs(iy).ToString("000");
-
-        return $"{strX}_{strZ}_{strY}";
+        return GridUtility.ToBlockID(pos);
     }
 
     private void SaveListToCSV(List<float3> blocks, string path)
@@ -616,9 +608,9 @@ public class BlueprintTargetGenerator : MonoBehaviour
                 string[] cols = lines[i].Split(',').ToArray();
                 if (cols.Length >= 4 && !cols[0].Contains("ID"))
                 {
-                    float x = math.round((float.Parse(cols[1], CultureInfo.InvariantCulture) - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                    float y = math.round((float.Parse(cols[2], CultureInfo.InvariantCulture) - 1.5f) / 3.0f) * 3.0f + 1.5f;
-                    float z = math.round((float.Parse(cols[3], CultureInfo.InvariantCulture) - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                    float x = GridUtility.Snap(float.Parse(cols[1], CultureInfo.InvariantCulture));
+                    float y = GridUtility.Snap(float.Parse(cols[2], CultureInfo.InvariantCulture));
+                    float z = GridUtility.Snap(float.Parse(cols[3], CultureInfo.InvariantCulture));
                     rawList.Add(new float3(x, y, z));
                 }
             }
@@ -642,8 +634,8 @@ public class BlueprintTargetGenerator : MonoBehaviour
             if (p.z < minZ) minZ = p.z;
             if (p.z > maxZ) maxZ = p.z;
         }
-        float centerX = math.round(((minX + maxX) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
-        float centerZ = math.round(((minZ + maxZ) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
+        float centerX = GridUtility.Snap((minX + maxX) / 2f);
+        float centerZ = GridUtility.Snap((minZ + maxZ) / 2f);
 
         List<float3> centeredData = new List<float3>();
         foreach (var p in rawData) centeredData.Add(new float3(p.x - centerX, p.y, p.z - centerZ));

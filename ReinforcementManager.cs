@@ -1,4 +1,3 @@
-﻿// FILE: ReinforcementManager.cs
 ﻿using UnityEngine;
 using System.IO;
 using System.Collections.Generic;
@@ -24,9 +23,6 @@ public class ReinforcementManager : MonoBehaviour
         var lines = File.ReadAllLines(stressCsvPath).ToList();
         if (lines.Count <= 1) return;
 
-        // ⭐ [누적 보강 차수 배정] 새 보강이 몇 차인지는 Last_Building.csv에서 직접 계산합니다.
-        // Last_Building.csv는 엔티티의 ReinforcementBlockTag 컴포넌트에서 직접 뽑은 값이라 유일하게 신뢰할 수 있습니다.
-        // (CurrentStress.csv는 진동/충격파 테스트가 돌 때마다 Phase 컬럼 없이 통째로 덮어쓰이므로 여기서 읽으면 매번 0으로 리셋됩니다.)
         int maxPhase = 0;
         string lastBuildingPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
         if (File.Exists(lastBuildingPath))
@@ -43,36 +39,23 @@ public class ReinforcementManager : MonoBehaviour
         HashSet<string> existingBlocks = new HashSet<string>();
         List<string> planLines = new List<string> { "BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type,Phase" };
 
-       for (int i = 1; i < lines.Count; i++)
+        for (int i = 1; i < lines.Count; i++)
         {
             string currentLine = lines.ElementAt(i);
             
-            // ⭐ 이 부분이 실수로 지워지면 cols 에러가 납니다!
             var cols = currentLine.Split(',').ToList();
             if (cols.Count < 12) continue;
-
-            // ⭐ [구멍 버그 수정] 파괴된 블록도 빈 공간이 아닌 '존재하는 블록'으로 인식하게 만듦
-            string riskLevel = cols.Count > 5 ? cols[5].Trim() : "";
-            // bool isDestroyed = riskLevel.EndsWith("_Destroyed");
-            // if (isDestroyed) continue; 
 
             string id = cols.ElementAt(0);
             float px = float.Parse(id.Split('_')[0]) / 10f;
             float pz = float.Parse(id.Split('_')[1]) / 10f;
             float py = float.Parse(id.Split('_')[2]) / 10f;
 
-            // ⭐ 스포너와 완벽히 동일한 사사오입(Floor + 0.5f) 방식으로 통일
-            float snapX = Mathf.Floor((px - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-            float snapZ = Mathf.Floor((pz - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-            float snapY = Mathf.Floor((py - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-            
-            float ix = Mathf.Round((snapX + 0.001f) * 10f);
-            float iz = Mathf.Round((snapZ + 0.001f) * 10f);
-            float iy = Mathf.Round((snapY + 0.001f) * 10f);
-            string cleanId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
-
+            // ⭐ 중앙화된 GridUtility 사용
+            string cleanId = GridUtility.ToBlockID(px, py, pz);
             existingBlocks.Add(cleanId);
         }
+        
         bool shouldReinforce = true;
         int currentMode = 1; 
 
@@ -87,9 +70,6 @@ public class ReinforcementManager : MonoBehaviour
 
         if (shouldReinforce)
         {
-            // ⭐ 마의 구간 탈출: 은행원 반올림(Round) 대신 진짜 반올림(Floor + 0.5f) 적용!
-            float Snap(float val) => Mathf.Floor((val - 1.5f) / 3.0f + 0.5f) * 3.0f + 1.5f;
-
             List<(Vector3 pos, bool isDanger)> flaggedPoints = new List<(Vector3 pos, bool isDanger)>();
             List<Vector3> quakePoints = new List<Vector3>();
 
@@ -114,20 +94,6 @@ public class ReinforcementManager : MonoBehaviour
 
             if (quakePoints.Count > 0 && currentMode == 1)
             {
-                // ⭐⭐⭐ [모드1: 신규 로직] ⭐⭐⭐
-                // 1. Quake_Danger/Quake_Destroyed 블록 둘레 한 칸 바깥에 벽 후보 계산
-                // 2. 원점(0,0)에서 가까운 순 정렬 -> 한 칸 짓고 한 칸 스킵 (안쪽까지 다 메우면 과보강이라 건너뜀)
-                // 3. 지어지는 자리는 바닥(1.5)부터 인접 위험블록 높이까지 통기둥
-                // 4. 후처리: 위험블록에서 5 이상 떨어지고, 파랑끼리도 5~7 사이 거리인 경우 그 사이를 브릿지로 메움
-                string MakeId(float x, float z, float y)
-                {
-                    float ix = Mathf.Round((x + 0.001f) * 10f);
-                    float iz = Mathf.Round((z + 0.001f) * 10f);
-                    float iy = Mathf.Round((y + 0.001f) * 10f);
-                    return $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
-                }
-
-                // 위험(Quake) 셀 수집: (ix,iz) 그리드 정수키 -> 해당 컬럼 최고 높이(raw*10)
                 Dictionary<(int ix, int iz), int> redCells = new Dictionary<(int, int), int>();
                 foreach (var p in quakePoints)
                 {
@@ -138,8 +104,7 @@ public class ReinforcementManager : MonoBehaviour
                     if (!redCells.ContainsKey(key) || rawY > redCells[key]) redCells[key] = rawY;
                 }
 
-                // 둘레(perimeter) 후보: 빨강의 4방향 이웃 중 빨강이 아닌 칸만
-                int step = 30; // 3.0 유닛 * 10
+                int step = 30;
                 int[] dxArr = { step, -step, 0, 0 };
                 int[] dzArr = { 0, 0, step, -step };
                 Dictionary<(int ix, int iz), int> perimeter = new Dictionary<(int, int), int>();
@@ -156,11 +121,6 @@ public class ReinforcementManager : MonoBehaviour
                     }
                 }
 
-                // 둘레를 실제로 도는 순서로 정렬 (그리디 최근접 이웃 워크)
-                // - 시작점: 원점에서 가장 가까운 칸
-                // - 이후: 아직 안 지나간 칸 중 가장 가까운 칸으로 계속 이동
-                // 이렇게 하면 "한 칸 짓고 한 칸 스킵"이 둘레를 따라 고르게 퍼져서
-                // 별도의 브릿지 보정 없이도 균일한 점선 패턴이 나옴
                 var remaining = perimeter
                     .Select(kv => (x: kv.Key.ix / 10f, z: kv.Key.iz / 10f, rawY: kv.Value))
                     .ToList();
@@ -197,27 +157,28 @@ public class ReinforcementManager : MonoBehaviour
                     }
                 }
 
-                // 한 칸 짓고 한 칸 스킵 (링을 따라가는 순서로, 모서리는 항상 지음)
                 HashSet<int> cornerIdx = new HashSet<int>();
                 for (int i = 1; i < ringOrder.Count - 1; i++)
                 {
                     Vector2 dirPrev = new Vector2(ringOrder[i].x - ringOrder[i - 1].x, ringOrder[i].z - ringOrder[i - 1].z).normalized;
                     Vector2 dirNext = new Vector2(ringOrder[i + 1].x - ringOrder[i].x, ringOrder[i + 1].z - ringOrder[i].z).normalized;
-                    if (Vector2.Dot(dirPrev, dirNext) < 0.99f) cornerIdx.Add(i); // 방향이 바뀌는 지점 = 모서리
+                    if (Vector2.Dot(dirPrev, dirNext) < 0.99f) cornerIdx.Add(i);
                 }
+                
                 bool build = true;
                 for (int i = 0; i < ringOrder.Count; i++)
                 {
                     var cell = ringOrder[i];
                     bool isCorner = cornerIdx.Contains(i);
 
-                    if (!build && !isCorner) { build = true; continue; } // 직선 구간 스킵
-                    if (!isCorner) build = false; // 모서리가 아니면 정상적으로 토글
+                    if (!build && !isCorner) { build = true; continue; } 
+                    if (!isCorner) build = false; 
 
                     for (int ty = 15; ty <= cell.rawY; ty += 30)
                     {
                         float exactY = ty / 10f;
-                        string tId = MakeId(cell.x, cell.z, exactY);
+                        // ⭐ 중앙화된 GridUtility 사용
+                        string tId = GridUtility.ToBlockID(cell.x, exactY, cell.z);
                         if (!existingBlocks.Contains(tId))
                         {
                             planLines.Add($"{tId},{cell.x:F2},{exactY:F2},{cell.z:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
@@ -226,7 +187,6 @@ public class ReinforcementManager : MonoBehaviour
                     }
                 }
 
-                // ⭐ 2단계: 1단계 테두리 바깥으로 한 칸 더, 이번엔 스킵 없이 촘촘하게 둘러쌈
                 Dictionary<(int ix, int iz), int> outerPerimeter = new Dictionary<(int, int), int>();
                 foreach (var kv in perimeter)
                 {
@@ -235,7 +195,7 @@ public class ReinforcementManager : MonoBehaviour
                     for (int d = 0; d < 4; d++)
                     {
                         var nKey = (px + dxArr[d], pz + dzArr[d]);
-                        if (redCells.ContainsKey(nKey) || perimeter.ContainsKey(nKey)) continue; // 빨강이나 1단계 테두리는 제외
+                        if (redCells.ContainsKey(nKey) || perimeter.ContainsKey(nKey)) continue; 
                         if (!outerPerimeter.ContainsKey(nKey) || height > outerPerimeter[nKey]) outerPerimeter[nKey] = height;
                     }
                 }
@@ -249,7 +209,8 @@ public class ReinforcementManager : MonoBehaviour
                     for (int ty = 15; ty <= oHeight; ty += 30)
                     {
                         float exactY = ty / 10f;
-                        string tId = MakeId(ox, oz, exactY);
+                        // ⭐ 중앙화된 GridUtility 사용
+                        string tId = GridUtility.ToBlockID(ox, exactY, oz);
                         if (!existingBlocks.Contains(tId))
                         {
                             planLines.Add($"{tId},{ox:F2},{exactY:F2},{oz:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
@@ -260,7 +221,6 @@ public class ReinforcementManager : MonoBehaviour
             }
             else if (quakePoints.Count > 0 && currentMode == 2)
             {
-                // ⭐ [모드2: 기존 로직 그대로] 타워 세우고 벽으로 연결
                 float minX = 9999f, minZ = 9999f, maxX = -9999f, maxZ = -9999f;
                 foreach (var id in existingBlocks)
                 {
@@ -289,17 +249,15 @@ public class ReinforcementManager : MonoBehaviour
                     if (Mathf.Abs(dir.x) >= Mathf.Abs(dir.y)) dir = new Vector2(Mathf.Sign(dir.x), 0f);
                     else dir = new Vector2(0f, Mathf.Sign(dir.y));
 
-                    // ⭐ [관통 버그 수정] 고정 12칸이 아니라, 실제로 원본과 안 겹치는(비어있는) 자리를
-                    // 3칸 단위로 늘려가며 찾음. (오목한 건물 형태에서 12칸 지점이 여전히 건물 안쪽일 수 있음)
-                    float towerX = Snap(p.x + dir.x * 12.0f);
-                    float towerZ = Snap(p.z + dir.y * 12.0f);
+                    // ⭐ 중앙화된 GridUtility 사용
+                    float towerX = GridUtility.Snap(p.x + dir.x * 12.0f);
+                    float towerZ = GridUtility.Snap(p.z + dir.y * 12.0f);
                     for (float dist = 3.0f; dist <= 30.0f; dist += 3.0f)
                     {
-                        float tryX = Snap(p.x + dir.x * dist);
-                        float tryZ = Snap(p.z + dir.y * dist);
-                        float baseIx = Mathf.Round((tryX + 0.001f) * 10f);
-                        float baseIz = Mathf.Round((tryZ + 0.001f) * 10f);
-                        string baseId = $"{(baseIx < 0f ? "-" : "0")}{Mathf.Abs(baseIx):000}_{(baseIz < 0f ? "-" : "0")}{Mathf.Abs(baseIz):000}_0015";
+                        float tryX = GridUtility.Snap(p.x + dir.x * dist);
+                        float tryZ = GridUtility.Snap(p.z + dir.y * dist);
+                        
+                        string baseId = GridUtility.ToBlockID(tryX, 1.5f, tryZ);
                         if (!existingBlocks.Contains(baseId))
                         {
                             towerX = tryX; towerZ = tryZ;
@@ -316,8 +274,8 @@ public class ReinforcementManager : MonoBehaviour
 
                     for (float ty = 1.5f; ty <= targetY; ty += 3.0f)
                     {
-                        float ix = Mathf.Round((towerX + 0.001f) * 10f); float iz = Mathf.Round((towerZ + 0.001f) * 10f); float iy = Mathf.Round((ty + 0.001f) * 10f);
-                        string tId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
+                        // ⭐ 중앙화된 GridUtility 사용
+                        string tId = GridUtility.ToBlockID(towerX, ty, towerZ);
                         if (!existingBlocks.Contains(tId))
                         {
                             planLines.Add($"{tId},{towerX:F2},{ty:F2},{towerZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
@@ -329,10 +287,10 @@ public class ReinforcementManager : MonoBehaviour
                         {
                             for (int s = 1; s < steps; s++)
                             {
-                                float bridgeX = Snap(wallX + (dx * s / steps));
-                                float bridgeZ = Snap(wallZ + (dz * s / steps));
-                                float bix = Mathf.Round((bridgeX + 0.001f) * 10f); float biz = Mathf.Round((bridgeZ + 0.001f) * 10f); float biy = Mathf.Round((ty + 0.001f) * 10f);
-                                string bId = $"{(bix < 0f ? "-" : "0")}{Mathf.Abs(bix):000}_{(biz < 0f ? "-" : "0")}{Mathf.Abs(biz):000}_{(biy < 0f ? "-" : "0")}{Mathf.Abs(biy):000}";
+                                float bridgeX = GridUtility.Snap(wallX + (dx * s / steps));
+                                float bridgeZ = GridUtility.Snap(wallZ + (dz * s / steps));
+                                
+                                string bId = GridUtility.ToBlockID(bridgeX, ty, bridgeZ);
                                 if (!existingBlocks.Contains(bId))
                                 {
                                     planLines.Add($"{bId},{bridgeX:F2},{ty:F2},{bridgeZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
@@ -367,10 +325,11 @@ public class ReinforcementManager : MonoBehaviour
                         
                         foreach (var offset in crossOffsets)
                         {
-                            float targetX = Snap(cleanX + offset.x); float targetZ = Snap(cleanZ + offset.z);
-                            float ix = Mathf.Round((targetX + 0.001f) * 10f); float iz = Mathf.Round((targetZ + 0.001f) * 10f); float iy = currentY;
-                            string targetId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
-
+                            // ⭐ 중앙화된 GridUtility 사용
+                            float targetX = GridUtility.Snap(cleanX + offset.x); 
+                            float targetZ = GridUtility.Snap(cleanZ + offset.z);
+                            
+                            string targetId = GridUtility.ToBlockID(targetX, exactY, targetZ);
                             if (!existingBlocks.Contains(targetId))
                             {
                                 planLines.Add($"{targetId},{targetX:F2},{exactY:F2},{targetZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
@@ -396,10 +355,11 @@ public class ReinforcementManager : MonoBehaviour
                                 for (int s = 1; s < 4; s++) 
                                 {
                                     Vector2 interpXZ = Vector2.Lerp(colA, colB, (float)s / 4);
-                                    float interpX = Snap(interpXZ.x); float interpZ = Snap(interpXZ.y);
-                                    float ix = Mathf.Round((interpX + 0.001f) * 10f); float iz = Mathf.Round((interpZ + 0.001f) * 10f); float iy = meshY;
-                                    string targetId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
-
+                                    // ⭐ 중앙화된 GridUtility 사용
+                                    float interpX = GridUtility.Snap(interpXZ.x); 
+                                    float interpZ = GridUtility.Snap(interpXZ.y);
+                                    
+                                    string targetId = GridUtility.ToBlockID(interpX, exactY, interpZ);
                                     if (!existingBlocks.Contains(targetId))
                                     {
                                         planLines.Add($"{targetId},{interpX:F2},{exactY:F2},{interpZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");
@@ -440,10 +400,11 @@ public class ReinforcementManager : MonoBehaviour
 
                         foreach (var offset in offsets)
                         {
-                            float targetX = Snap(currentXZ.x + offset.x); float targetZ = Snap(currentXZ.y + offset.z);
-                            float ix = Mathf.Round((targetX + 0.001f) * 10f); float iz = Mathf.Round((targetZ + 0.001f) * 10f); float iy = currentY;
-                            string targetId = $"{(ix < 0f ? "-" : "0")}{Mathf.Abs(ix):000}_{(iz < 0f ? "-" : "0")}{Mathf.Abs(iz):000}_{(iy < 0f ? "-" : "0")}{Mathf.Abs(iy):000}";
-
+                            // ⭐ 중앙화된 GridUtility 사용
+                            float targetX = GridUtility.Snap(currentXZ.x + offset.x); 
+                            float targetZ = GridUtility.Snap(currentXZ.y + offset.z);
+                            
+                            string targetId = GridUtility.ToBlockID(targetX, exactY, targetZ);
                             if (!existingBlocks.Contains(targetId))
                             {
                                 planLines.Add($"{targetId},{targetX:F2},{exactY:F2},{targetZ:F2},0.00,Safe,N,{reinforceMat},0.0,0.0,Reinforcement,Reinforcement,{nextPhase}");

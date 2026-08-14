@@ -343,9 +343,9 @@ public partial struct VibrationTestSystem : ISystem
         for (int i = 0; i < positions.Length; i++)
         {
             float3 pos = positions[i]; float stress = stresses[i]; string mat = materials[i].ToString();
-            float ix = math.round(pos.x * 10f); float iz = math.round(pos.z * 10f); float iy = math.round(pos.y * 10f);
-            string strX = (ix < 0 ? "-" : "0") + math.abs(ix).ToString("000"); string strZ = (iz < 0 ? "-" : "0") + math.abs(iz).ToString("000"); string strY = (iy < 0 ? "-" : "0") + math.abs(iy).ToString("000");
-            string id = strX + "_" + strZ + "_" + strY;
+
+            // ⭐ GridUtility를 사용한 클린 ID 포맷팅
+            string id = GridUtility.ToBlockID(pos);
 
             string posX = stress >= 2.0f ? "DESTROYED" : pos.x.ToString("F2");
             string posY = stress >= 2.0f ? "DESTROYED" : pos.y.ToString("F2");
