@@ -162,9 +162,9 @@ public partial struct StressVisualizationSystem : ISystem
         for (int i = 0; i < allPositions.Length; i++)
         {
             int3 gridPos = new int3(
-                (int)math.floor(allPositions[i].x / 3.0f),
-                (int)math.floor(allPositions[i].y / 3.0f),
-                (int)math.floor(allPositions[i].z / 3.0f));
+                (int)math.floor(allPositions[i].x / 3.0f + 0.5f),
+                (int)math.floor(allPositions[i].y / 3.0f + 0.5f),
+                (int)math.floor(allPositions[i].z / 3.0f + 0.5f));
             gridMap.TryAdd(gridPos, i);
         }
 
@@ -184,9 +184,9 @@ public partial struct StressVisualizationSystem : ISystem
         {
             float3 myPos = allPositions[i];
             int3 myGrid = new int3(
-                (int)math.floor(myPos.x / 3.0f),
-                (int)math.floor(myPos.y / 3.0f),
-                (int)math.floor(myPos.z / 3.0f));
+                (int)math.floor(myPos.x / 3.0f + 0.5f),
+                (int)math.floor(myPos.y / 3.0f + 0.5f),
+                (int)math.floor(myPos.z / 3.0f + 0.5f));
 
             bool hasNeighbor = false;
             for (int n = 0; n < 6; n++)
@@ -212,18 +212,22 @@ public partial struct StressVisualizationSystem : ISystem
         gridMap.Dispose();
         neighborOffsets.Dispose();
 
-        foreach (var (jointPair, entity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
-        {
-            if (badEntities.Contains(jointPair.ValueRO.EntityA) || badEntities.Contains(jointPair.ValueRO.EntityB))
-            {
-                ecb.DestroyEntity(entity);
-            }
-        }
+        // ⭐ [조인트 파괴도 완전 제거 - 2026-08-15 수정]
+        // badEntity 판정 자체가 floor() 격자 버킷팅의 부동소수점 오차 때문에 오탐이 잦았음
+        // (회전/로드 직후 좌표가 1.5 기준 격자에 정확히 안 맞으면 특정 열 전체가 통째로
+        //  "고립"으로 오판됨). 블록 삭제는 이미 막아놨었는데 조인트 삭제는 여기 그대로
+        // 남아있어서, 오판된 열의 조인트가 끊기고 → 물리가 그 열을 통째로 날려버려
+        // 건물이 세로 기둥 단위로 쪼개지고 사이에 빈 간격이 생기는 버그의 실제 원인이었음.
+        // 블록 삭제와 동일하게 조인트 삭제도 완전히 비활성화한다.
+        // (badCount는 로그로만 남기고 실제 조인트에는 손대지 않음)
 
         if (badCount > 0)
         {
-            UnityEngine.Debug.LogWarning($"[안전 스폰] 진단 시작: 폭발 유발 블록 및 고립된 파편 {badCount}개 (및 관련 조인트) 자동 삭제 완료!");
+            UnityEngine.Debug.LogWarning($"[안전 스캔] 진단: 고립처럼 보이는 블록 {badCount}개 감지 (더 이상 조인트를 끊지 않음)");
         }
+
+        // (여기 있던 badEntities 기반 조인트 삭제 foreach 블록 완전히 제거함 - 오탐으로 인한
+        //  기둥 분리 버그의 원인이었음)
 
         foreach (var (jointPair, joint, entity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>, RefRO<PhysicsJoint>>().WithAll<JointTag>().WithEntityAccess())
         {
@@ -314,12 +318,12 @@ public partial struct StressVisualizationSystem : ISystem
             gravity.ValueRW.Value = 0.0f; velocity.ValueRW.Linear = float3.zero; velocity.ValueRW.Angular = float3.zero;
             transform.ValueRW.Position = originalPos.ValueRO.Value;
             transform.ValueRW.Rotation = quaternion.identity;
-            
+
             // ⭐ [물리 폭발 완벽 방지] 복구 시 무조건 Kinematic(0)으로 묶어버려야 합니다!
             mass.ValueRW.InverseMass = 0.0f;
             mass.ValueRW.InverseInertia = float3.zero;
         }
-        
+
         // ⭐ [물리 폭발 완벽 방지] 끊어졌던 조인트를 다시 복구해주어야 폭발하지 않습니다!
         RebuildAllJoints(ref state);
     }
@@ -350,12 +354,12 @@ private void RebuildAllJoints(ref SystemState state)
 
         var buildEcb = new EntityCommandBuffer(Allocator.Temp);
         var keys = gridMap.GetKeyArray(Allocator.Temp);
-        
+
         int3[] localGridDirs = new int3[] { new int3(1, 0, 0), new int3(0, 0, 1), new int3(0, 1, 0) };
         float3[] localInternalDirs = new float3[] { new float3(1, 0, 0), new float3(0, 0, 1), new float3(0, 1, 0) };
 
         int newJointCount = 0;
-        
+
         var matLookup = SystemAPI.GetComponentLookup<BlockMaterial>(true);
 
         for (int k = 0; k < keys.Length; k++)
@@ -378,7 +382,7 @@ private void RebuildAllJoints(ref SystemState state)
         keys.Dispose();
         gridMap.Dispose();
         posMap.Dispose();
-        
+
         UnityEngine.Debug.Log($"🔧 [조인트 전면 재구성] 기존 조인트 삭제 후 인접 블록 {newJointCount}쌍 재결합 완료!");
     }
 
@@ -391,8 +395,8 @@ private void RebuildAllJoints(ref SystemState state)
 
         var joint = PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f));
 
-        float freq = 30f, damp = 0.3f; 
-        
+        float freq = 30f, damp = 0.3f;
+
         if (matLookup.HasComponent(entityA) && matLookup.HasComponent(entityB))
         {
             var matA = matLookup[entityA];
@@ -408,7 +412,7 @@ private void RebuildAllJoints(ref SystemState state)
         for (int i = 0; i < constraints.Length; i++)
         {
             var c = constraints[i];
-            if (c.Type == ConstraintType.Linear) 
+            if (c.Type == ConstraintType.Linear)
             {
                 c.SpringFrequency = freq;
                 c.DampingRatio = damp;
@@ -435,13 +439,13 @@ private void RebuildAllJoints(ref SystemState state)
 
         var transformLookup = SystemAPI.GetComponentLookup<LocalTransform>(true);
         var materialLookup = SystemAPI.GetComponentLookup<BlockMaterial>(true);
-        var stressLookup = SystemAPI.GetComponentLookup<BlockStress>(false); 
+        var stressLookup = SystemAPI.GetComponentLookup<BlockStress>(false);
 
         foreach (var (jointPair, joint, rest, jointEntity) in SystemAPI.Query<
           RefRO<PhysicsConstrainedBodyPair>, RefRO<PhysicsJoint>, RefRO<JointRestLength>>().WithAll<JointTag>().WithEntityAccess())
         {
             Entity eA = jointPair.ValueRO.EntityA; Entity eB = jointPair.ValueRO.EntityB;
-            
+
             if (!transformLookup.HasComponent(eA) || !transformLookup.HasComponent(eB)) continue;
             if (!materialLookup.HasComponent(eA) || !materialLookup.HasComponent(eB)) continue;
 

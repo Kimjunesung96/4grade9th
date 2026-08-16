@@ -1,5 +1,4 @@
-﻿// FILE: BlueprintTargetGenerator.cs
-using UnityEngine;
+﻿using UnityEngine;
 using System.IO;
 using System.Collections.Generic;
 using System.Text;
@@ -535,7 +534,10 @@ public class BlueprintTargetGenerator : MonoBehaviour
                     float z = GridUtility.Snap(rawZ);
 
                     float yOffset = i * 15.0f;
-                    float y = float.Parse(fixedCols[2], CultureInfo.InvariantCulture) + yOffset;
+                    // ⭐ [구조적 수정] X/Z만 스냅하고 Y는 원시값을 그대로 쓰던 문제 수정.
+                    // 소스 CSV의 Y가 정확히 격자에 맞지 않으면(외부 파이프라인 결과물 등)
+                    // 블록이 격자 사이 높이에 떠서 배치되는 원인이 됨.
+                    float y = GridUtility.Snap(float.Parse(fixedCols[2], CultureInfo.InvariantCulture) + yOffset);
 
                     finalStackedData.Add(new float3(x, y, z));
 
@@ -558,8 +560,15 @@ public class BlueprintTargetGenerator : MonoBehaviour
             Debug.LogError($"🚨 [파일 에러] 파일이 잠겨있습니다. ({e.Message})");
         }
 
-        currentScannedData = finalStackedData;
-        SpawnerSystem.ExternalBlueprintData = finalStackedData;
+        // ⭐ [핵심 구조 수정] LoadLastBuildingForUMode()는 CenterDataToOffset()을 거치는데
+        // 여기(O키 경로)는 그 단계가 빠져서 CSV의 "절대좌표"가 그대로
+        // SpawnerSystem.ExternalBlueprintData(= "클릭 지점 기준 상대 오프셋"으로 소비됨)에
+        // 들어가고 있었음. 그 결과 클릭한 위치가 아니라 (클릭 위치 + CSV 절대좌표)에
+        // 생성되고, 회전(Q/E)도 원점 기준으로 돌아서 모양이 어긋나 보였던 것.
+        // finalStackedData 자체(절대좌표)는 CurrentStress.csv 기록용으로 그대로 두고,
+        // 실제 배치용 데이터만 센터링해서 넘김.
+        currentScannedData = CenterDataToOffset(finalStackedData);
+        SpawnerSystem.ExternalBlueprintData = currentScannedData;
         selectedFloors.Clear();
     }
 
