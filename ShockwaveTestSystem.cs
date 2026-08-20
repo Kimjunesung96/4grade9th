@@ -318,28 +318,39 @@ public partial struct ShockwaveTestSystem : ISystem
             }
         }
 
-        var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
+var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
 
-        System.Collections.Generic.List<string> currentLines = new System.Collections.Generic.List<string>();
-        currentLines.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
+// 🆕 [바닥/벽 2-pass 필터] 폭발 전 원본 배치 기준으로 미리 판정
+var allBlocksForFloorCheck = new System.Collections.Generic.List<(float x, float y, float z, string id)>();
+var existingBlocksForFloorCheck = new System.Collections.Generic.HashSet<string>();
+for (int fi = 0; fi < positions.Length; fi++)
+{
+    float3 fp = positions[fi];
+    string fid = GridUtility.ToBlockID(fp);
+    allBlocksForFloorCheck.Add((fp.x, fp.y, fp.z, fid));
+    existingBlocksForFloorCheck.Add(fid);
+}
+var floorSet = GridUtility.ComputeFloorBlocks(allBlocksForFloorCheck, existingBlocksForFloorCheck);
+
+System.Collections.Generic.List<string> currentLines = new System.Collections.Generic.List<string>();
+currentLines.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
 
         for (int i = 0; i < positions.Length; i++)
         {
-            float3 pos = positions[i]; float stress = stresses[i]; string mat = materials[i].ToString();
-            float ix = math.round(pos.x * 10f); float iz = math.round(pos.z * 10f); float iy = math.round(pos.y * 10f);
-            string strX = (ix < 0 ? "-" : "0") + math.abs(ix).ToString("000"); string strZ = (iz < 0 ? "-" : "0") + math.abs(iz).ToString("000"); string strY = (iy < 0 ? "-" : "0") + math.abs(iy).ToString("000");
-            string id = strX + "_" + strZ + "_" + strY;
+float3 pos = positions[i]; float stress = stresses[i]; string mat = materials[i].ToString();
+// ⭐ [정리] 수동 문자열 조립 대신 GridUtility.ToBlockID로 통일 (GridMath 중앙화 원칙과 동일)
+string id = GridUtility.ToBlockID(pos);
 
-            // ⭐ 엑셀에 파괴된 블록 좌표를 DESTROYED로 기록하도록 통일!
-            string posX = stress >= 2.0f ? "DESTROYED" : pos.x.ToString("F2");
-            string posY = stress >= 2.0f ? "DESTROYED" : pos.y.ToString("F2");
-            string posZ = stress >= 2.0f ? "DESTROYED" : pos.z.ToString("F2");
+// ⭐ 엑셀에 파괴된 블록 좌표를 DESTROYED로 기록하도록 통일!
+string posX = stress >= 2.0f ? "DESTROYED" : pos.x.ToString("F2");
+string posY = stress >= 2.0f ? "DESTROYED" : pos.y.ToString("F2");
+string posZ = stress >= 2.0f ? "DESTROYED" : pos.z.ToString("F2");
 
-            // ⭐ 폭발 전용 라벨로 분리!
-            string risk = stress >= 2.0f ? "Explosion_Destroyed" : (stress >= 0.5f ? "Explosion_Danger" : "Safe"); 
-            string pres = stress >= 2.0f ? "Y" : (stress >= 0.5f ? "Y" : "N");
-            string typeStr = pos.y > 1.5f ? "Wall" : "Floor";
-            string toolTag = toolMap.ContainsKey(id) ? toolMap[id] : (bpManager != null ? bpManager.GetToolName(id) : "Existing");
+// ⭐ 폭발 전용 라벨로 분리!
+string risk = stress >= 2.0f ? "Explosion_Destroyed" : (stress >= 0.5f ? "Explosion_Danger" : "Safe");
+string pres = stress >= 2.0f ? "Y" : (stress >= 0.5f ? "Y" : "N");
+string toolTag = toolMap.ContainsKey(id) ? toolMap[id] : (bpManager != null ? bpManager.GetToolName(id) : "Existing");
+string typeStr = toolTag == "Reinforcement" ? "Reinforcement" : (floorSet.Contains(id) ? "Floor" : "Wall");
 
             string lineData = id + "," + posX + "," + posY + "," + posZ + "," + stress.ToString("F2") + "," + risk + "," + pres + "," + mat + ",0.0,0.0," + toolTag + "," + typeStr;
             currentLines.Add(lineData);

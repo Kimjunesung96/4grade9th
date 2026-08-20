@@ -82,8 +82,9 @@ public class BudgetUIManager : MonoBehaviour
             ExecuteRemoveReinforcements();
         }
 
-        // ⭐ G키(확정)나 R키(철거)를 누르면 0.1초(아주 빠릿하게) 뒤에 영수증을 갱신합니다!
-        if (Input.GetKeyDown(KeyCode.G) || Input.GetKeyDown(KeyCode.R))
+        // ⭐ G키(확정), R키(철거) 뿐만 아니라 V(응력), B(진동), N(폭발) 테스트 시에도 영수증을 갱신합니다!
+        if (Input.GetKeyDown(KeyCode.G) || Input.GetKeyDown(KeyCode.R) || 
+            Input.GetKeyDown(KeyCode.V) || Input.GetKeyDown(KeyCode.B) || Input.GetKeyDown(KeyCode.N))
         {
             Invoke(nameof(CalculateCurrentCosts), 0.1f);
         }
@@ -226,9 +227,9 @@ public class BudgetUIManager : MonoBehaviour
 
         GUILayout.BeginHorizontal();
         GUI.backgroundColor = selectedTab == 0 ? Color.white : Color.gray;
-        if (GUILayout.Button("벽 + 지붕", GUILayout.Height(40))) selectedTab = 0;
+        if (GUILayout.Button("벽", GUILayout.Height(40))) selectedTab = 0;
         GUI.backgroundColor = selectedTab == 1 ? Color.white : Color.gray;
-        if (GUILayout.Button("바닥", GUILayout.Height(40))) selectedTab = 1;
+        if (GUILayout.Button("바닥+지붕", GUILayout.Height(40))) selectedTab = 1;
         GUI.backgroundColor = Color.white;
         GUILayout.EndHorizontal();
 

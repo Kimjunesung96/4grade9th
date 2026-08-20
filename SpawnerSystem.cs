@@ -148,6 +148,14 @@ public partial struct SpawnerSystem : ISystem
         }
 
         bool isBMode = VibrationTestSystem.IsBModeActive; bool isNMode = ShockwaveTestSystem.IsNModeActive;
+
+        // 🌟 U모드(도면 불러오기/미리보기) 중에 숫자키(1~5)를 누르면 U모드를 풀어준다.
+        //    안 풀어주면 아래 isAnySpecialMode 때문에 숫자키를 포함한 모든 일반 조작이 막힌 채로 고정돼버림.
+        if (isUMode && (Input.GetKeyDown(KeyCode.Alpha1) || Input.GetKeyDown(KeyCode.Alpha2) || Input.GetKeyDown(KeyCode.Alpha3) || Input.GetKeyDown(KeyCode.Alpha4) || Input.GetKeyDown(KeyCode.Alpha5)))
+        {
+            isUMode = false;
+        }
+
         bool isAnySpecialMode = isOMode || isLMode || isYMode || isUMode;
 
         if (isAimMoveEnabled && !isBMode && !isNMode)
@@ -209,6 +217,21 @@ public partial struct SpawnerSystem : ISystem
                 var posMap = new NativeHashMap<Entity, float3>((int)countF, Allocator.Temp);
                 var matNameMap = new NativeHashMap<Entity, FixedString32Bytes>((int)countF, Allocator.Temp);
 
+                // 🌟 [전체 평행이동 Y 보정 - 사전 패스] 기둥별로 쪼개서 계산하면 구조물의 원래 형태
+                //    (기울어짐, 계단식 등)가 깨질 수 있다. 대신 이번 배치 전체에서 가장 낮은 Y값
+                //    하나만 찾아서, 그만큼을 모든 블록에서 동일하게 빼는(=평행이동) 방식으로
+                //    바꾼다. CSV 원점이 어디로 이동해 있든 구조물 형태는 그대로 유지한 채
+                //    가장 낮은 블록이 정확히 1층 바닥(1.5)에 오도록 통째로 들어올린다.
+                float minYOffset = float.MaxValue;
+                for (int pre = 0; pre < (int)countF; pre++)
+                {
+                    float peekY = isYMode
+                        ? blueprintOffsets.ElementAt(pre).y
+                        : ExternalBlueprintData.ElementAt(pre).y;
+                    if (peekY < minYOffset) minYOffset = peekY;
+                }
+                float yShift = minYOffset - 1.5f; // 이 값을 모든 블록의 Y에서 빼면 최저 블록이 1.5로 옴
+
                 for (int i = 0; i < (int)countF; i++)
                 {
                     float3 posOffset;
@@ -224,6 +247,10 @@ public partial struct SpawnerSystem : ISystem
                     {
                         posOffset = ExternalBlueprintData.ElementAt(i);
                     }
+
+                    // 🌟 [전체 평행이동 Y 보정 - 적용] 모든 블록에서 동일하게 yShift만큼 빼서
+                    //    구조물 형태는 그대로 두고 통째로 바닥에 맞춰 들어올린다.
+                    posOffset.y -= yShift;
 
                     float3 finalPos = baseCenter + posOffset;
 
@@ -346,6 +373,11 @@ public partial struct SpawnerSystem : ISystem
                         isOMode = false;
                         isLMode = false;
                         isUMode = false;
+
+                        // 🌟 O/L/U모드로 실제 시공했을 때도 스냅샷이 갱신되도록 추가.
+                        //    이게 없으면 Last_Building.csv가 예전(Y모드/드래그 시공 때) 상태로
+                        //    멈춰있어서, 방금 O+G로 지은 결과가 아니라 옛날 데이터가 남아있게 된다.
+                        backupIDToQuery = 1f;
                     }
 
                     nextStructureID += 1f;
