@@ -1,4 +1,6 @@
 using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
 using System;
 using System.IO;
 using System.Collections.Generic;
@@ -11,36 +13,44 @@ public class BudgetUIManager : MonoBehaviour
     public static BudgetUIManager Instance;
 
     public static int yKeyState = 0;
-    private bool showPanel = false;
 
-    private int selectedTab = 0;
+    [Header("UGUI 연결 (에디터에서 드래그 앤 드롭)")]
+    public GameObject mainPanel; // 메인 설정 창
+    public GameObject receiptPanel; // 영수증 창
+    public TextMeshProUGUI receiptText; // 영수증 텍스트
 
-    private bool wallIsWood = false;
-    private string selectedWallMaterial = "";
-
-    private bool floorIsWood = false;
-    private string selectedFloorMaterial = "";
-
-    private string budgetInput = "500000";
-    private string floorCountInput = "1";
-    public bool wantsReinforcement = false;
+    [Header("입력 및 선택 UI")]
+    public TMP_InputField budgetInput;
+    public TMP_InputField floorCountInput;
+    public TMP_Dropdown wallMaterialDropdown;
+    public TMP_Dropdown floorMaterialDropdown;
     
+    [Header("보강 설정 UI")]
+    public Toggle wantsReinforcementToggle;
+    public TMP_Dropdown reinforcementModeDropdown; // 0: 많이(격자), 1: 적게(우산)
+    public TMP_Dropdown reinforcementMaterialDropdown;
+
+    [Header("버튼 UI")]
+    public Button btnJustReinforce;
+    public Button btnConfirm;
+    public Button btnCheap;
+    public Button btnExpensive;
+    public Button btnUndo;
+    public Button btnClearAll;
+
     private bool pendingRemoveReinforcements = false;
-    
     private bool isCheapON = false;
     private bool isExpensiveON = false;
 
-    private List<string> woodMaterials = new List<string>();
-    private List<string> nonWoodMaterials = new List<string>();
-
-    private Vector2 wallScrollPos = Vector2.zero;
-    private Vector2 floorScrollPos = Vector2.zero;
+    // ⭐ 이 줄을 꼭 추가해 주세요!
+    public bool wantsReinforcement = false;
 
     private string csvPath;
     private string metaPath;
 
     public int reinforcementMode = 1; 
     public string reinforcementMaterial = "H_Beam";
+    private List<string> allMaterials = new List<string>();
     private static readonly string[] reinforcementMaterialOptions = new string[] { "H_Beam" };
 
     private Dictionary<int, float> phaseCosts = new Dictionary<int, float>();
@@ -70,19 +80,62 @@ public class BudgetUIManager : MonoBehaviour
     {
         csvPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
         metaPath = Path.Combine(Application.dataPath, "StressBlock", "Budget_Meta.csv");
+        
         LoadMaterialLists();
         CalculateCurrentCosts();
+        SetupUIEvents();
+
+        if (mainPanel) mainPanel.SetActive(false);
+        UpdateReceiptUI();
     }
 
-    void Update()
+    private void SetupUIEvents()
     {
+        if (btnJustReinforce) btnJustReinforce.onClick.AddListener(OnJustReinforce);
+        if (btnConfirm) btnConfirm.onClick.AddListener(OnConfirm);
+        if (btnUndo) btnUndo.onClick.AddListener(UndoLastReinforcement);
+        if (btnClearAll) btnClearAll.onClick.AddListener(() => pendingRemoveReinforcements = true);
+        
+        if (btnCheap) btnCheap.onClick.AddListener(() => {
+            isCheapON = !isCheapON;
+            if (isCheapON) isExpensiveON = false;
+            UpdateToggleButtonColors();
+        });
+
+        if (btnExpensive) btnExpensive.onClick.AddListener(() => {
+            isExpensiveON = !isExpensiveON;
+            if (isExpensiveON) isCheapON = false;
+            UpdateToggleButtonColors();
+        });
+
+        if (wantsReinforcementToggle) wantsReinforcementToggle.onValueChanged.AddListener((val) => {
+            reinforcementModeDropdown.interactable = val;
+            reinforcementMaterialDropdown.interactable = val;
+        });
+
+        UpdateToggleButtonColors();
+    }
+
+    private void UpdateToggleButtonColors()
+    {
+        if (btnCheap) btnCheap.GetComponent<Image>().color = isCheapON ? new Color(0.6f, 1f, 0.6f) : Color.white;
+        if (btnExpensive) btnExpensive.GetComponent<Image>().color = isExpensiveON ? new Color(1f, 0.85f, 0.4f) : Color.white;
+    }
+
+void Update()
+    {
+        // ⭐ 이 세 줄을 추가합니다! DOTS 상태와 무관하게 UI 매니저가 직접 Y키를 감지합니다.
+        if (Input.GetKeyDown(KeyCode.Y))
+        {
+            OnYKeyPressed();
+        }
+
         if (pendingRemoveReinforcements)
         {
             pendingRemoveReinforcements = false;
             ExecuteRemoveReinforcements();
         }
 
-        // ⭐ G키(확정), R키(철거) 뿐만 아니라 V(응력), B(진동), N(폭발) 테스트 시에도 영수증을 갱신합니다!
         if (Input.GetKeyDown(KeyCode.G) || Input.GetKeyDown(KeyCode.R) || 
             Input.GetKeyDown(KeyCode.V) || Input.GetKeyDown(KeyCode.B) || Input.GetKeyDown(KeyCode.N))
         {
@@ -90,11 +143,10 @@ public class BudgetUIManager : MonoBehaviour
         }
     }
 
-    // ⭐ [반응속도 해결] 엉뚱한 장부 대신, G키가 즉각 반영되는 Last_Building.csv를 읽습니다!
     void CalculateCurrentCosts()
     {
         string targetCsv = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
-        if (!File.Exists(targetCsv)) targetCsv = csvPath; // 없으면 예비로 CurrentStress 사용
+        if (!File.Exists(targetCsv)) targetCsv = csvPath; 
         if (!File.Exists(targetCsv)) return;
         
         try 
@@ -111,7 +163,7 @@ public class BudgetUIManager : MonoBehaviour
             for (int i = 1; i < lines.Length; i++)
             {
                 var cols = lines[i].Split(',');
-                if (cols.Length < 8) continue; // 최소 길이 방어
+                if (cols.Length < 8) continue;
 
                 string matName = cols[7].Trim();
                 int phase = 0;
@@ -138,27 +190,61 @@ public class BudgetUIManager : MonoBehaviour
             phaseCosts = tempPhaseCosts;
             totalCost = tempTotal;
             currentMaxPhase = tempMaxPhase;
+
+            UpdateReceiptUI();
         } 
-        catch (Exception) { /* 0.1초 딜레이 중 파일 쓰기 충돌 방어 */ }
+        catch (Exception) { }
+    }
+
+    void UpdateReceiptUI()
+    {
+        if (receiptPanel == null || receiptText == null) return;
+
+        if (totalCost > 0)
+        {
+            receiptPanel.SetActive(true);
+            string text = $"뼈대(원본): <color=#AADDFF>{originalCost:N0} 원</color>\n";
+            for (int i = 1; i <= currentMaxPhase; i++)
+            {
+                if (phaseCosts.ContainsKey(i))
+                {
+                    text += $"{i}차 보강: <color=#FFAAAA>{phaseCosts[i]:N0} 원</color>\n";
+                }
+            }
+            text += $"\n<color=yellow><b>총 누적 예산: {totalCost:N0} 원</b></color>";
+            receiptText.text = text;
+        }
+        else
+        {
+            receiptPanel.SetActive(false);
+        }
     }
 
     void LoadMaterialLists()
     {
-        woodMaterials.Clear();
-        nonWoodMaterials.Clear();
+        allMaterials.Clear();
         if (MaterialDataManager.Instance == null) return;
 
         foreach (var kv in MaterialDataManager.Instance.MaterialDict)
         {
-            string name = kv.Key.ToLower();
-            if (name.Contains("wood") || name.Contains("timber")) woodMaterials.Add(kv.Key);
-            else nonWoodMaterials.Add(kv.Key);
+            allMaterials.Add(kv.Key);
         }
 
-        if (string.IsNullOrEmpty(selectedWallMaterial) && nonWoodMaterials.Count > 0)
-            selectedWallMaterial = nonWoodMaterials.First();
-        if (string.IsNullOrEmpty(selectedFloorMaterial) && nonWoodMaterials.Count > 0)
-            selectedFloorMaterial = nonWoodMaterials.First();
+        if (wallMaterialDropdown)
+        {
+            wallMaterialDropdown.ClearOptions();
+            wallMaterialDropdown.AddOptions(allMaterials);
+        }
+        if (floorMaterialDropdown)
+        {
+            floorMaterialDropdown.ClearOptions();
+            floorMaterialDropdown.AddOptions(allMaterials);
+        }
+        if (reinforcementMaterialDropdown)
+        {
+            reinforcementMaterialDropdown.ClearOptions();
+            reinforcementMaterialDropdown.AddOptions(reinforcementMaterialOptions.ToList());
+        }
     }
 
     public void OnYKeyPressed()
@@ -166,14 +252,14 @@ public class BudgetUIManager : MonoBehaviour
         yKeyState = (yKeyState + 1) % 3;
         if (yKeyState == 0)
         {
-            showPanel = false;
+            if (mainPanel) mainPanel.SetActive(false);
             SpawnerSystem.isUMode = false;
             SpawnerSystem.isOMode = false;
             SpawnerSystem.isLMode = false;
         }
         else if (yKeyState == 1)
         {
-            showPanel = false;
+            if (mainPanel) mainPanel.SetActive(false);
             SpawnerSystem.isUMode = true;
             var gen = FindFirstObjectByType<BlueprintTargetGenerator>();
             if (gen != null) gen.LoadLastBuildingForUMode();
@@ -181,211 +267,14 @@ public class BudgetUIManager : MonoBehaviour
         else if (yKeyState == 2)
         {
             SpawnerSystem.isUMode = false;
-            showPanel = true;
+            if (mainPanel) mainPanel.SetActive(true);
             isCheapON = false;
             isExpensiveON = false;
+            UpdateToggleButtonColors();
             LoadMaterialLists();
         }
     }
 
-    public void SetReinforcementModeMany() { reinforcementMode = 1; }
-    public void SetReinforcementModeFew() { reinforcementMode = 2; }
-
-    void OnGUI()
-    {
-        if (totalCost > 0)
-        {
-            float receiptW = 240f;
-            float receiptH = 75f + (currentMaxPhase * 25f);
-            float receiptX = Screen.width - receiptW - 20f;
-            float receiptY = 20f;
-
-            GUILayout.BeginArea(new Rect(receiptX, receiptY, receiptW, receiptH), "🧾 누적 공사 비용", GUI.skin.window);
-            GUILayout.Space(5);
-            GUILayout.Label($"뼈대(원본): <color=#AADDFF>{originalCost:N0} 원</color>", new GUIStyle(GUI.skin.label) { richText = true });
-            
-            for (int i = 1; i <= currentMaxPhase; i++)
-            {
-                if (phaseCosts.ContainsKey(i))
-                {
-                    GUILayout.Label($"{i}차 보강: <color=#FFAAAA>{phaseCosts[i]:N0} 원</color>", new GUIStyle(GUI.skin.label) { richText = true });
-                }
-            }
-            GUILayout.Space(5);
-            GUILayout.Label($"<color=yellow><b>총 누적 예산: {totalCost:N0} 원</b></color>", new GUIStyle(GUI.skin.label) { richText = true });
-            GUILayout.EndArea();
-        }
-
-        if (!showPanel) return;
-
-        float panelW = 860f;
-        float panelH = 580f;
-        float panelX = (Screen.width - panelW) / 2f;
-        float panelY = (Screen.height - panelH) / 2f;
-
-        GUILayout.BeginArea(new Rect(panelX, panelY, panelW, panelH), GUI.skin.box);
-
-        GUILayout.BeginHorizontal();
-        GUI.backgroundColor = selectedTab == 0 ? Color.white : Color.gray;
-        if (GUILayout.Button("벽", GUILayout.Height(40))) selectedTab = 0;
-        GUI.backgroundColor = selectedTab == 1 ? Color.white : Color.gray;
-        if (GUILayout.Button("바닥+지붕", GUILayout.Height(40))) selectedTab = 1;
-        GUI.backgroundColor = Color.white;
-        GUILayout.EndHorizontal();
-
-        GUILayout.Space(6);
-
-        if (selectedTab == 0) DrawMaterialTab(ref wallIsWood, ref selectedWallMaterial, ref wallScrollPos, "벽+지붕");
-        else DrawMaterialTab(ref floorIsWood, ref selectedFloorMaterial, ref floorScrollPos, "바닥");
-
-        GUILayout.Space(8);
-        GUILayout.Box("", GUILayout.ExpandWidth(true), GUILayout.Height(1));
-        GUILayout.Space(4);
-
-        GUILayout.BeginHorizontal();
-        GUILayout.Label("층수", GUILayout.Width(50));
-        floorCountInput = GUILayout.TextField(floorCountInput, GUILayout.Width(60));
-        GUILayout.Label("(스크롤 복사)", GUILayout.Width(100));
-        GUILayout.Space(20);
-        GUILayout.Label("보강재", GUILayout.Width(60));
-
-        GUI.backgroundColor = wantsReinforcement ? Color.cyan : Color.gray;
-        if (GUILayout.Button("YES", GUILayout.Width(70))) wantsReinforcement = true;
-
-        GUI.backgroundColor = !wantsReinforcement ? Color.cyan : Color.gray;
-        if (GUILayout.Button("NO", GUILayout.Width(70))) wantsReinforcement = false;
-
-        GUI.backgroundColor = Color.white;
-        GUILayout.EndHorizontal();
-
-        if (wantsReinforcement)
-        {
-            GUILayout.Space(4);
-            GUILayout.BeginHorizontal();
-            GUILayout.Space(230); 
-            GUILayout.Label("보강 모드", GUILayout.Width(65));
-            
-            GUI.backgroundColor = (reinforcementMode == 1) ? new Color(1f, 0.6f, 0.6f) : Color.gray;
-            if (GUILayout.Button("많이 [격자]", GUILayout.Width(80))) reinforcementMode = 1;
-            
-            GUI.backgroundColor = (reinforcementMode == 2) ? new Color(0.6f, 0.8f, 1f) : Color.gray;
-            if (GUILayout.Button("적게 [우산]", GUILayout.Width(80))) reinforcementMode = 2;
-            
-            GUI.backgroundColor = Color.white;
-            GUILayout.EndHorizontal();
-
-            GUILayout.Space(4);
-            GUILayout.BeginHorizontal();
-            GUILayout.Space(230);
-            GUILayout.Label("보강재질", GUILayout.Width(65));
-
-            foreach (string matOption in reinforcementMaterialOptions)
-            {
-                GUI.backgroundColor = (reinforcementMaterial == matOption) ? new Color(0.6f, 1f, 0.6f) : Color.gray;
-                if (GUILayout.Button(matOption, GUILayout.Width(80))) reinforcementMaterial = matOption;
-            }
-
-            GUI.backgroundColor = Color.white;
-            GUILayout.EndHorizontal();
-        }
-
-        GUILayout.FlexibleSpace(); 
-
-        GUILayout.BeginHorizontal();
-
-        GUILayout.BeginVertical();
-        GUILayout.Space(25);
-        GUI.backgroundColor = new Color(0.4f, 0.8f, 0.4f);
-        if (GUILayout.Button("just보강", GUILayout.Height(55), GUILayout.Width(130))) OnJustReinforce();
-        GUILayout.EndVertical();
-
-        GUILayout.FlexibleSpace();
-
-        GUILayout.BeginVertical();
-        GUILayout.BeginHorizontal();
-        GUILayout.FlexibleSpace();
-        GUILayout.Label("자동 측정 예산 (원):", GUILayout.Width(130));
-        budgetInput = GUILayout.TextField(budgetInput, GUILayout.Width(170));
-        GUILayout.FlexibleSpace();
-        GUILayout.EndHorizontal();
-
-        GUILayout.Space(5);
-
-        GUILayout.BeginHorizontal();
-        GUI.backgroundColor = isCheapON ? new Color(0.6f, 1f, 0.6f) : Color.gray;
-        if (GUILayout.Button(isCheapON ? "싸게 [자동 ON]\n최소 안전 확보" : "싸게 [OFF]", GUILayout.Height(50), GUILayout.Width(150)))
-        {
-            isCheapON = !isCheapON;
-            if (isCheapON) isExpensiveON = false;
-        }
-        GUI.backgroundColor = isExpensiveON ? new Color(1f, 0.85f, 0.4f) : Color.gray;
-        if (GUILayout.Button(isExpensiveON ? "비싸게 [자동 ON]\n예산 내 최고 강도" : "비싸게 [OFF]", GUILayout.Height(50), GUILayout.Width(150)))
-        {
-            isExpensiveON = !isExpensiveON;
-            if (isExpensiveON) isCheapON = false;
-        }
-        GUILayout.EndHorizontal();
-        GUILayout.EndVertical();
-
-        GUILayout.FlexibleSpace();
-
-        GUILayout.BeginVertical();
-        GUILayout.Space(12);
-        GUI.backgroundColor = new Color(1f, 0.6f, 0.2f);
-        if (GUILayout.Button("⏪ 최근 보강 취소\n(Ctrl+Z)", GUILayout.Height(40), GUILayout.Width(130))) 
-        {
-            UndoLastReinforcement(); 
-        }
-        GUILayout.Space(5);
-        GUI.backgroundColor = new Color(1f, 0.4f, 0.4f);
-        if (GUILayout.Button("보강 전체 초기화\n(모두 철거)", GUILayout.Height(40), GUILayout.Width(130))) 
-        {
-            pendingRemoveReinforcements = true; 
-        }
-        GUILayout.EndVertical();
-        
-        GUILayout.FlexibleSpace();
-
-        GUILayout.BeginVertical();
-        GUILayout.Space(25);
-        GUI.backgroundColor = new Color(0.2f, 0.6f, 1f);
-        if (GUILayout.Button("확인\n(타설 준비)", GUILayout.Height(55), GUILayout.Width(150))) OnConfirm();
-        GUILayout.EndVertical();
-
-        GUI.backgroundColor = Color.white;
-        GUILayout.EndHorizontal();
-
-        GUILayout.Space(4);
-        GUILayout.EndArea();
-    }
-
-    private void DrawMaterialTab(ref bool isWood, ref string selected, ref Vector2 scroll, string label)
-    {
-        GUILayout.BeginHorizontal();
-        GUILayout.Label("(" + label + ") 재질 (수동)", GUILayout.Width(130));
-        GUI.backgroundColor = !isWood ? Color.white : Color.gray;
-        if (GUILayout.Button("비목재", GUILayout.Width(100))) isWood = false;
-        GUI.backgroundColor = isWood ? Color.white : Color.gray;
-        if (GUILayout.Button("목재", GUILayout.Width(100))) isWood = true;
-        GUI.backgroundColor = Color.white;
-        GUILayout.Label("  선택됨: " + selected, GUILayout.Width(220));
-        GUILayout.EndHorizontal();
-
-        GUILayout.Space(4);
-
-        List<string> list = isWood ? woodMaterials : nonWoodMaterials;
-        scroll = GUILayout.BeginScrollView(scroll, GUILayout.Height(160));
-        foreach (var mat in list)
-        {
-            GUI.backgroundColor = selected == mat ? Color.cyan : Color.white;
-            if (GUILayout.Button(mat, GUILayout.Height(32)))
-                selected = mat;
-        }
-        GUI.backgroundColor = Color.white;
-        GUILayout.EndScrollView();
-    }
-
-    // ⭐ [물리 대폭발 방지] 동일한 자리에 블록이 여러 개 겹치면 차수(Phase)가 가장 높은 '최신' 블록만 살려냅니다!
     private void MergeToAfterReinforce()
     {
         string basePath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
@@ -417,7 +306,6 @@ public class BudgetUIManager : MonoBehaviour
             if (cols.Length >= 13 && int.TryParse(cols[12].Trim(), out int p)) phase = p;
             else if (cols[10].Trim() == "Reinforcement") phase = 1;
 
-            // 중복된 자리라면 차수(Phase)가 더 높은 녀석으로 덮어씁니다!
             if (!bestBlocks.ContainsKey(cleanId) || phase > bestPhases[cleanId])
             {
                 bestBlocks[cleanId] = line;
@@ -436,12 +324,20 @@ public class BudgetUIManager : MonoBehaviour
 
     void OnConfirm()
     {
-        float budget = float.TryParse(budgetInput, out float b) ? b : float.MaxValue;
-        int floors = int.TryParse(floorCountInput, out int f) ? f : 1;
+        float budget = float.MaxValue;
+        if (budgetInput && !string.IsNullOrEmpty(budgetInput.text)) float.TryParse(budgetInput.text, out budget);
+        
+        int floors = 1;
+        if (floorCountInput && !string.IsNullOrEmpty(floorCountInput.text)) int.TryParse(floorCountInput.text, out floors);
 
         string currentMode = "Manual";
         if (isCheapON) currentMode = "Cheap";
         if (isExpensiveON) currentMode = "Expensive";
+
+        // ⭐ 지역 변수(bool) 선언을 제거하고, 방금 위에서 만든 전역 변수에 값을 저장합니다.
+        wantsReinforcement = wantsReinforcementToggle != null && wantsReinforcementToggle.isOn;
+        this.reinforcementMode = (reinforcementModeDropdown != null && reinforcementModeDropdown.value == 0) ? 1 : 2;
+        this.reinforcementMaterial = reinforcementMaterialDropdown != null ? reinforcementMaterialDropdown.options[reinforcementMaterialDropdown.value].text : "H_Beam";
 
         if ((isCheapON || isExpensiveON) && MaterialDataManager.Instance != null)
         {
@@ -460,16 +356,13 @@ public class BudgetUIManager : MonoBehaviour
             }
         }
 
-        SaveBudgetMeta(budget, currentMode, floors);
+        SaveBudgetMeta(budget, currentMode, floors, wantsReinforcement);
         ApplyMaterialsToScene(currentMode, budget);
 
-        if (currentMode == "Cheap" || currentMode == "Expensive")
+        if (currentMode == "Cheap" || currentMode == "Expensive" || wantsReinforcement)
         {
             var reinforcer = UnityEngine.Object.FindFirstObjectByType<ReinforcementManager>();
-            if (reinforcer != null)
-            {
-                reinforcer.CreatePlanExcel();
-            }
+            if (reinforcer != null) reinforcer.CreatePlanExcel();
         }
 
         SpawnerSystem.SaveLastBuildingSnapshot(Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager);
@@ -485,7 +378,7 @@ public class BudgetUIManager : MonoBehaviour
         em.DestroyEntity(em.CreateEntityQuery(typeof(JointTag)));
         em.DestroyEntity(em.CreateEntityQuery(typeof(GhostBlockTag)));
 
-        showPanel = false;
+        if (mainPanel) mainPanel.SetActive(false);
         yKeyState = 0;
         SpawnerSystem.isUMode = false;
         
@@ -493,14 +386,13 @@ public class BudgetUIManager : MonoBehaviour
         SpawnerSystem.targetLoadFile = "after_reinforce.csv"; 
         SpawnerSystem.loadDelayTimer = 5f;
 
-        Invoke(nameof(CalculateCurrentCosts), 0.5f); // 타설 후 영수증 갱신
+        Invoke(nameof(CalculateCurrentCosts), 0.5f); 
         Debug.Log("✅ [장전 완료] 보강재가 결합된 '완전체 건물' 홀로그램을 화면에 띄웁니다! (G키로 타설하세요)");
     }
 
     void OnJustReinforce()
     {
         SpawnerSystem.SaveLastBuildingSnapshot(Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager);
-
         MergeToAfterReinforce();
 
         SpawnerSystem.backupIDToQuery = -1f;
@@ -510,21 +402,24 @@ public class BudgetUIManager : MonoBehaviour
         em.DestroyEntity(em.CreateEntityQuery(typeof(GhostBlockTag)));
 
         yKeyState = 0;
-        showPanel = false;
+        if (mainPanel) mainPanel.SetActive(false);
         SpawnerSystem.isUMode = false;
         
         SpawnerSystem.isAbsolutePositionMode = true;
         SpawnerSystem.targetLoadFile = "after_reinforce.csv"; 
         SpawnerSystem.loadDelayTimer = 5f;
         
-        Invoke(nameof(CalculateCurrentCosts), 0.5f); // 타설 후 영수증 갱신
+        Invoke(nameof(CalculateCurrentCosts), 0.5f);
         Debug.Log("(just보강) 보강재가 결합된 완전체 건물 장전 완료!");
     }
 
-    void SaveBudgetMeta(float budget, string mode, int floors)
+    void SaveBudgetMeta(float budget, string mode, int floors, bool wReinforce)
     {
+        string selWall = wallMaterialDropdown != null ? wallMaterialDropdown.options[wallMaterialDropdown.value].text : "";
+        string selFloor = floorMaterialDropdown != null ? floorMaterialDropdown.options[floorMaterialDropdown.value].text : "";
+        
         string header = "Budget,Mode,Floors,WallMaterial,FloorMaterial,Reinforce";
-        string row = budget + "," + mode + "," + floors + "," + selectedWallMaterial + "," + selectedFloorMaterial + "," + (wantsReinforcement ? "YES" : "NO");
+        string row = budget + "," + mode + "," + floors + "," + selWall + "," + selFloor + "," + (wReinforce ? "YES" : "NO");
         File.WriteAllText(metaPath, header + "\n" + row);
     }
 
@@ -565,18 +460,17 @@ public class BudgetUIManager : MonoBehaviour
             blocks.Add(b);
         }
 
-        foreach (var b in blocks.Where(b => b.Tool == "Reinforcement"))
-        {
-            totalCost += b.Price;
-        }
-
+        foreach (var b in blocks.Where(b => b.Tool == "Reinforcement")) totalCost += b.Price;
         var originalBlocks = blocks.Where(b => b.Tool != "Reinforcement").ToList();
+
+        string selWall = wallMaterialDropdown != null ? wallMaterialDropdown.options[wallMaterialDropdown.value].text : "";
+        string selFloor = floorMaterialDropdown != null ? floorMaterialDropdown.options[floorMaterialDropdown.value].text : "";
 
         if (mode == "Manual")
         {
             foreach (var b in originalBlocks)
             {
-                string matName = b.Type == "Floor" ? selectedFloorMaterial : selectedWallMaterial;
+                string matName = b.Type == "Floor" ? selFloor : selWall;
                 b.MatName = matName;
                 if (dict.TryGetValue(matName, out var spec))
                 {
@@ -651,8 +545,6 @@ public class BudgetUIManager : MonoBehaviour
     void UndoLastReinforcement()
     {
         var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
-
-
         string stressBlockLastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
         if (!File.Exists(stressBlockLastBuildPath)) return;
 
@@ -668,11 +560,7 @@ public class BudgetUIManager : MonoBehaviour
             }
         }
 
-        if (maxPhase == 0)
-        {
-            Debug.LogWarning("⚠ 취소할 보강 내역이 없습니다. (현재 건물은 순수 원본입니다)");
-            return;
-        }
+        if (maxPhase == 0) return;
 
         var cleanLines = allLines.Where(line => 
         {
@@ -686,11 +574,6 @@ public class BudgetUIManager : MonoBehaviour
         File.WriteAllLines(csvPath, cleanLines);
         File.WriteAllLines(stressBlockLastBuildPath, cleanLines);
         
-        string projectPath = Directory.GetParent(Application.dataPath).FullName;
-        string genPath = Path.Combine(projectPath, "BuildingLogs", "Last_Building.csv");
-        if (!Directory.Exists(Path.GetDirectoryName(genPath))) Directory.CreateDirectory(Path.GetDirectoryName(genPath));
-        File.WriteAllLines(genPath, cleanLines);
-
         var bpManagerForClear = FindFirstObjectByType<BlueprintManager>();
         if (bpManagerForClear != null) bpManagerForClear.ClearRuntimeCache();
 
@@ -699,7 +582,7 @@ public class BudgetUIManager : MonoBehaviour
         em.DestroyEntity(em.CreateEntityQuery(typeof(JointTag)));
         em.DestroyEntity(em.CreateEntityQuery(typeof(GhostBlockTag)));
         
-        showPanel = false;
+        if (mainPanel) mainPanel.SetActive(false);
         yKeyState = 0;
         SpawnerSystem.isUMode = false;
         
@@ -710,7 +593,6 @@ public class BudgetUIManager : MonoBehaviour
         var dragController = FindFirstObjectByType<SimulationDragController>();
         if (dragController != null) dragController.CancelDrag();
 
-        Debug.Log($"⏪ [{maxPhase}차 보강 취소] 가장 최근의 보강 작업을 취소했습니다!");
         Invoke(nameof(CalculateCurrentCosts), 0.5f);
     }
 
@@ -722,8 +604,6 @@ public class BudgetUIManager : MonoBehaviour
         if (File.Exists(afterPath)) File.Delete(afterPath);
 
         var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
-        
-
         string stressBlockLastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
         if (!File.Exists(stressBlockLastBuildPath)) return;
 
@@ -740,23 +620,17 @@ public class BudgetUIManager : MonoBehaviour
         File.WriteAllLines(csvPath, cleanLines);
         File.WriteAllLines(stressBlockLastBuildPath, cleanLines);
 
-        string projectPath = Directory.GetParent(Application.dataPath).FullName;
-        string genPath = Path.Combine(projectPath, "BuildingLogs", "Last_Building.csv");
-        if (!Directory.Exists(Path.GetDirectoryName(genPath))) Directory.CreateDirectory(Path.GetDirectoryName(genPath));
-        File.WriteAllLines(genPath, cleanLines);
-
         var bpManagerForClear = FindFirstObjectByType<BlueprintManager>();
         if (bpManagerForClear != null) bpManagerForClear.ClearRuntimeCache();
 
         SpawnerSystem.backupIDToQuery = -1f;
-        
         em.DestroyEntity(em.CreateEntityQuery(typeof(BlockTag)));
         em.DestroyEntity(em.CreateEntityQuery(typeof(JointTag)));
         em.DestroyEntity(em.CreateEntityQuery(typeof(GhostBlockTag)));
         
         if (LogManager.Instance != null) LogManager.Instance.OnPressRKey();
 
-        showPanel = false;
+        if (mainPanel) mainPanel.SetActive(false);
         yKeyState = 0;
         SpawnerSystem.isUMode = false;
         
@@ -767,7 +641,6 @@ public class BudgetUIManager : MonoBehaviour
         var dragController = FindFirstObjectByType<SimulationDragController>();
         if (dragController != null) dragController.CancelDrag();
 
-        Debug.Log("🗑️ [완벽 철거] 모든 회차의 보강재를 제거하고 순수 원본 뼈대만 남겼습니다!");
         Invoke(nameof(CalculateCurrentCosts), 0.5f);
     }
 }
