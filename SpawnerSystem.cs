@@ -553,86 +553,109 @@ public partial struct SpawnerSystem : ISystem
 
     // ⭐ [최종 진화] 문자열 버리고 컴포넌트로 완벽한 스냅샷을 만듭니다!
 // ⭐ [최종 진화] 문자열 버리고 컴포넌트로 완벽한 스냅샷을 만듭니다!
+
+public struct SnapshotBlockData
+{
+    public string Id;
+    public float Px;
+    public float Py;
+    public float Pz;
+    public string MatName;
+    public string ToolTag;
+    public string TypeStr;
+    public int Phase;
+}
     public static void SaveLastBuildingSnapshot(EntityManager em)
+{
+    bool found = false;
+    var matMap = new System.Collections.Generic.Dictionary<string, string>();
+    string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
+    
+    if (File.Exists(currentPath))
     {
-        StringBuilder originalOnlyCsv = new StringBuilder();
-        // 헤더에 Phase 추가!
-        originalOnlyCsv.AppendLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type,Phase");
-        bool found = false;
-
-        // ⭐ [백신 4호] BudgetUIManager가 방금 바꿔놓은 '최신 재질' 정보를 읽어옵니다!
-        var matMap = new System.Collections.Generic.Dictionary<string, string>();
-        string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
-        if (File.Exists(currentPath))
+        var oldLines = File.ReadAllLines(currentPath);
+        for (int i = 1; i < oldLines.Length; i++)
         {
-            var oldLines = File.ReadAllLines(currentPath);
-            for (int i = 1; i < oldLines.Length; i++)
-            {
-                var c = oldLines[i].Split(',');
-                if (c.Length >= 8) matMap[c[0]] = c[7]; // 7번 인덱스가 Material(재질)
-            }
-        }
-
- var query = em.CreateEntityQuery(ComponentType.ReadOnly<LocalTransform>(), ComponentType.ReadOnly<BlockMaterial>(), ComponentType.ReadOnly<BlockTag>());
-        
-        // ⭐ [2번 문제 해결] 무거운 컴포넌트 배열 전체 복사(메모리 낭비) 방지! 
-        // 엔티티 참조 배열 하나만 가져온 뒤 직접 조회합니다.
-        var entities = query.ToEntityArray(Allocator.Temp);
-
-        for (int i = 0; i < entities.Length; i++)
-        {
-            Entity currentEntity = entities[i];
-            float3 pos = em.HasComponent<OriginalPosition>(currentEntity)
-                ? em.GetComponentData<OriginalPosition>(currentEntity).Value
-                : em.GetComponentData<LocalTransform>(currentEntity).Position;
-
-            float3 snappedPos = GridUtility.Snap(pos);
-            
-            float px = snappedPos.x;
-            float py = snappedPos.y;
-            float pz = snappedPos.z;
-
-            string typeStr = py > 1.5f ? "Wall" : "Floor";
-            string realId = GridUtility.ToBlockID(snappedPos);
-
-            int phase = 0;
-            string toolTag = "Existing";
-            if (em.HasComponent<ReinforcementBlockTag>(currentEntity))
-            {
-                toolTag = "Reinforcement";
-                phase = em.GetComponentData<ReinforcementBlockTag>(currentEntity).Phase;
-            }
-
-            // ⭐ 직접 컴포넌트를 조회하여 순간적인 메모리 폭발(GC 스파이크) 억제
-            var mat = em.GetComponentData<BlockMaterial>(currentEntity);
-            string matName = matMap.ContainsKey(realId) ? matMap[realId] : mat.MaterialName.ToString().Replace("\0", "").Trim();
-
-            string lineData = realId + "," +
-                              px.ToString("F2") + "," +
-                              py.ToString("F2") + "," +
-                              pz.ToString("F2") + "," +
-                              "0.00,Safe,N," + matName + ",0.0,0.0," + toolTag + "," + typeStr + "," + phase;
-
-            found = true;
-            originalOnlyCsv.AppendLine(lineData); 
-        }
-
-        entities.Dispose();
-
-        if (found)
-        {
-            string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
-            string csvContent = originalOnlyCsv.ToString(); // 백그라운드 스레드로 넘기기 위해 미리 문자열로 추출
-            
-            // ⭐ [1번 문제 해결] 메인 스레드 렉(프리징) 방지를 위한 비동기 백그라운드 저장
-            System.Threading.Tasks.Task.Run(() => 
-            {
-                if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
-                File.WriteAllText(path, csvContent);
-                UnityEngine.Debug.Log("💾 [백그라운드 저장 완료] 스냅샷 기록을 완료했습니다!");
-            });
+            var c = oldLines[i].Split(',');
+            if (c.Length >= 8) matMap[c[0]] = c[7]; 
         }
     }
+
+    var query = em.CreateEntityQuery(ComponentType.ReadOnly<LocalTransform>(), ComponentType.ReadOnly<BlockMaterial>(), ComponentType.ReadOnly<BlockTag>());
+    var entities = query.ToEntityArray(Allocator.Temp);
+
+    // 🚀 문자열 대신 순수 데이터를 담을 리스트 준비
+    var extractedBlockDataList = new System.Collections.Generic.List<SnapshotBlockData>(entities.Length);
+
+    for (int i = 0; i < entities.Length; i++)
+    {
+        Entity currentEntity = entities[i];
+        float3 pos = em.HasComponent<OriginalPosition>(currentEntity)
+            ? em.GetComponentData<OriginalPosition>(currentEntity).Value
+            : em.GetComponentData<LocalTransform>(currentEntity).Position;
+
+        float3 snappedPos = GridUtility.Snap(pos);
+        
+        float px = snappedPos.x;
+        float py = snappedPos.y;
+        float pz = snappedPos.z;
+
+        string typeStr = py > 1.5f ? "Wall" : "Floor";
+        string realId = GridUtility.ToBlockID(snappedPos);
+
+        int phase = 0;
+        string toolTag = "Existing";
+        if (em.HasComponent<ReinforcementBlockTag>(currentEntity))
+        {
+            toolTag = "Reinforcement";
+            phase = em.GetComponentData<ReinforcementBlockTag>(currentEntity).Phase;
+        }
+
+        var mat = em.GetComponentData<BlockMaterial>(currentEntity);
+        string matName = matMap.ContainsKey(realId) ? matMap[realId] : mat.MaterialName.ToString().Replace("\0", "").Trim();
+
+        // 🚀 데이터를 상자에 담기
+        extractedBlockDataList.Add(new SnapshotBlockData
+        {
+            Id = realId,
+            Px = px,
+            Py = py,
+            Pz = pz,
+            MatName = matName,
+            ToolTag = toolTag,
+            TypeStr = typeStr,
+            Phase = phase
+        });
+        
+        found = true;
+    }
+
+    entities.Dispose();
+
+    if (found)
+    {
+        string path = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+        
+        // 🚀 리스트를 배열로 변환하여 백그라운드 스레드로 안전하게 토스
+        var threadSafeData = extractedBlockDataList.ToArray(); 
+        
+        System.Threading.Tasks.Task.Run(() => 
+        {
+            // 백그라운드 스레드에서 여유롭게 문자열 조립 수행
+            System.Text.StringBuilder bgCsv = new System.Text.StringBuilder(threadSafeData.Length * 100);
+            bgCsv.AppendLine("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type,Phase");
+            
+            foreach(var d in threadSafeData)
+            {
+                bgCsv.AppendLine($"{d.Id},{d.Px:F2},{d.Py:F2},{d.Pz:F2},0.00,Safe,N,{d.MatName},0.0,0.0,{d.ToolTag},{d.TypeStr},{d.Phase}");
+            }
+
+            if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
+            File.WriteAllText(path, bgCsv.ToString());
+            UnityEngine.Debug.Log("💾 [백그라운드 저장 완료] 무중단 스냅샷 기록을 완료했습니다!");
+        });
+    }
+}
     private void ExecuteBuild(ref SystemState state, SpawnerData data, float3 actualStart, float3 actualEnd, float targetY, Entity hitEntity, bool isGhost)
     {
         bool hitExistingBlock = SystemAPI.HasComponent<BlockTag>(hitEntity); float3 hitEntityPos = hitExistingBlock ? SystemAPI.GetComponent<LocalTransform>(hitEntity).Position : float3.zero;

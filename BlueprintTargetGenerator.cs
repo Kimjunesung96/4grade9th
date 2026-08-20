@@ -249,7 +249,10 @@ public class BlueprintTargetGenerator : MonoBehaviour
     // ⭐ 다운로드 폴더 동기화 함수
     private void SyncWithDownloads()
     {
-        string downPath = @"C:\Users\skrkt\Downloads"; // 십장님 지정 다운로드 폴더
+        // 🚀 OS 환경 변수를 활용하여 현재 로그인된 사용자의 다운로드 폴더 경로를 동적으로 가져옵니다.
+        string userProfilePath = System.Environment.GetFolderPath(System.Environment.SpecialFolder.UserProfile);
+        string downPath = System.IO.Path.Combine(userProfilePath, "Downloads"); 
+        
         if (!Directory.Exists(downPath)) 
         {
             Debug.LogWarning($"[동기화 실패] 다운로드 폴더 경로를 찾을 수 없습니다: {downPath}");
