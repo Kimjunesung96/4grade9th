@@ -335,10 +335,22 @@ public partial struct VibrationTestSystem : ISystem
             }
         }
 
-        var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
+var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
 
-        System.Collections.Generic.List<string> currentLines = new System.Collections.Generic.List<string>();
-        currentLines.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
+// 🆕 [바닥/벽 2-pass 필터] 진동 전 원본 배치 기준으로 미리 판정
+var allBlocksForFloorCheck = new System.Collections.Generic.List<(float x, float y, float z, string id)>();
+var existingBlocksForFloorCheck = new System.Collections.Generic.HashSet<string>();
+for (int fi = 0; fi < positions.Length; fi++)
+{
+    float3 fp = positions[fi];
+    string fid = GridUtility.ToBlockID(fp);
+    allBlocksForFloorCheck.Add((fp.x, fp.y, fp.z, fid));
+    existingBlocksForFloorCheck.Add(fid);
+}
+var floorSet = GridUtility.ComputeFloorBlocks(allBlocksForFloorCheck, existingBlocksForFloorCheck);
+
+System.Collections.Generic.List<string> currentLines = new System.Collections.Generic.List<string>();
+currentLines.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
 
         for (int i = 0; i < positions.Length; i++)
         {
@@ -351,10 +363,10 @@ public partial struct VibrationTestSystem : ISystem
             string posY = stress >= 2.0f ? "DESTROYED" : pos.y.ToString("F2");
             string posZ = stress >= 2.0f ? "DESTROYED" : pos.z.ToString("F2");
 
-            string risk = stress >= 2.0f ? "Quake_Destroyed" : (stress >= 0.5f ? "Quake_Danger" : "Safe"); 
-            string pres = stress >= 2.0f ? "Y" : (stress >= 0.5f ? "Y" : "N");
-            string typeStr = pos.y > 1.5f ? "Wall" : "Floor";
-            string toolTag = toolMap.ContainsKey(id) ? toolMap[id] : (bpManager != null ? bpManager.GetToolName(id) : "Existing");
+string risk = stress >= 2.0f ? "Quake_Destroyed" : (stress >= 0.5f ? "Quake_Danger" : "Safe");
+string pres = stress >= 2.0f ? "Y" : (stress >= 0.5f ? "Y" : "N");
+string toolTag = toolMap.ContainsKey(id) ? toolMap[id] : (bpManager != null ? bpManager.GetToolName(id) : "Existing");
+string typeStr = toolTag == "Reinforcement" ? "Reinforcement" : (floorSet.Contains(id) ? "Floor" : "Wall");
 
             string lineData = id + "," + posX + "," + posY + "," + posZ + "," + stress.ToString("F2") + "," + risk + "," + pres + "," + mat + ",0.0,0.0," + toolTag + "," + typeStr;
             currentLines.Add(lineData);

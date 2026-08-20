@@ -441,6 +441,11 @@ private void RebuildAllJoints(ref SystemState state)
         var materialLookup = SystemAPI.GetComponentLookup<BlockMaterial>(true);
         var stressLookup = SystemAPI.GetComponentLookup<BlockStress>(false);
 
+        // 🆕 [일시적 파괴 스위치] 물리를 풀어줄 때 쓸 RW 룩업
+        // (OnUpdate에서 이 함수 호출 직전에 state.Dependency.Complete()를 이미 하므로 안전)
+        var massLookup = SystemAPI.GetComponentLookup<PhysicsMass>(false);
+        var gravityLookup = SystemAPI.GetComponentLookup<PhysicsGravityFactor>(false);
+
         foreach (var (jointPair, joint, rest, jointEntity) in SystemAPI.Query<
           RefRO<PhysicsConstrainedBodyPair>, RefRO<PhysicsJoint>, RefRO<JointRestLength>>().WithAll<JointTag>().WithEntityAccess())
         {
@@ -478,18 +483,21 @@ private void RebuildAllJoints(ref SystemState state)
                 stressLookup[eB] = stressB;
             }
 
-            // ⭐ [영구삭제 완전 제거] 파괴(Destroyed) 판정이든 뭐든 조인트/블록을 영구 삭제하는 일은
-            // 절대 없어야 한다. 예전엔 인장응력 초과 시 여기서 조인트를 바로 끊어버렸는데,
-            // 이 시스템(정적 응력 스캔)엔 VibrationTestSystem 같은 "시뮬레이션 종료 후 재결합" 단계가
-            // 없어서 한 번 끊기면 영원히 복구가 안 됐음. 그래서 여기서는 조인트를 끊지 않고
-            // 그냥 놔둔다 (파괴 여부 판정/표시는 여전히 응력 수치로 계산되어 CSV/색상에 반영됨).
+            // 🆕 [일시적 파괴] 인장 응력 초과 시 조인트를 끊고 물리를 풀어준다.
+            // 스캔 시간(scanTimer) 끝나면 StopPhysics()가 위치 복구 + RebuildAllJoints()로
+            // 자동으로 다시 이어붙이므로, 여기서 끊는 건 "영구 삭제"가 아니라 "일시적 파괴"다.
+            if (ratio > 1.0f)
+            {
+                ecb.DestroyEntity(jointEntity);
+                ReleaseBlockPhysics(eA, transA.Position, ref massLookup, ref gravityLookup);
+                ReleaseBlockPhysics(eB, transB.Position, ref massLookup, ref gravityLookup);
+            }
         }
+
         var toDestroy = new NativeList<Entity>(Allocator.Temp);
-        // ⭐ [영구삭제 완전 제거] 파괴(Destroyed)든 뭐든 블록/조인트가 영구적으로 사라지는 일은
-        // 절대 없어야 함. 예전엔 지진/폭발 시뮬레이션 중에만 막았는데, 평상시(시뮬레이션 밖)에도
-        // 이 정적 응력 스캔이 압축파괴 기준을 넘기면 그대로 영구삭제했었음 — 이제는 시뮬레이션
-        // 여부와 무관하게 절대 삭제하지 않는다. (기록용 destroyedLines 로그만 남기고, 실제
-        // 엔티티/조인트 삭제는 하지 않음 — 파괴 여부 표시는 CSV의 RiskLevel/색상으로만 반영)
+        // ⭐ [영구삭제는 여전히 금지] 압축파괴로 판정되어도 엔티티/조인트 자체는 지우지 않는다.
+        // 대신 🆕 물리를 풀어줘서 실제로 주저앉는 모습이 보이게 하고, destroyedLines 로그도 남긴다.
+        // 스캔 종료 시 StopPhysics()가 원위치로 복구한다.
         foreach (var (stress, mat, pos, entity) in SystemAPI.Query<
           RefRO<BlockStress>, RefRO<BlockMaterial>, RefRO<OriginalPosition>>().WithEntityAccess())
         {
@@ -508,12 +516,38 @@ private void RebuildAllJoints(ref SystemState state)
                                       originPos.y.ToString("F2");
 
             destroyedLines.Add(new FixedString512Bytes(destroyedLineStr));
-            // ⭐ toDestroy.Add(entity); 는 더 이상 하지 않음 (영구삭제 완전 제거)
+
+            // 🆕 [일시적 파괴] 압축파괴 판정된 블록도 물리를 풀어 실제로 주저앉게 한다.
+            ReleaseBlockPhysics(entity, originPos, ref massLookup, ref gravityLookup);
+            // ⭐ toDestroy.Add(entity); 는 여전히 하지 않음 (영구삭제 완전 금지)
         }
 
         ecb.Playback(state.EntityManager);
         ecb.Dispose();
         toDestroy.Dispose();
+    }
+
+    // 🆕 [일시적 파괴 헬퍼] 지정한 블록의 중력/질량을 풀어서 실제로 낙하하게 만든다.
+    // 바닥에 붙은 기초 블록(y<=3.1f)은 절대 풀어주지 않는다 (건물 전체가 붕 뜨는 것 방지).
+    // 스캔이 끝나면 StopPhysics()가 위치를 되돌리고 다시 kinematic으로 고정한다.
+    private void ReleaseBlockPhysics(Entity e, float3 pos, ref ComponentLookup<PhysicsMass> massLookup, ref ComponentLookup<PhysicsGravityFactor> gravityLookup)
+    {
+        if (pos.y <= 3.1f) return;
+
+        if (gravityLookup.HasComponent(e))
+        {
+            var g = gravityLookup[e];
+            g.Value = 1.0f;
+            gravityLookup[e] = g;
+        }
+
+        if (massLookup.HasComponent(e))
+        {
+            var m = massLookup[e];
+            m.InverseMass = 0.1f;
+            m.InverseInertia = new float3(0.1f, 0.1f, 0.1f);
+            massLookup[e] = m;
+        }
     }
 
     private void UpdateResults(ref SystemState state)
@@ -585,11 +619,22 @@ private void RebuildAllJoints(ref SystemState state)
             }
         }
 
-        var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
+var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
 
-        System.Collections.Generic.List<string> linesToWrite = new System.Collections.Generic.List<string>();
-        linesToWrite.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
+// 🆕 [바닥/벽 2-pass 필터] CSV 쓰기 전, 현재 존재하는 블록 전체로 먼저 판정해둔다
+var allBlocksForFloorCheck = new System.Collections.Generic.List<(float x, float y, float z, string id)>();
+var existingBlocksForFloorCheck = new System.Collections.Generic.HashSet<string>();
+foreach (var posQ in SystemAPI.Query<RefRO<OriginalPosition>>())
+{
+    float3 pQ = posQ.ValueRO.Value;
+    string idQ = GridUtility.ToBlockID(pQ);
+    allBlocksForFloorCheck.Add((pQ.x, pQ.y, pQ.z, idQ));
+    existingBlocksForFloorCheck.Add(idQ);
+}
+var floorSet = GridUtility.ComputeFloorBlocks(allBlocksForFloorCheck, existingBlocksForFloorCheck);
 
+System.Collections.Generic.List<string> linesToWrite = new System.Collections.Generic.List<string>();
+linesToWrite.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
         foreach (var (stress, color, mat, pos, disp) in SystemAPI.Query<
           RefRO<BlockStress>,
           RefRW<URPMaterialPropertyBaseColor>,
@@ -633,8 +678,8 @@ private void RebuildAllJoints(ref SystemState state)
             else if (t >= 0.33f) { risk = "Warning"; pres = "N"; }
             else { risk = "Safe"; pres = "N"; }
 
-            string tool = toolMap.ContainsKey(id) ? toolMap[id] : (bpManager != null ? bpManager.GetToolName(id) : "Existing");
-            string type = typeMap.ContainsKey(id) ? typeMap[id] : (originPos.y > 1.5f ? "Wall" : "Floor");
+string tool = toolMap.ContainsKey(id) ? toolMap[id] : (bpManager != null ? bpManager.GetToolName(id) : "Existing");
+string type = tool == "Reinforcement" ? "Reinforcement" : (floorSet.Contains(id) ? "Floor" : "Wall");
 
             string lineData = id + "," +
                               p.x.ToString("F2") + "," +
@@ -664,8 +709,8 @@ private void RebuildAllJoints(ref SystemState state)
             string dComp = parts[4];
             float dPosY = float.Parse(parts[5]);
 
-            string dTool = toolMap.ContainsKey(dId) ? toolMap[dId] : (bpManager != null ? bpManager.GetToolName(dId) : "Existing");
-            string dType = typeMap.ContainsKey(dId) ? typeMap[dId] : (dPosY > 1.5f ? "Wall" : "Floor");
+string dTool = toolMap.ContainsKey(dId) ? toolMap[dId] : (bpManager != null ? bpManager.GetToolName(dId) : "Existing");
+string dType = dTool == "Reinforcement" ? "Reinforcement" : (floorSet.Contains(dId) ? "Floor" : "Wall");
 
             string finalDestroyedLine = dId + ",DESTROYED,DESTROYED,DESTROYED," +
                                         dCompStress + ",Destroyed,Y," +
