@@ -78,11 +78,18 @@ public class BudgetUIManager : MonoBehaviour
 
     void Start()
     {
+        Debug.Log($"💰 Start 실행됨! mainPanel={mainPanel}");
         csvPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
         metaPath = Path.Combine(Application.dataPath, "StressBlock", "Budget_Meta.csv");
         
         LoadMaterialLists();
         CalculateCurrentCosts();
+    if (wallMaterialDropdown != null)
+        wallMaterialDropdown.onValueChanged.AddListener((idx) => {
+            Debug.LogError($"🎯 드롭다운 값 변경됨! index={idx}, text={wallMaterialDropdown.options[idx].text}");
+        });
+
+
         SetupUIEvents();
 
         if (mainPanel) mainPanel.SetActive(false);
@@ -250,6 +257,7 @@ void Update()
     public void OnYKeyPressed()
     {
         yKeyState = (yKeyState + 1) % 3;
+        Debug.Log($"🔑 Y키! state={yKeyState}");
         if (yKeyState == 0)
         {
             if (mainPanel) mainPanel.SetActive(false);
