@@ -15,7 +15,7 @@ public class ReinforcementManager : MonoBehaviour
         Debug.Log("👷‍♂️ Y(도면 갱신) 대기 중!");
     }
 
-    void Update() {  }
+    void Update() { if (Input.GetKeyDown(KeyCode.Y)) { CreatePlanExcel(); } }
 
     public void CreatePlanExcel()
     {
