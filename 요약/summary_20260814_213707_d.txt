@@ -1,0 +1,982 @@
+// Project: 20260814_213707 Code Summary (Part d)
+// Total Lines: 979
+
+// FILE: BudgetUIManager.cs
+using UnityEngine;
+using System;
+using System.IO;
+using System.Collections.Generic;
+using System.Linq;
+using Unity.Entities;
+using Unity.Mathematics;
+
+public class BudgetUIManager : MonoBehaviour
+{
+    public static BudgetUIManager Instance;
+
+    public static int yKeyState = 0;
+    private bool showPanel = false;
+
+    private int selectedTab = 0;
+
+    private bool wallIsWood = false;
+    private string selectedWallMaterial = "";
+
+    private bool floorIsWood = false;
+    private string selectedFloorMaterial = "";
+
+    private string budgetInput = "500000";
+    private string floorCountInput = "1";
+    public bool wantsReinforcement = false;
+    
+    private bool pendingRemoveReinforcements = false;
+    
+    private bool isCheapON = false;
+    private bool isExpensiveON = false;
+
+    private List<string> woodMaterials = new List<string>();
+    private List<string> nonWoodMaterials = new List<string>();
+
+    private Vector2 wallScrollPos = Vector2.zero;
+    private Vector2 floorScrollPos = Vector2.zero;
+
+    private string csvPath;
+    private string metaPath;
+
+    public int reinforcementMode = 1; 
+    public string reinforcementMaterial = "H_Beam";
+    private static readonly string[] reinforcementMaterialOptions = new string[] { "H_Beam" };
+
+    private Dictionary<int, float> phaseCosts = new Dictionary<int, float>();
+    private float totalCost = 0f;
+    private float originalCost = 0f;
+    private int currentMaxPhase = 0;
+
+    private class BlockData
+    {
+        public string[] Cols;
+        public float Stress;
+        public string Type;
+        public string MatName;
+        public float Price;
+        public float Tensile;
+        public float Compressive;
+        public string Tool; 
+    }
+
+    void Awake()
+    {
+        if (Instance == null) Instance = this;
+        else Destroy(gameObject);
+    }
+
+    void Start()
+    {
+        csvPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
+        metaPath = Path.Combine(Application.dataPath, "StressBlock", "Budget_Meta.csv");
+        LoadMaterialLists();
+        CalculateCurrentCosts();
+    }
+
+    void Update()
+    {
+        if (pendingRemoveReinforcements)
+        {
+            pendingRemoveReinforcements = false;
+            ExecuteRemoveReinforcements();
+        }
+
+        // ⭐ G키(확정)나 R키(철거)를 누르면 0.1초(아주 빠릿하게) 뒤에 영수증을 갱신합니다!
+        if (Input.GetKeyDown(KeyCode.G) || Input.GetKeyDown(KeyCode.R))
+        {
+            Invoke(nameof(CalculateCurrentCosts), 0.1f);
+        }
+    }
+
+    // ⭐ [반응속도 해결] 엉뚱한 장부 대신, G키가 즉각 반영되는 Last_Building.csv를 읽습니다!
+    void CalculateCurrentCosts()
+    {
+        string targetCsv = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+        if (!File.Exists(targetCsv)) targetCsv = csvPath; // 없으면 예비로 CurrentStress 사용
+        if (!File.Exists(targetCsv)) return;
+        
+        try 
+        {
+            var lines = File.ReadAllLines(targetCsv);
+            if (MaterialDataManager.Instance == null) return;
+            var dict = MaterialDataManager.Instance.MaterialDict;
+
+            float tempOriginal = 0f;
+            float tempTotal = 0f;
+            int tempMaxPhase = 0;
+            Dictionary<int, float> tempPhaseCosts = new Dictionary<int, float>();
+
+            for (int i = 1; i < lines.Length; i++)
+            {
+                var cols = lines[i].Split(',');
+                if (cols.Length < 8) continue; // 최소 길이 방어
+
+                string matName = cols[7].Trim();
+                int phase = 0;
+                if (cols.Length >= 13) int.TryParse(cols[12].Trim(), out phase);
+
+                if (phase > tempMaxPhase) tempMaxPhase = phase;
+
+                float price = 0f;
+                if (dict.TryGetValue(matName, out var spec))
+                {
+                    price = spec.Density * spec.PricePerKg * 3.375f;
+                }
+
+                if (phase == 0) tempOriginal += price;
+                else 
+                {
+                    if (!tempPhaseCosts.ContainsKey(phase)) tempPhaseCosts[phase] = 0f;
+                    tempPhaseCosts[phase] += price;
+                }
+                tempTotal += price;
+            }
+
+            originalCost = tempOriginal;
+            phaseCosts = tempPhaseCosts;
+            totalCost = tempTotal;
+            currentMaxPhase = tempMaxPhase;
+        } 
+        catch (Exception) { /* 0.1초 딜레이 중 파일 쓰기 충돌 방어 */ }
+    }
+
+    void LoadMaterialLists()
+    {
+        woodMaterials.Clear();
+        nonWoodMaterials.Clear();
+        if (MaterialDataManager.Instance == null) return;
+
+        foreach (var kv in MaterialDataManager.Instance.MaterialDict)
+        {
+            string name = kv.Key.ToLower();
+            if (name.Contains("wood") || name.Contains("timber")) woodMaterials.Add(kv.Key);
+            else nonWoodMaterials.Add(kv.Key);
+        }
+
+        if (string.IsNullOrEmpty(selectedWallMaterial) && nonWoodMaterials.Count > 0)
+            selectedWallMaterial = nonWoodMaterials.First();
+        if (string.IsNullOrEmpty(selectedFloorMaterial) && nonWoodMaterials.Count > 0)
+            selectedFloorMaterial = nonWoodMaterials.First();
+    }
+
+    public void OnYKeyPressed()
+    {
+        yKeyState = (yKeyState + 1) % 3;
+        if (yKeyState == 0)
+        {
+            showPanel = false;
+            SpawnerSystem.isUMode = false;
+            SpawnerSystem.isOMode = false;
+            SpawnerSystem.isLMode = false;
+        }
+        else if (yKeyState == 1)
+        {
+            showPanel = false;
+            SpawnerSystem.isUMode = true;
+            var gen = FindFirstObjectByType<BlueprintTargetGenerator>();
+            if (gen != null) gen.LoadLastBuildingForUMode();
+        }
+        else if (yKeyState == 2)
+        {
+            SpawnerSystem.isUMode = false;
+            showPanel = true;
+            isCheapON = false;
+            isExpensiveON = false;
+            LoadMaterialLists();
+        }
+    }
+
+    public void SetReinforcementModeMany() { reinforcementMode = 1; }
+    public void SetReinforcementModeFew() { reinforcementMode = 2; }
+
+    void OnGUI()
+    {
+        if (totalCost > 0)
+        {
+            float receiptW = 240f;
+            float receiptH = 75f + (currentMaxPhase * 25f);
+            float receiptX = Screen.width - receiptW - 20f;
+            float receiptY = 20f;
+
+            GUILayout.BeginArea(new Rect(receiptX, receiptY, receiptW, receiptH), "🧾 누적 공사 비용", GUI.skin.window);
+            GUILayout.Space(5);
+            GUILayout.Label($"뼈대(원본): <color=#AADDFF>{originalCost:N0} 원</color>", new GUIStyle(GUI.skin.label) { richText = true });
+            
+            for (int i = 1; i <= currentMaxPhase; i++)
+            {
+                if (phaseCosts.ContainsKey(i))
+                {
+                    GUILayout.Label($"{i}차 보강: <color=#FFAAAA>{phaseCosts[i]:N0} 원</color>", new GUIStyle(GUI.skin.label) { richText = true });
+                }
+            }
+            GUILayout.Space(5);
+            GUILayout.Label($"<color=yellow><b>총 누적 예산: {totalCost:N0} 원</b></color>", new GUIStyle(GUI.skin.label) { richText = true });
+            GUILayout.EndArea();
+        }
+
+        if (!showPanel) return;
+
+        float panelW = 860f;
+        float panelH = 580f;
+        float panelX = (Screen.width - panelW) / 2f;
+        float panelY = (Screen.height - panelH) / 2f;
+
+        GUILayout.BeginArea(new Rect(panelX, panelY, panelW, panelH), GUI.skin.box);
+
+        GUILayout.BeginHorizontal();
+        GUI.backgroundColor = selectedTab == 0 ? Color.white : Color.gray;
+        if (GUILayout.Button("벽 + 지붕", GUILayout.Height(40))) selectedTab = 0;
+        GUI.backgroundColor = selectedTab == 1 ? Color.white : Color.gray;
+        if (GUILayout.Button("바닥", GUILayout.Height(40))) selectedTab = 1;
+        GUI.backgroundColor = Color.white;
+        GUILayout.EndHorizontal();
+
+        GUILayout.Space(6);
+
+        if (selectedTab == 0) DrawMaterialTab(ref wallIsWood, ref selectedWallMaterial, ref wallScrollPos, "벽+지붕");
+        else DrawMaterialTab(ref floorIsWood, ref selectedFloorMaterial, ref floorScrollPos, "바닥");
+
+        GUILayout.Space(8);
+        GUILayout.Box("", GUILayout.ExpandWidth(true), GUILayout.Height(1));
+        GUILayout.Space(4);
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("층수", GUILayout.Width(50));
+        floorCountInput = GUILayout.TextField(floorCountInput, GUILayout.Width(60));
+        GUILayout.Label("(스크롤 복사)", GUILayout.Width(100));
+        GUILayout.Space(20);
+        GUILayout.Label("보강재", GUILayout.Width(60));
+
+        GUI.backgroundColor = wantsReinforcement ? Color.cyan : Color.gray;
+        if (GUILayout.Button("YES", GUILayout.Width(70))) wantsReinforcement = true;
+
+        GUI.backgroundColor = !wantsReinforcement ? Color.cyan : Color.gray;
+        if (GUILayout.Button("NO", GUILayout.Width(70))) wantsReinforcement = false;
+
+        GUI.backgroundColor = Color.white;
+        GUILayout.EndHorizontal();
+
+        if (wantsReinforcement)
+        {
+            GUILayout.Space(4);
+            GUILayout.BeginHorizontal();
+            GUILayout.Space(230); 
+            GUILayout.Label("보강 모드", GUILayout.Width(65));
+            
+            GUI.backgroundColor = (reinforcementMode == 1) ? new Color(1f, 0.6f, 0.6f) : Color.gray;
+            if (GUILayout.Button("많이 [격자]", GUILayout.Width(80))) reinforcementMode = 1;
+            
+            GUI.backgroundColor = (reinforcementMode == 2) ? new Color(0.6f, 0.8f, 1f) : Color.gray;
+            if (GUILayout.Button("적게 [우산]", GUILayout.Width(80))) reinforcementMode = 2;
+            
+            GUI.backgroundColor = Color.white;
+            GUILayout.EndHorizontal();
+
+            GUILayout.Space(4);
+            GUILayout.BeginHorizontal();
+            GUILayout.Space(230);
+            GUILayout.Label("보강재질", GUILayout.Width(65));
+
+            foreach (string matOption in reinforcementMaterialOptions)
+            {
+                GUI.backgroundColor = (reinforcementMaterial == matOption) ? new Color(0.6f, 1f, 0.6f) : Color.gray;
+                if (GUILayout.Button(matOption, GUILayout.Width(80))) reinforcementMaterial = matOption;
+            }
+
+            GUI.backgroundColor = Color.white;
+            GUILayout.EndHorizontal();
+        }
+
+        GUILayout.FlexibleSpace(); 
+
+        GUILayout.BeginHorizontal();
+
+        GUILayout.BeginVertical();
+        GUILayout.Space(25);
+        GUI.backgroundColor = new Color(0.4f, 0.8f, 0.4f);
+        if (GUILayout.Button("just보강", GUILayout.Height(55), GUILayout.Width(130))) OnJustReinforce();
+        GUILayout.EndVertical();
+
+        GUILayout.FlexibleSpace();
+
+        GUILayout.BeginVertical();
+        GUILayout.BeginHorizontal();
+        GUILayout.FlexibleSpace();
+        GUILayout.Label("자동 측정 예산 (원):", GUILayout.Width(130));
+        budgetInput = GUILayout.TextField(budgetInput, GUILayout.Width(170));
+        GUILayout.FlexibleSpace();
+        GUILayout.EndHorizontal();
+
+        GUILayout.Space(5);
+
+        GUILayout.BeginHorizontal();
+        GUI.backgroundColor = isCheapON ? new Color(0.6f, 1f, 0.6f) : Color.gray;
+        if (GUILayout.Button(isCheapON ? "싸게 [자동 ON]\n최소 안전 확보" : "싸게 [OFF]", GUILayout.Height(50), GUILayout.Width(150)))
+        {
+            isCheapON = !isCheapON;
+            if (isCheapON) isExpensiveON = false;
+        }
+        GUI.backgroundColor = isExpensiveON ? new Color(1f, 0.85f, 0.4f) : Color.gray;
+        if (GUILayout.Button(isExpensiveON ? "비싸게 [자동 ON]\n예산 내 최고 강도" : "비싸게 [OFF]", GUILayout.Height(50), GUILayout.Width(150)))
+        {
+            isExpensiveON = !isExpensiveON;
+            if (isExpensiveON) isCheapON = false;
+        }
+        GUILayout.EndHorizontal();
+        GUILayout.EndVertical();
+
+        GUILayout.FlexibleSpace();
+
+        GUILayout.BeginVertical();
+        GUILayout.Space(12);
+        GUI.backgroundColor = new Color(1f, 0.6f, 0.2f);
+        if (GUILayout.Button("⏪ 최근 보강 취소\n(Ctrl+Z)", GUILayout.Height(40), GUILayout.Width(130))) 
+        {
+            UndoLastReinforcement(); 
+        }
+        GUILayout.Space(5);
+        GUI.backgroundColor = new Color(1f, 0.4f, 0.4f);
+        if (GUILayout.Button("보강 전체 초기화\n(모두 철거)", GUILayout.Height(40), GUILayout.Width(130))) 
+        {
+            pendingRemoveReinforcements = true; 
+        }
+        GUILayout.EndVertical();
+        
+        GUILayout.FlexibleSpace();
+
+        GUILayout.BeginVertical();
+        GUILayout.Space(25);
+        GUI.backgroundColor = new Color(0.2f, 0.6f, 1f);
+        if (GUILayout.Button("확인\n(타설 준비)", GUILayout.Height(55), GUILayout.Width(150))) OnConfirm();
+        GUILayout.EndVertical();
+
+        GUI.backgroundColor = Color.white;
+        GUILayout.EndHorizontal();
+
+        GUILayout.Space(4);
+        GUILayout.EndArea();
+    }
+
+    private void DrawMaterialTab(ref bool isWood, ref string selected, ref Vector2 scroll, string label)
+    {
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("(" + label + ") 재질 (수동)", GUILayout.Width(130));
+        GUI.backgroundColor = !isWood ? Color.white : Color.gray;
+        if (GUILayout.Button("비목재", GUILayout.Width(100))) isWood = false;
+        GUI.backgroundColor = isWood ? Color.white : Color.gray;
+        if (GUILayout.Button("목재", GUILayout.Width(100))) isWood = true;
+        GUI.backgroundColor = Color.white;
+        GUILayout.Label("  선택됨: " + selected, GUILayout.Width(220));
+        GUILayout.EndHorizontal();
+
+        GUILayout.Space(4);
+
+        List<string> list = isWood ? woodMaterials : nonWoodMaterials;
+        scroll = GUILayout.BeginScrollView(scroll, GUILayout.Height(160));
+        foreach (var mat in list)
+        {
+            GUI.backgroundColor = selected == mat ? Color.cyan : Color.white;
+            if (GUILayout.Button(mat, GUILayout.Height(32)))
+                selected = mat;
+        }
+        GUI.backgroundColor = Color.white;
+        GUILayout.EndScrollView();
+    }
+
+    // ⭐ [물리 대폭발 방지] 동일한 자리에 블록이 여러 개 겹치면 차수(Phase)가 가장 높은 '최신' 블록만 살려냅니다!
+    private void MergeToAfterReinforce()
+    {
+        string basePath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+        string planPath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
+        string afterPath = Path.Combine(Application.dataPath, "StressBlock", "after_reinforce.csv");
+
+        List<string> allLines = new List<string>();
+        if (File.Exists(basePath)) allLines.AddRange(File.ReadAllLines(basePath).Skip(1));
+        if (File.Exists(planPath)) allLines.AddRange(File.ReadAllLines(planPath).Skip(1));
+
+        Dictionary<string, string> bestBlocks = new Dictionary<string, string>();
+        Dictionary<string, int> bestPhases = new Dictionary<string, int>();
+
+        foreach (var line in allLines)
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            var cols = line.Split(',');
+            if (cols.Length < 12) continue;
+            
+            string rawId = cols[0];
+            var idParts = rawId.Split('_');
+            float px = float.Parse(idParts[0]) / 10f;
+            float pz = float.Parse(idParts[1]) / 10f;
+            float py = float.Parse(idParts[2]) / 10f;
+
+            string cleanId = GridUtility.ToBlockID(px, py, pz);
+
+            int phase = 0;
+            if (cols.Length >= 13 && int.TryParse(cols[12].Trim(), out int p)) phase = p;
+            else if (cols[10].Trim() == "Reinforcement") phase = 1;
+
+            // 중복된 자리라면 차수(Phase)가 더 높은 녀석으로 덮어씁니다!
+            if (!bestBlocks.ContainsKey(cleanId) || phase > bestPhases[cleanId])
+            {
+                bestBlocks[cleanId] = line;
+                bestPhases[cleanId] = phase;
+            }
+        }
+
+        List<string> finalList = new List<string> { "BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type,Phase" };
+        finalList.AddRange(bestBlocks.Values);
+
+        File.WriteAllLines(afterPath, finalList);
+        File.WriteAllLines(csvPath, finalList);
+        
+        Debug.Log("🏭 [데이터 전처리 완료] 겹치는 블록 중 최신 보강재만 살려서 대폭발 버그를 차단했습니다!");
+    }
+
+    void OnConfirm()
+    {
+        float budget = float.TryParse(budgetInput, out float b) ? b : float.MaxValue;
+        int floors = int.TryParse(floorCountInput, out int f) ? f : 1;
+
+        string currentMode = "Manual";
+        if (isCheapON) currentMode = "Cheap";
+        if (isExpensiveON) currentMode = "Expensive";
+
+        if ((isCheapON || isExpensiveON) && MaterialDataManager.Instance != null)
+        {
+            var dict = MaterialDataManager.Instance.MaterialDict;
+            wantsReinforcement = true;
+
+            if (isCheapON)
+            {
+                reinforcementMaterial = dict.OrderBy(kv => kv.Value.Density * kv.Value.PricePerKg).First().Key;
+                reinforcementMode = 2;
+            }
+            else 
+            {
+                reinforcementMaterial = dict.OrderByDescending(kv => math.min(kv.Value.Tensile, kv.Value.Compressive)).First().Key;
+                reinforcementMode = 1; 
+            }
+        }
+
+        SaveBudgetMeta(budget, currentMode, floors);
+        ApplyMaterialsToScene(currentMode, budget);
+
+        if (currentMode == "Cheap" || currentMode == "Expensive")
+        {
+            var reinforcer = UnityEngine.Object.FindFirstObjectByType<ReinforcementManager>();
+            if (reinforcer != null)
+            {
+                reinforcer.CreatePlanExcel();
+            }
+        }
+
+        SpawnerSystem.SaveLastBuildingSnapshot(Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager);
+
+        var rm = FindFirstObjectByType<ReinforcementManager>();
+        if (rm != null) rm.CreatePlanExcel();
+
+        MergeToAfterReinforce();
+
+        SpawnerSystem.backupIDToQuery = -1f;
+        var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
+        em.DestroyEntity(em.CreateEntityQuery(typeof(BlockTag)));
+        em.DestroyEntity(em.CreateEntityQuery(typeof(JointTag)));
+        em.DestroyEntity(em.CreateEntityQuery(typeof(GhostBlockTag)));
+
+        showPanel = false;
+        yKeyState = 0;
+        SpawnerSystem.isUMode = false;
+        
+        SpawnerSystem.isAbsolutePositionMode = true;
+        SpawnerSystem.targetLoadFile = "after_reinforce.csv"; 
+        SpawnerSystem.loadDelayTimer = 5f;
+
+        Invoke(nameof(CalculateCurrentCosts), 0.5f); // 타설 후 영수증 갱신
+        Debug.Log("✅ [장전 완료] 보강재가 결합된 '완전체 건물' 홀로그램을 화면에 띄웁니다! (G키로 타설하세요)");
+    }
+
+    void OnJustReinforce()
+    {
+        SpawnerSystem.SaveLastBuildingSnapshot(Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager);
+
+        MergeToAfterReinforce();
+
+        SpawnerSystem.backupIDToQuery = -1f;
+        var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
+        em.DestroyEntity(em.CreateEntityQuery(typeof(BlockTag)));
+        em.DestroyEntity(em.CreateEntityQuery(typeof(JointTag)));
+        em.DestroyEntity(em.CreateEntityQuery(typeof(GhostBlockTag)));
+
+        yKeyState = 0;
+        showPanel = false;
+        SpawnerSystem.isUMode = false;
+        
+        SpawnerSystem.isAbsolutePositionMode = true;
+        SpawnerSystem.targetLoadFile = "after_reinforce.csv"; 
+        SpawnerSystem.loadDelayTimer = 5f;
+        
+        Invoke(nameof(CalculateCurrentCosts), 0.5f); // 타설 후 영수증 갱신
+        Debug.Log("(just보강) 보강재가 결합된 완전체 건물 장전 완료!");
+    }
+
+    void SaveBudgetMeta(float budget, string mode, int floors)
+    {
+        string header = "Budget,Mode,Floors,WallMaterial,FloorMaterial,Reinforce";
+        string row = budget + "," + mode + "," + floors + "," + selectedWallMaterial + "," + selectedFloorMaterial + "," + (wantsReinforcement ? "YES" : "NO");
+        File.WriteAllText(metaPath, header + "\n" + row);
+    }
+
+    void ApplyMaterialsToScene(string mode, float budget)
+    {
+        if (!File.Exists(csvPath)) return;
+        var lines = File.ReadAllLines(csvPath);
+        if (MaterialDataManager.Instance == null) return;
+        var dict = MaterialDataManager.Instance.MaterialDict;
+
+        var cheapMats = dict.OrderBy(kv => kv.Value.Density * kv.Value.PricePerKg).ToList(); 
+        var strongestMats = dict.OrderByDescending(kv => math.min(kv.Value.Tensile, kv.Value.Compressive)).ToList();
+        var strongestMat = strongestMats.First();
+
+        var output = new List<string> { lines.FirstOrDefault() };
+        float totalCost = 0f;
+        List<BlockData> blocks = new List<BlockData>();
+
+        for (int i = 1; i < lines.Length; i++)
+        {
+            string currentLine = lines.ElementAt(i);
+            var cols = currentLine.Split(',');
+            if (cols.Length < 12) { output.Add(currentLine); continue; }
+
+            float stress = 0f;
+            float.TryParse(cols[4], out stress);
+            string type = cols[11];
+            string tool = cols[10].Trim(); 
+
+            BlockData b = new BlockData { Cols = cols, Stress = stress, Type = type, Tool = tool, MatName = cols[7] };
+            
+            if (dict.TryGetValue(b.MatName, out var spec))
+            {
+                b.Tensile = spec.Tensile;
+                b.Compressive = spec.Compressive;
+                b.Price = spec.Density * spec.PricePerKg * 3.375f;
+            }
+            blocks.Add(b);
+        }
+
+        foreach (var b in blocks.Where(b => b.Tool == "Reinforcement"))
+        {
+            totalCost += b.Price;
+        }
+
+        var originalBlocks = blocks.Where(b => b.Tool != "Reinforcement").ToList();
+
+        if (mode == "Manual")
+        {
+            foreach (var b in originalBlocks)
+            {
+                string matName = b.Type == "Floor" ? selectedFloorMaterial : selectedWallMaterial;
+                b.MatName = matName;
+                if (dict.TryGetValue(matName, out var spec))
+                {
+                    b.Tensile = spec.Tensile;
+                    b.Compressive = spec.Compressive;
+                    b.Price = spec.Density * spec.PricePerKg * 3.375f; 
+                }
+                totalCost += b.Price;
+            }
+        }
+        else if (mode == "Cheap")
+        {
+            foreach (var b in originalBlocks)
+            {
+                var target = cheapMats.FirstOrDefault(m => math.min(m.Value.Tensile, m.Value.Compressive) >= b.Stress * 1.2f);
+                if (string.IsNullOrEmpty(target.Key)) target = strongestMat;
+
+                b.MatName = target.Key;
+                b.Tensile = target.Value.Tensile;
+                b.Compressive = target.Value.Compressive;
+                b.Price = target.Value.Density * target.Value.PricePerKg * 3.375f;
+                totalCost += b.Price;
+            }
+        }
+        else if (mode == "Expensive")
+        {
+            foreach (var b in originalBlocks)
+            {
+                var target = cheapMats.FirstOrDefault(m => math.min(m.Value.Tensile, m.Value.Compressive) >= b.Stress * 1.2f);
+                if (string.IsNullOrEmpty(target.Key)) target = strongestMat;
+
+                b.MatName = target.Key;
+                b.Tensile = target.Value.Tensile;
+                b.Compressive = target.Value.Compressive;
+                b.Price = target.Value.Density * target.Value.PricePerKg * 3.375f;
+                totalCost += b.Price;
+            }
+
+            var sortedBlocks = originalBlocks.OrderByDescending(b => b.Stress).ToList();
+            
+            foreach (var b in sortedBlocks)
+            {
+                foreach (var strongMat in strongestMats)
+                {
+                    float newPrice = strongMat.Value.Density * strongMat.Value.PricePerKg * 3.375f;
+                    
+                    if (math.min(strongMat.Value.Tensile, strongMat.Value.Compressive) > math.min(b.Tensile, b.Compressive) 
+                        && (totalCost - b.Price + newPrice) <= budget)
+                    {
+                        totalCost = totalCost - b.Price + newPrice;
+                        b.MatName = strongMat.Key;
+                        b.Tensile = strongMat.Value.Tensile;
+                        b.Compressive = strongMat.Value.Compressive;
+                        b.Price = newPrice;
+                        break;
+                    }
+                }
+            }
+        }
+
+        foreach (var b in blocks)
+        {
+            b.Cols[7] = b.MatName;
+            b.Cols[8] = b.Tensile.ToString("F1");
+            b.Cols[9] = b.Compressive.ToString("F1");
+            output.Add(string.Join(",", b.Cols));
+        }
+
+        File.WriteAllLines(csvPath, output);
+    }
+
+    void UndoLastReinforcement()
+    {
+        var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
+
+
+        string stressBlockLastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+        if (!File.Exists(stressBlockLastBuildPath)) return;
+
+        var allLines = File.ReadAllLines(stressBlockLastBuildPath);
+        int maxPhase = 0;
+        
+        for (int i = 1; i < allLines.Length; i++)
+        {
+            var c = allLines[i].Split(',');
+            if (c.Length >= 13 && int.TryParse(c[12].Trim(), out int p))
+            {
+                if (p > maxPhase) maxPhase = p;
+            }
+        }
+
+        if (maxPhase == 0)
+        {
+            Debug.LogWarning("⚠ 취소할 보강 내역이 없습니다. (현재 건물은 순수 원본입니다)");
+            return;
+        }
+
+        var cleanLines = allLines.Where(line => 
+        {
+            var c = line.Split(',');
+            if (c.Length < 13) return true;
+            if (c[0] == "BlockID") return true; 
+            int.TryParse(c[12].Trim(), out int p);
+            return p != maxPhase; 
+        }).ToList();
+
+        File.WriteAllLines(csvPath, cleanLines);
+        File.WriteAllLines(stressBlockLastBuildPath, cleanLines);
+        
+        string projectPath = Directory.GetParent(Application.dataPath).FullName;
+        string genPath = Path.Combine(projectPath, "BuildingLogs", "Last_Building.csv");
+        if (!Directory.Exists(Path.GetDirectoryName(genPath))) Directory.CreateDirectory(Path.GetDirectoryName(genPath));
+        File.WriteAllLines(genPath, cleanLines);
+
+        var bpManagerForClear = FindFirstObjectByType<BlueprintManager>();
+        if (bpManagerForClear != null) bpManagerForClear.ClearRuntimeCache();
+
+        SpawnerSystem.backupIDToQuery = -1f;
+        em.DestroyEntity(em.CreateEntityQuery(typeof(BlockTag)));
+        em.DestroyEntity(em.CreateEntityQuery(typeof(JointTag)));
+        em.DestroyEntity(em.CreateEntityQuery(typeof(GhostBlockTag)));
+        
+        showPanel = false;
+        yKeyState = 0;
+        SpawnerSystem.isUMode = false;
+        
+        SpawnerSystem.isAbsolutePositionMode = true;
+        SpawnerSystem.targetLoadFile = "Last_Building.csv"; 
+        SpawnerSystem.loadDelayTimer = 5f;
+
+        var dragController = FindFirstObjectByType<SimulationDragController>();
+        if (dragController != null) dragController.CancelDrag();
+
+        Debug.Log($"⏪ [{maxPhase}차 보강 취소] 가장 최근의 보강 작업을 취소했습니다!");
+        Invoke(nameof(CalculateCurrentCosts), 0.5f);
+    }
+
+    void ExecuteRemoveReinforcements()
+    {
+        string planPath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
+        string afterPath = Path.Combine(Application.dataPath, "StressBlock", "after_reinforce.csv");
+        if (File.Exists(planPath)) File.Delete(planPath);
+        if (File.Exists(afterPath)) File.Delete(afterPath);
+
+        var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
+        
+
+        string stressBlockLastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+        if (!File.Exists(stressBlockLastBuildPath)) return;
+
+        var cleanLines = File.ReadAllLines(stressBlockLastBuildPath).Where(line => 
+        {
+            var c = line.Split(',');
+            if (c.Length < 11) return true;
+            if (c[0] == "BlockID") return true; 
+            return c[10].Trim() != "Reinforcement"; 
+        }).ToList();
+
+        if (cleanLines.Count <= 1) return;
+
+        File.WriteAllLines(csvPath, cleanLines);
+        File.WriteAllLines(stressBlockLastBuildPath, cleanLines);
+
+        string projectPath = Directory.GetParent(Application.dataPath).FullName;
+        string genPath = Path.Combine(projectPath, "BuildingLogs", "Last_Building.csv");
+        if (!Directory.Exists(Path.GetDirectoryName(genPath))) Directory.CreateDirectory(Path.GetDirectoryName(genPath));
+        File.WriteAllLines(genPath, cleanLines);
+
+        var bpManagerForClear = FindFirstObjectByType<BlueprintManager>();
+        if (bpManagerForClear != null) bpManagerForClear.ClearRuntimeCache();
+
+        SpawnerSystem.backupIDToQuery = -1f;
+        
+        em.DestroyEntity(em.CreateEntityQuery(typeof(BlockTag)));
+        em.DestroyEntity(em.CreateEntityQuery(typeof(JointTag)));
+        em.DestroyEntity(em.CreateEntityQuery(typeof(GhostBlockTag)));
+        
+        if (LogManager.Instance != null) LogManager.Instance.OnPressRKey();
+
+        showPanel = false;
+        yKeyState = 0;
+        SpawnerSystem.isUMode = false;
+        
+        SpawnerSystem.isAbsolutePositionMode = true;
+        SpawnerSystem.targetLoadFile = "Last_Building.csv"; 
+        SpawnerSystem.loadDelayTimer = 5f;
+
+        var dragController = FindFirstObjectByType<SimulationDragController>();
+        if (dragController != null) dragController.CancelDrag();
+
+        Debug.Log("🗑️ [완벽 철거] 모든 회차의 보강재를 제거하고 순수 원본 뼈대만 남겼습니다!");
+        Invoke(nameof(CalculateCurrentCosts), 0.5f);
+    }
+}
+
+==================================================
+// FILE: BuilderActionSystem.cs
+﻿using Unity.Entities;
+using Unity.Physics; // ⭐ 조인트(철근) 데이터를 읽어오기 위한 물리 장비 장착!
+using UnityEngine;
+
+[UpdateInGroup(typeof(SimulationSystemGroup))]
+public partial struct BuilderActionSystem : ISystem
+{
+    public void OnUpdate(ref SystemState state)
+    {
+        if (!SystemAPI.HasSingleton<BuilderStateData>()) return;
+        var builderState = SystemAPI.GetSingleton<BuilderStateData>();
+        var ecb = new EntityCommandBuffer(Unity.Collections.Allocator.Temp);
+
+        // [Enter 키]: 가이드 확정 및 건설 실행
+        if (Input.GetKeyDown(KeyCode.Return) && builderState.CurrentMode >= 1 && builderState.CurrentMode <= 6)
+        {
+            Debug.Log($"[건설 확정] {builderState.CurrentMode}번 구조물 생성!");
+            // 여기에 각 모드별 블록 Instantiate 및 Physics Joint 연결 로직 호출
+        }
+
+        // [H 키]: 0번 모드에서 선택된 블록 보호(Lock) 토글
+        if (builderState.CurrentMode == 0 && Input.GetKeyDown(KeyCode.H))
+        {
+            foreach (var (selected, entity) in SystemAPI.Query<RefRO<SelectedTag>>().WithEntityAccess())
+            {
+                if (SystemAPI.HasComponent<ProtectedTag>(entity))
+                {
+                    ecb.RemoveComponent<ProtectedTag>(entity);
+                    Debug.Log("보호 해제됨");
+                }
+                else
+                {
+                    ecb.AddComponent<ProtectedTag>(entity);
+                    Debug.Log("보호 설정됨 (R키 면역)");
+                }
+            }
+        }
+
+        // [Delete 키]: 0번 모드에서 선택된 블록 즉시 삭제
+        if (builderState.CurrentMode == 0 && Input.GetKeyDown(KeyCode.Delete))
+        {
+            // 1. 선택된 벽돌 파괴
+            foreach (var (selected, entity) in SystemAPI.Query<RefRO<SelectedTag>>().WithEntityAccess())
+            {
+                ecb.DestroyEntity(entity);
+            }
+
+            // ⭐ 2. 유령 철근 철거: 조인트 양끝 중 하나라도 '삭제될 운명(Selected)'이라면 조인트도 파괴!
+            foreach (var (pair, entity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
+            {
+                bool aSelected = SystemAPI.HasComponent<SelectedTag>(pair.ValueRO.EntityA);
+                bool bSelected = SystemAPI.HasComponent<SelectedTag>(pair.ValueRO.EntityB);
+
+                if (aSelected || bSelected)
+                {
+                    ecb.DestroyEntity(entity);
+                }
+            }
+            Debug.Log("선택된 객체 및 연결된 조인트 삭제 완료");
+        }
+
+        // [R 키]: 대청소 (ProtectedTag 없는 모든 블록 삭제)
+        if (Input.GetKeyDown(KeyCode.R))
+        {
+            // 1. 보호받지 못하는 벽돌 파괴
+            foreach (var (block, entity) in SystemAPI.Query<RefRO<BlockTag>>().WithEntityAccess())
+            {
+                if (!SystemAPI.HasComponent<ProtectedTag>(entity))
+                {
+                    ecb.DestroyEntity(entity);
+                }
+            }
+
+            // ⭐ 2. 유령 철근 철거: 조인트 양끝 블록이 '둘 다 보호 상태'가 아니라면 조인트도 끊어버림!
+            foreach (var (pair, entity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
+            {
+                bool aProtected = SystemAPI.HasComponent<ProtectedTag>(pair.ValueRO.EntityA);
+                bool bProtected = SystemAPI.HasComponent<ProtectedTag>(pair.ValueRO.EntityB);
+
+                // 둘 중 하나라도 보호 태그가 없으면(즉, 삭제되었다면) 이 조인트는 쓸모없는 유령입니다.
+                if (!aProtected || !bProtected)
+                {
+                    ecb.DestroyEntity(entity);
+                }
+            }
+            Debug.Log("🧹 대청소 완료! (허공에 남은 유령 조인트까지 완벽 철거)");
+        }
+
+        ecb.Playback(state.EntityManager);
+        ecb.Dispose();
+    }
+}
+
+==================================================
+// FILE: BuilderComponents.cs
+using Unity.Entities;
+using Unity.Mathematics;
+
+// 시스템 전체의 상태를 관리하는 싱글톤 데이터
+public struct BuilderStateData : IComponentData
+{
+    public int CurrentMode;         // 0~6번 모드
+    public bool IsGuideEditMode;    // 9번 키 토글 상태
+    public bool IsDragging;         // 우클릭 드래그 중인지 여부
+
+    // 가이드(설계도) 정보
+    public float3 GuideStartPos;
+    public float3 GuideEndPos;
+    public float GuideRadius;
+    public float GuideHeight;
+
+    // 0번 선택 모드용 드래그 영역
+    public float2 SelectionStartScreen;
+    public float2 SelectionEndScreen;
+}
+
+// 블록 식별용 태그
+//public struct BlockTag : IComponentData { }
+
+// 6번 모터판 태그
+public struct MotorTag : IComponentData
+{
+    public float Speed;
+    public float Torque;
+    public float3 Normal;
+}
+
+// 0번 모드로 선택된 객체 표시
+public struct SelectedTag : IComponentData { }
+
+// H키로 보호된 객체 (R키 청소 면역)
+public struct ProtectedTag : IComponentData { }
+
+==================================================
+// FILE: BuilderInputSystem.cs
+using Unity.Entities;
+using Unity.Mathematics;
+using UnityEngine;
+
+[UpdateInGroup(typeof(InitializationSystemGroup))]
+public partial struct BuilderInputSystem : ISystem
+{
+    public void OnCreate(ref SystemState state)
+    {
+        // 싱글톤 초기화 (SystemAPI 대신 EntityManager를 직접 사용)
+        var entity = state.EntityManager.CreateEntity(typeof(BuilderStateData));
+        state.EntityManager.SetComponentData(entity, new BuilderStateData
+        {
+            CurrentMode = 1,
+            GuideHeight = 5f
+        });
+    }
+
+    public void OnUpdate(ref SystemState state)
+    {
+        // SystemAPI.GetSingletonRW는 state 없이 호출합니다.
+        if (!SystemAPI.HasSingleton<BuilderStateData>()) return;
+
+        var builderState = SystemAPI.GetSingletonRW<BuilderStateData>();
+
+        // 1. 모드 전환
+        if (Input.GetKeyDown(KeyCode.Alpha0)) builderState.ValueRW.CurrentMode = 0;
+        if (Input.GetKeyDown(KeyCode.Alpha1)) builderState.ValueRW.CurrentMode = 1;
+        if (Input.GetKeyDown(KeyCode.Alpha2)) builderState.ValueRW.CurrentMode = 2;
+        if (Input.GetKeyDown(KeyCode.Alpha3)) builderState.ValueRW.CurrentMode = 3;
+        if (Input.GetKeyDown(KeyCode.Alpha4)) builderState.ValueRW.CurrentMode = 4;
+        if (Input.GetKeyDown(KeyCode.Alpha5)) builderState.ValueRW.CurrentMode = 5;
+        if (Input.GetKeyDown(KeyCode.Alpha6)) builderState.ValueRW.CurrentMode = 6;
+
+        // 2. 9번 편집 모드 토글
+        if (Input.GetKeyDown(KeyCode.Alpha9))
+        {
+            builderState.ValueRW.IsGuideEditMode = !builderState.ValueRO.IsGuideEditMode;
+            Debug.Log($"9번 가이드/편집 모드: {(builderState.ValueRO.IsGuideEditMode ? "ON" : "OFF")}");
+        }
+
+        // 3. 마우스 조작 (가이드라인 처리)
+        HandleMouseInput(ref builderState);
+    }
+
+    private void HandleMouseInput(ref RefRW<BuilderStateData> state)
+    {
+        if (Input.GetMouseButtonDown(1))
+        {
+            state.ValueRW.IsDragging = true;
+        }
+        else if (Input.GetMouseButtonUp(1))
+        {
+            state.ValueRW.IsDragging = false;
+        }
+
+        if (state.ValueRO.IsGuideEditMode && Input.GetMouseButton(0))
+        {
+            float scroll = Input.GetAxis("Mouse Y");
+            if (math.abs(scroll) > 0.01f)
+            {
+                state.ValueRW.GuideHeight = math.max(1.0f, state.ValueRO.GuideHeight + (scroll * 10f)); // 속도 조절
+            }
+        }
+    }
+}
+
+==================================================

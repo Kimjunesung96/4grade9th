@@ -1,0 +1,948 @@
+// Project: 20260510_164838 Code Summary (Part b)
+// Total Lines: 945
+
+// FILE: BlueprintTargetGenerator.cs
+﻿using UnityEngine;
+using System.IO;
+using System.Collections.Generic;
+using System.Text;
+using Unity.Mathematics;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
+
+public class BlueprintTargetGenerator : MonoBehaviour
+{
+    private List<float3> currentScannedData = new List<float3>();
+    private Color32[] currentPixels;
+    private float texWidth = 0f;
+    private float texHeight = 0f;
+
+    // ⭐ 복원 및 업그레이드된 마우스 휠 복사 횟수 변수
+    private float currentFloorCount = 1f;
+
+    private bool showBlueprintUI = false;
+    private List<string> availableCsvFiles = new List<string>();
+    private Vector2 leftScrollPosition = Vector2.zero;
+    private Vector2 rightScrollPosition = Vector2.zero;
+
+    private bool isWaitingForLimit = false;
+    private string pendingFileName = "";
+
+    private string stressBlockFolder;
+    private string savedBlueprintsFolder;
+
+    // ⭐ 복층 장바구니 리스트! (누른 순서대로 1층, 2층, 3층이 됩니다)
+    private List<string> selectedFloors = new List<string>();
+
+    void Start()
+    {
+        stressBlockFolder = Path.Combine(Application.dataPath, "StressBlock");
+        if (!Directory.Exists(stressBlockFolder))
+        {
+            Directory.CreateDirectory(stressBlockFolder);
+        }
+
+        savedBlueprintsFolder = Path.Combine(stressBlockFolder, "SavedBlueprints");
+        if (!Directory.Exists(savedBlueprintsFolder))
+        {
+            Directory.CreateDirectory(savedBlueprintsFolder);
+        }
+    }
+
+    void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.O))
+        {
+            showBlueprintUI = !showBlueprintUI;
+            if (showBlueprintUI)
+            {
+                RefreshCsvList();
+                isWaitingForLimit = false;
+            }
+        }
+
+        if (Input.GetKeyDown(KeyCode.U))
+        {
+            SpawnerSystem.isUMode = true;
+            SpawnerSystem.isOMode = false;
+            SpawnerSystem.isLMode = false;
+            LoadLastBuildingForUMode();
+        }
+
+        if (isWaitingForLimit)
+        {
+            HandleNumericLimitInput();
+        }
+
+        if ((SpawnerSystem.isOMode || SpawnerSystem.isUMode) && currentScannedData.Count > 0f)
+        {
+            if (Input.GetKeyDown(KeyCode.Q)) RotateBlueprint(true);
+            if (Input.GetKeyDown(KeyCode.E)) RotateBlueprint(false);
+
+            // ⭐ 십장님 특명! 마우스 휠(복사) 즉각 복구 (장바구니 구성물 통째로 무한 복사 가능)
+            float scroll = Input.mouseScrollDelta.y;
+            if (scroll > 0.01f)
+            {
+                currentFloorCount += 1f;
+                ApplyOffsetAndLoad(currentScannedData);
+                Debug.Log($"🏢 [휠 UP] 건물이 통째로 복사되었습니다! 현재 총 [{currentFloorCount}세트] 장전 완료.");
+            }
+            else if (scroll < -0.01f)
+            {
+                currentFloorCount = math.max(1f, currentFloorCount - 1f);
+                ApplyOffsetAndLoad(currentScannedData);
+                Debug.Log($"🏢 [휠 DOWN] 제일 윗 단을 지웠습니다! 현재 총 [{currentFloorCount}세트] 장전 완료.");
+            }
+        }
+    }
+
+    void OnGUI()
+    {
+        if (!showBlueprintUI) return;
+
+        float boxWidth = 700f;
+        float boxHeight = 550f;
+        GUI.Box(new Rect(Screen.width / 2f - boxWidth / 2f, Screen.height / 2f - boxHeight / 2f, boxWidth, boxHeight), "📂 현장 도면 관리소 (O키로 닫기)");
+
+        // ==========================================
+        // ◀◀ 왼쪽: 도면 보관함 (Library)
+        // ==========================================
+        GUILayout.BeginArea(new Rect(Screen.width / 2f - 330f, Screen.height / 2f - 230f, 310f, 500f));
+
+        GUI.color = Color.green;
+        if (GUILayout.Button("➕ [새로 만들기] 새 이미지 스캔", GUILayout.Height(40f)))
+        {
+            showBlueprintUI = false;
+            OpenAndCacheImage();
+        }
+        GUI.color = Color.white;
+        GUILayout.Space(10f);
+
+        GUILayout.Label("📑 저장된 도면 (클릭 시 장바구니에 담김)");
+        leftScrollPosition = GUILayout.BeginScrollView(leftScrollPosition, "box");
+        for (int i = 0; i < availableCsvFiles.Count; i++)
+        {
+            string fileName = Path.GetFileNameWithoutExtension(availableCsvFiles[i]);
+            if (GUILayout.Button($"{i + 1}. {fileName}", GUILayout.Height(30f)))
+            {
+                selectedFloors.Add(availableCsvFiles[i]);
+            }
+        }
+        GUILayout.EndScrollView();
+        GUILayout.EndArea();
+
+        // ==========================================
+        // ▶▶ 오른쪽: 복층 구성 장바구니 (Cart)
+        // ==========================================
+        GUILayout.BeginArea(new Rect(Screen.width / 2f + 20f, Screen.height / 2f - 230f, 310f, 500f));
+
+        GUI.color = new Color(0.8f, 0.9f, 1f);
+        GUILayout.BeginVertical("box");
+        GUILayout.Label($"🛒 복층 설계 장바구니: 총 {selectedFloors.Count}층");
+
+        rightScrollPosition = GUILayout.BeginScrollView(rightScrollPosition);
+        for (int i = 0; i < selectedFloors.Count; i++)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label($" [{i + 1}층] {Path.GetFileNameWithoutExtension(selectedFloors[i])}");
+            GUI.color = new Color(1f, 0.5f, 0.5f);
+            if (GUILayout.Button("❌", GUILayout.Width(30f))) { selectedFloors.RemoveAt(i); }
+            GUI.color = new Color(0.8f, 0.9f, 1f);
+            GUILayout.EndHorizontal();
+        }
+        GUILayout.EndScrollView();
+
+        GUILayout.Space(10f);
+        if (selectedFloors.Count > 0)
+        {
+            GUI.color = Color.yellow;
+            if (GUILayout.Button("✅ [타설 완료] 이 구성으로 장전!", GUILayout.Height(50f)))
+            {
+                showBlueprintUI = false;
+                LoadStackedFloors();
+            }
+            GUI.color = new Color(1f, 0.5f, 0.5f);
+            if (GUILayout.Button("🗑️ 장바구니 비우기", GUILayout.Height(30f)))
+            {
+                selectedFloors.Clear();
+            }
+        }
+        else
+        {
+            GUILayout.Label("왼쪽 보관함에서 도면을 담아주세요.");
+        }
+        GUILayout.EndVertical();
+        GUI.color = Color.white;
+
+        GUILayout.EndArea();
+    }
+
+    private void RefreshCsvList()
+    {
+        availableCsvFiles.Clear();
+        string[] files = Directory.GetFiles(savedBlueprintsFolder, "*.csv");
+        foreach (var file in files)
+        {
+            availableCsvFiles.Add(file);
+        }
+    }
+
+    private void OpenAndCacheImage()
+    {
+#if UNITY_EDITOR
+        string imagePath = EditorUtility.OpenFilePanel("도면 이미지 선택", "", "png,jpg,jpeg");
+        
+        if (!string.IsNullOrEmpty(imagePath))
+        {
+            pendingFileName = Path.GetFileNameWithoutExtension(imagePath);
+            
+           // 🛠️ 수정된 코드
+byte[] bytes = File.ReadAllBytes(imagePath);
+Texture2D tex = new Texture2D(2, 2);
+tex.LoadImage(bytes);
+
+currentPixels = tex.GetPixels32();
+texWidth = (float)tex.width;
+texHeight = (float)tex.height;
+
+// 에디터 환경에서는 무조건 즉시 파괴(Immediate)를 써야 찌꺼기가 안 남습니다!
+DestroyImmediate(tex);
+
+            isWaitingForLimit = true;
+            Debug.Log($"⚙️ [{pendingFileName}] 이미지 스캔 대기! 숫자키[1~0]를 눌러 타설 사이즈(밀도)를 확정하세요.");
+        }
+#else
+        Debug.LogWarning("파일 다이얼로그는 에디터 전용입니다.");
+#endif
+    }
+
+    private void HandleNumericLimitInput()
+    {
+        float targetLimit = -1f;
+
+        if (Input.GetKeyDown(KeyCode.Alpha1)) targetLimit = 1000f;
+        else if (Input.GetKeyDown(KeyCode.Alpha2)) targetLimit = 2000f;
+        else if (Input.GetKeyDown(KeyCode.Alpha3)) targetLimit = 3000f;
+        else if (Input.GetKeyDown(KeyCode.Alpha4)) targetLimit = 4000f;
+        else if (Input.GetKeyDown(KeyCode.Alpha5)) targetLimit = 5000f;
+        else if (Input.GetKeyDown(KeyCode.Alpha6)) targetLimit = 6000f;
+        else if (Input.GetKeyDown(KeyCode.Alpha7)) targetLimit = 7000f;
+        else if (Input.GetKeyDown(KeyCode.Alpha8)) targetLimit = 8000f;
+        else if (Input.GetKeyDown(KeyCode.Alpha9)) targetLimit = 9000f;
+        else if (Input.GetKeyDown(KeyCode.Alpha0)) targetLimit = 10000f;
+
+        if (targetLimit > 0f)
+        {
+            isWaitingForLimit = false;
+            Debug.Log($"⚙️ 사이즈 [{targetLimit}개] 추출 및 저장 중...");
+
+            var scanResult = SearchUnderLimit(currentPixels, texWidth, texHeight, targetLimit);
+            float dupCount = 0f;
+            List<float3> finalBlocks = RemoveDuplicates(scanResult, out dupCount);
+
+            string newFileName = $"{pendingFileName}_사이즈{targetLimit}";
+            string newCsvPath = Path.Combine(savedBlueprintsFolder, newFileName + ".csv");
+
+            SaveListToCSV(finalBlocks, newCsvPath);
+
+            Debug.Log($"💾 [{newFileName}.csv] 저장 완료! 장바구니에 자동으로 담깁니다.");
+
+            selectedFloors.Add(newCsvPath);
+            RefreshCsvList();
+            showBlueprintUI = true;
+        }
+    }
+
+    private void LoadStackedFloors()
+    {
+        SpawnerSystem.isOMode = true;
+        SpawnerSystem.isLMode = false;
+        SpawnerSystem.isUMode = false;
+
+        List<float3> finalStackedData = new List<float3>();
+
+        for (int i = 0; i < selectedFloors.Count; i++)
+        {
+            string path = selectedFloors[i];
+            if (File.Exists(path))
+            {
+                List<float3> rawList = new List<float3>();
+                string[] lines = File.ReadAllLines(path);
+
+                for (int j = 1; j < lines.Length; j++)
+                {
+                    string[] cols = lines[j].Split(',');
+                    if (cols.Length >= 4 && cols[0] != "ID")
+                    {
+                        // ⭐ X, Z 스냅 정밀 교정 적용
+                        float x = math.round((float.Parse(cols[1]) - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                        float y = math.round((float.Parse(cols[2]) - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                        float z = math.round((float.Parse(cols[3]) - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                        rawList.Add(new float3(x, y, z));
+                    }
+                }
+
+                List<float3> centeredList = CenterDataToOffset(rawList);
+
+                // ⭐ 층수 15.0f 오프셋 적용
+                float floorYOffset = i * 15.0f;
+
+                foreach (var p in centeredList)
+                {
+                    finalStackedData.Add(new float3(p.x, p.y + floorYOffset, p.z));
+                }
+            }
+        }
+
+        currentScannedData = finalStackedData;
+        currentFloorCount = 1f; // ⭐ 장바구니를 새로 장전할 때는 휠 복사 횟수를 1배로 초기화!
+        SpawnerSystem.ExternalBlueprintData = finalStackedData;
+
+        Debug.Log($"✅ [복층 타설 준비 완료] 총 {selectedFloors.Count}층 건물, {finalStackedData.Count}개 블록 장전! 우클릭(에임), Q/E(회전), F/G(타설) 조작 지원.");
+
+        selectedFloors.Clear();
+    }
+
+    private void SaveListToCSV(List<float3> blocks, string path)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.AppendLine("ID,X,Y,Z,Type");
+        foreach (var p in blocks)
+        {
+            string typeStr = p.y > 1.5f ? "Wall" : "Floor";
+            // ⭐ 기존 ID 규격(X*10_Z*10_Y*10) 완벽 복구
+            string id = $"{(int)math.round(p.x * 10f)}_{(int)math.round(p.z * 10f)}_{(int)math.round(p.y * 10f)}";
+            sb.AppendLine($"{id},{p.x},{p.y},{p.z},{typeStr}");
+        }
+        File.WriteAllText(path, sb.ToString());
+    }
+
+    private void LoadLastBuildingForUMode()
+    {
+        string path = Path.Combine(stressBlockFolder, "Last_Building.csv");
+        if (File.Exists(path))
+        {
+            List<float3> rawList = new List<float3>();
+            string[] lines = File.ReadAllLines(path);
+            for (int i = 1; i < lines.Length; i++)
+            {
+                string[] cols = lines[i].Split(',');
+                if (cols.Length >= 4 && cols[0] != "ID")
+                {
+                    float x = math.round((float.Parse(cols[1]) - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                    float y = math.round((float.Parse(cols[2]) - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                    float z = math.round((float.Parse(cols[3]) - 1.5f) / 3.0f) * 3.0f + 1.5f;
+                    rawList.Add(new float3(x, y, z));
+                }
+            }
+
+            if (rawList.Count > 0)
+            {
+                currentScannedData = CenterDataToOffset(rawList);
+                currentFloorCount = 1f;
+                SpawnerSystem.ExternalBlueprintData = currentScannedData;
+                Debug.Log($"💾 [U 모드 발동] 방금 지은 쌍둥이 건물 [{rawList.Count}개] 장전 완료!");
+            }
+        }
+        else
+        {
+            Debug.LogWarning("⚠️ Last_Building.csv 파일을 찾을 수 없습니다. 건물을 먼저 지어주세요.");
+        }
+    }
+
+    private List<float3> CenterDataToOffset(List<float3> rawData)
+    {
+        if (rawData.Count == 0) return rawData;
+
+        float minX = 99999f, minZ = 99999f, maxX = -99999f, maxZ = -99999f;
+        foreach (var p in rawData)
+        {
+            if (p.x < minX) minX = p.x;
+            if (p.x > maxX) maxX = p.x;
+            if (p.z < minZ) minZ = p.z;
+            if (p.z > maxZ) maxZ = p.z;
+        }
+
+        float centerX = math.round(((minX + maxX) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
+        float centerZ = math.round(((minZ + maxZ) / 2f - 1.5f) / 3.0f) * 3.0f + 1.5f;
+
+        List<float3> centeredData = new List<float3>();
+        foreach (var p in rawData)
+        {
+            centeredData.Add(new float3(p.x - centerX, p.y, p.z - centerZ));
+        }
+        return centeredData;
+    }
+
+    private void RotateBlueprint(bool isLeft)
+    {
+        List<float3> rotatedData = new List<float3>();
+
+        foreach (var p in currentScannedData)
+        {
+            float newX = isLeft ? -p.z : p.z;
+            float newZ = isLeft ? p.x : -p.x;
+            rotatedData.Add(new float3(newX, p.y, newZ));
+        }
+
+        currentScannedData = rotatedData;
+        ApplyOffsetAndLoad(currentScannedData);
+
+        Debug.Log($"🔄 도면이 {(isLeft ? "[왼쪽:Q]" : "[오른쪽:E]")}으로 90도 회전했습니다!");
+    }
+
+    private void ApplyOffsetAndLoad(List<float3> centeredRawData)
+    {
+        List<float3> stackedData = new List<float3>();
+
+        // ⭐ 장바구니로 만든 복층 도면도 완벽하게 위로 복사되도록 '가장 높은 지붕'을 찾아서 계산!
+        float maxY = 0f;
+        foreach (var p in centeredRawData) { if (p.y > maxY) maxY = p.y; }
+        float heightStep = math.floor(maxY / 15.0f) * 15.0f + 15.0f;
+        if (heightStep < 15.0f) heightStep = 15.0f;
+
+        for (float floor = 0f; floor < currentFloorCount; floor += 1f)
+        {
+            float floorYOffset = floor * heightStep;
+
+            foreach (var pos in centeredRawData)
+            {
+                stackedData.Add(new float3(pos.x, pos.y + floorYOffset, pos.z));
+            }
+        }
+
+        SpawnerSystem.ExternalBlueprintData = stackedData;
+    }
+
+    List<float3> RemoveDuplicates(List<float3> rawData, out float duplicateCount)
+    {
+        HashSet<string> uniqueCheck = new HashSet<string>();
+        List<float3> cleanList = new List<float3>();
+        duplicateCount = 0f;
+
+        foreach (var pos in rawData)
+        {
+            // ⭐ X, Z 스냅 정밀 교정
+            float snapX = math.round((pos.x - 1.5f) / 3.0f) * 3.0f + 1.5f;
+            float snapY = math.round((pos.y - 1.5f) / 3.0f) * 3.0f + 1.5f;
+            float snapZ = math.round((pos.z - 1.5f) / 3.0f) * 3.0f + 1.5f;
+
+            string id = $"{snapX}_{snapY}_{snapZ}";
+
+            if (!uniqueCheck.Contains(id))
+            {
+                uniqueCheck.Add(id);
+                cleanList.Add(new float3(snapX, snapY, snapZ));
+            }
+            else
+            {
+                duplicateCount += 1f;
+            }
+        }
+        return cleanList;
+    }
+
+    List<float3> SearchUnderLimit(Color32[] pixels, float w, float h, float limit)
+    {
+        for (float size = 2f; size < 500f; size += 1f)
+        {
+            List<float3> res = Scan(pixels, w, h, size);
+            if ((float)res.Count <= limit) return res;
+        }
+        return new List<float3>();
+    }
+
+    List<float3> Scan(Color32[] pixels, float w, float h, float size)
+    {
+        List<float3> list = new List<float3>();
+        for (float x = 0f; x <= w - size; x += size)
+        {
+            for (float z = 0f; z <= h - size; z += size)
+            {
+                float redCount = 0f;
+                float blueCount = 0f;
+                float blackCount = 0f;
+
+                for (float i = 0f; i < size; i += 1f)
+                {
+                    for (float j = 0f; j < size; j += 1f)
+                    {
+                        if (x + i < w && z + j < h)
+                        {
+                            Color32 p = pixels[(int)((z + j) * w + (x + i))];
+                            if (p.a > 128f)
+                            {
+                                if (p.r > 150f && p.g < 100f && p.b < 100f) redCount += 1f;
+                                else if (p.b > 150f && p.r < 100f && p.g < 150f) blueCount += 1f;
+                                else if ((p.r + p.g + p.b) / 3f < 128f) blackCount += 1f;
+                            }
+                        }
+                    }
+                }
+
+                float area = size * size;
+
+                // ⭐ 애초에 스캔할 때부터 좌표에 1.5f를 박아넣어 오차 원천 차단!
+                if (redCount / area >= 0.1f)
+                {
+                    for (float y = 0f; y < 5f; y += 1f) list.Add(new float3(((int)(x / size)) * 3f + 1.5f, y * 3f + 1.5f, ((int)(z / size)) * 3f + 1.5f));
+                }
+                else if (blueCount > 0f)
+                {
+                    list.Add(new float3(((int)(x / size)) * 3f + 1.5f, 1.5f, ((int)(z / size)) * 3f + 1.5f));
+                }
+                else if (blackCount / area >= 0.3f)
+                {
+                    for (float y = 0f; y < 5f; y += 1f) list.Add(new float3(((int)(x / size)) * 3f + 1.5f, y * 3f + 1.5f, ((int)(z / size)) * 3f + 1.5f));
+                }
+                else if (blackCount > 0f)
+                {
+                    list.Add(new float3(((int)(x / size)) * 3f + 1.5f, 1.5f, ((int)(z / size)) * 3f + 1.5f));
+                }
+            }
+        }
+        return list;
+    }
+}
+
+==================================================
+// FILE: BlockStress.cs
+﻿using Unity.Entities;
+using Unity.Collections;
+using Unity.Physics;
+using Unity.Mathematics; // ⭐ math 에러 해결을 위해 필수 포함!
+
+public struct BlockStress : IComponentData { public float TargetStress; public float SmoothedStress; }
+
+public struct BlockHealth : IComponentData { public float MaxHP; public float CurrentHP; public float Defense; }
+
+public struct BlockMaterial : IComponentData
+{
+    public FixedString32Bytes MaterialName;
+    public bool IsBrittle;
+    public float TensileStiffness;
+    public float CompressiveStiffness;
+    public float ShearStiffness;
+    public float BendingStiffness;
+    public float TorsionStiffness;
+}
+
+[UpdateInGroup(typeof(SimulationSystemGroup))]
+public partial struct DefaultMaterialInitSystem : ISystem
+{
+    public void OnUpdate(ref SystemState state)
+    {
+        var ecb = new EntityCommandBuffer(Allocator.Temp);
+        foreach (var (tag, entity) in SystemAPI.Query<RefRO<BlockTag>>().WithNone<BlockMaterial>().WithEntityAccess())
+        {
+            ecb.AddComponent(entity, new BlockMaterial { MaterialName = "Default" });
+            // ⭐ 디폴트 방어력 400 셋팅
+            ecb.AddComponent(entity, new BlockHealth { MaxHP = 999999.0f, CurrentHP = 999999.0f, Defense = 400.0f });
+        }
+        ecb.Playback(state.EntityManager);
+        ecb.Dispose();
+    }
+}
+
+[UpdateInGroup(typeof(SimulationSystemGroup))]
+[UpdateAfter(typeof(DefaultMaterialInitSystem))]
+public partial class MaterialPropertyInitSystem : SystemBase
+{
+    protected override void OnUpdate()
+    {
+        var matManager = MaterialDataManager.Instance;
+        if (matManager == null || matManager.MaterialDict.Count == 0) return;
+
+        foreach (var (mat, health, entity) in SystemAPI.Query<RefRW<BlockMaterial>, RefRW<BlockHealth>>().WithAll<BlockTag>().WithEntityAccess())
+        {
+            if (mat.ValueRO.TensileStiffness == 0.0f)
+            {
+                string name = mat.ValueRO.MaterialName.ToString();
+                if (!matManager.MaterialDict.ContainsKey(name)) name = "Default";
+
+                var spec = matManager.MaterialDict[name];
+
+                mat.ValueRW.IsBrittle = spec.IsBrittle;
+                mat.ValueRW.TensileStiffness = spec.Tensile;
+                mat.ValueRW.CompressiveStiffness = spec.Compressive;
+                mat.ValueRW.ShearStiffness = spec.Shear;
+                mat.ValueRW.BendingStiffness = spec.Bending;
+                mat.ValueRW.TorsionStiffness = spec.Torsion;
+
+                health.ValueRW.MaxHP = spec.BaseHP;
+                health.ValueRW.CurrentHP = spec.BaseHP;
+
+                // ⭐ 방어력을 인장/압축 중 더 약한 쪽(최솟값)으로 자동 세팅
+                health.ValueRW.Defense = math.min(spec.Tensile, spec.Compressive);
+
+                if (SystemAPI.HasComponent<PhysicsMass>(entity))
+                {
+                    var mass = SystemAPI.GetComponentRW<PhysicsMass>(entity);
+                    if (mass.ValueRO.InverseMass > 0.0f)
+                    {
+                        // ⭐ [핵심] 15cm 축척 반영 (3유닛 = 0.15m)
+                        float realWorldScale = 0.15f;
+                        float realVolume = math.pow(realWorldScale, 3); // 0.003375m^3
+
+                        // 실제 질량 계산 (예: 콘크리트 2.4 * 0.003375 = 0.0081t -> 8.1kg)
+                        float calculatedMass = spec.Density * realVolume;
+
+                        if (calculatedMass <= 0.0f) calculatedMass = 0.0001f;
+                        mass.ValueRW.InverseMass = 1.0f / calculatedMass;
+                    }
+                }
+            }
+        }
+    }
+}
+
+==================================================
+// FILE: BuilderActionSystem.cs
+﻿using Unity.Entities;
+using Unity.Physics; // ⭐ 조인트(철근) 데이터를 읽어오기 위한 물리 장비 장착!
+using UnityEngine;
+
+[UpdateInGroup(typeof(SimulationSystemGroup))]
+public partial struct BuilderActionSystem : ISystem
+{
+    public void OnUpdate(ref SystemState state)
+    {
+        if (!SystemAPI.HasSingleton<BuilderStateData>()) return;
+        var builderState = SystemAPI.GetSingleton<BuilderStateData>();
+        var ecb = new EntityCommandBuffer(Unity.Collections.Allocator.Temp);
+
+        // [Enter 키]: 가이드 확정 및 건설 실행
+        if (Input.GetKeyDown(KeyCode.Return) && builderState.CurrentMode >= 1 && builderState.CurrentMode <= 6)
+        {
+            Debug.Log($"[건설 확정] {builderState.CurrentMode}번 구조물 생성!");
+            // 여기에 각 모드별 블록 Instantiate 및 Physics Joint 연결 로직 호출
+        }
+
+        // [H 키]: 0번 모드에서 선택된 블록 보호(Lock) 토글
+        if (builderState.CurrentMode == 0 && Input.GetKeyDown(KeyCode.H))
+        {
+            foreach (var (selected, entity) in SystemAPI.Query<RefRO<SelectedTag>>().WithEntityAccess())
+            {
+                if (SystemAPI.HasComponent<ProtectedTag>(entity))
+                {
+                    ecb.RemoveComponent<ProtectedTag>(entity);
+                    Debug.Log("보호 해제됨");
+                }
+                else
+                {
+                    ecb.AddComponent<ProtectedTag>(entity);
+                    Debug.Log("보호 설정됨 (R키 면역)");
+                }
+            }
+        }
+
+        // [Delete 키]: 0번 모드에서 선택된 블록 즉시 삭제
+        if (builderState.CurrentMode == 0 && Input.GetKeyDown(KeyCode.Delete))
+        {
+            // 1. 선택된 벽돌 파괴
+            foreach (var (selected, entity) in SystemAPI.Query<RefRO<SelectedTag>>().WithEntityAccess())
+            {
+                ecb.DestroyEntity(entity);
+            }
+
+            // ⭐ 2. 유령 철근 철거: 조인트 양끝 중 하나라도 '삭제될 운명(Selected)'이라면 조인트도 파괴!
+            foreach (var (pair, entity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
+            {
+                bool aSelected = SystemAPI.HasComponent<SelectedTag>(pair.ValueRO.EntityA);
+                bool bSelected = SystemAPI.HasComponent<SelectedTag>(pair.ValueRO.EntityB);
+
+                if (aSelected || bSelected)
+                {
+                    ecb.DestroyEntity(entity);
+                }
+            }
+            Debug.Log("선택된 객체 및 연결된 조인트 삭제 완료");
+        }
+
+        // [R 키]: 대청소 (ProtectedTag 없는 모든 블록 삭제)
+        if (Input.GetKeyDown(KeyCode.R))
+        {
+            // 1. 보호받지 못하는 벽돌 파괴
+            foreach (var (block, entity) in SystemAPI.Query<RefRO<BlockTag>>().WithEntityAccess())
+            {
+                if (!SystemAPI.HasComponent<ProtectedTag>(entity))
+                {
+                    ecb.DestroyEntity(entity);
+                }
+            }
+
+            // ⭐ 2. 유령 철근 철거: 조인트 양끝 블록이 '둘 다 보호 상태'가 아니라면 조인트도 끊어버림!
+            foreach (var (pair, entity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
+            {
+                bool aProtected = SystemAPI.HasComponent<ProtectedTag>(pair.ValueRO.EntityA);
+                bool bProtected = SystemAPI.HasComponent<ProtectedTag>(pair.ValueRO.EntityB);
+
+                // 둘 중 하나라도 보호 태그가 없으면(즉, 삭제되었다면) 이 조인트는 쓸모없는 유령입니다.
+                if (!aProtected || !bProtected)
+                {
+                    ecb.DestroyEntity(entity);
+                }
+            }
+            Debug.Log("🧹 대청소 완료! (허공에 남은 유령 조인트까지 완벽 철거)");
+        }
+
+        ecb.Playback(state.EntityManager);
+        ecb.Dispose();
+    }
+}
+
+==================================================
+// FILE: BuilderComponents.cs
+using Unity.Entities;
+using Unity.Mathematics;
+
+// 시스템 전체의 상태를 관리하는 싱글톤 데이터
+public struct BuilderStateData : IComponentData
+{
+    public int CurrentMode;         // 0~6번 모드
+    public bool IsGuideEditMode;    // 9번 키 토글 상태
+    public bool IsDragging;         // 우클릭 드래그 중인지 여부
+
+    // 가이드(설계도) 정보
+    public float3 GuideStartPos;
+    public float3 GuideEndPos;
+    public float GuideRadius;
+    public float GuideHeight;
+
+    // 0번 선택 모드용 드래그 영역
+    public float2 SelectionStartScreen;
+    public float2 SelectionEndScreen;
+}
+
+// 블록 식별용 태그
+//public struct BlockTag : IComponentData { }
+
+// 6번 모터판 태그
+public struct MotorTag : IComponentData
+{
+    public float Speed;
+    public float Torque;
+    public float3 Normal;
+}
+
+// 0번 모드로 선택된 객체 표시
+public struct SelectedTag : IComponentData { }
+
+// H키로 보호된 객체 (R키 청소 면역)
+public struct ProtectedTag : IComponentData { }
+
+==================================================
+// FILE: BuilderInputSystem.cs
+using Unity.Entities;
+using Unity.Mathematics;
+using UnityEngine;
+
+[UpdateInGroup(typeof(InitializationSystemGroup))]
+public partial struct BuilderInputSystem : ISystem
+{
+    public void OnCreate(ref SystemState state)
+    {
+        // 싱글톤 초기화 (SystemAPI 대신 EntityManager를 직접 사용)
+        var entity = state.EntityManager.CreateEntity(typeof(BuilderStateData));
+        state.EntityManager.SetComponentData(entity, new BuilderStateData
+        {
+            CurrentMode = 1,
+            GuideHeight = 5f
+        });
+    }
+
+    public void OnUpdate(ref SystemState state)
+    {
+        // SystemAPI.GetSingletonRW는 state 없이 호출합니다.
+        if (!SystemAPI.HasSingleton<BuilderStateData>()) return;
+
+        var builderState = SystemAPI.GetSingletonRW<BuilderStateData>();
+
+        // 1. 모드 전환
+        if (Input.GetKeyDown(KeyCode.Alpha0)) builderState.ValueRW.CurrentMode = 0;
+        if (Input.GetKeyDown(KeyCode.Alpha1)) builderState.ValueRW.CurrentMode = 1;
+        if (Input.GetKeyDown(KeyCode.Alpha2)) builderState.ValueRW.CurrentMode = 2;
+        if (Input.GetKeyDown(KeyCode.Alpha3)) builderState.ValueRW.CurrentMode = 3;
+        if (Input.GetKeyDown(KeyCode.Alpha4)) builderState.ValueRW.CurrentMode = 4;
+        if (Input.GetKeyDown(KeyCode.Alpha5)) builderState.ValueRW.CurrentMode = 5;
+        if (Input.GetKeyDown(KeyCode.Alpha6)) builderState.ValueRW.CurrentMode = 6;
+
+        // 2. 9번 편집 모드 토글
+        if (Input.GetKeyDown(KeyCode.Alpha9))
+        {
+            builderState.ValueRW.IsGuideEditMode = !builderState.ValueRO.IsGuideEditMode;
+            Debug.Log($"9번 가이드/편집 모드: {(builderState.ValueRO.IsGuideEditMode ? "ON" : "OFF")}");
+        }
+
+        // 3. 마우스 조작 (가이드라인 처리)
+        HandleMouseInput(ref builderState);
+    }
+
+    private void HandleMouseInput(ref RefRW<BuilderStateData> state)
+    {
+        if (Input.GetMouseButtonDown(1))
+        {
+            state.ValueRW.IsDragging = true;
+        }
+        else if (Input.GetMouseButtonUp(1))
+        {
+            state.ValueRW.IsDragging = false;
+        }
+
+        if (state.ValueRO.IsGuideEditMode && Input.GetMouseButton(0))
+        {
+            float scroll = Input.GetAxis("Mouse Y");
+            if (math.abs(scroll) > 0.01f)
+            {
+                state.ValueRW.GuideHeight = math.max(1.0f, state.ValueRO.GuideHeight + (scroll * 10f)); // 속도 조절
+            }
+        }
+    }
+}
+
+==================================================
+// FILE: CameraController.cs
+﻿using UnityEngine;
+using Unity.Mathematics;
+
+public class CameraController : MonoBehaviour
+{
+    [Header("📷 카메라 회전 (Orbit) 설정")]
+    public Transform target; // 🎯 바라볼 중심점 (공사 현장 중앙)
+    public float rotationSpeed = 10f; // Q/E 키 누를 때 회전하는 속도
+    public float angleStep = 45f; // 한 번에 돌아가는 각도 (정팔각형 = 45도)
+
+    [Header("🔍 카메라 줌 (Zoom) 설정")]
+    public float scrollSpeed = 5f; // 휠 스크롤 속도
+    public float minDistance = 10f; // 최대한 가까이 갈 수 있는 거리
+    public float maxDistance = 100f; // 최대한 멀리 갈 수 있는 거리
+
+    private float currentDistance; // 현재 중심점과의 거리
+    private float targetAngle; // 목표 회전 각도
+    private float currentAngle; // 현재 회전 각도
+
+    void Start()
+    {
+        // 1. 시작할 때 타겟(중심점)이 없으면, 카메라 앞쪽 바닥을 임시 타겟으로 잡습니다.
+        if (target == null)
+        {
+            GameObject tempTarget = new GameObject("CameraCenterPoint");
+            // 카메라가 바라보는 방향으로 땅바닥(y=0)과 만나는 지점을 찾습니다.
+            float distanceToGround = transform.position.y / Mathf.Cos(Vector3.Angle(Vector3.down, transform.forward) * Mathf.Deg2Rad);
+            tempTarget.transform.position = transform.position + transform.forward * distanceToGround;
+            tempTarget.transform.position = new Vector3(tempTarget.transform.position.x, 0, tempTarget.transform.position.z);
+            target = tempTarget.transform;
+            Debug.Log("🎯 [카메라] 중심점(Target)이 없어서 임시 중심점을 생성했습니다.");
+        }
+
+        // 2. 시작할 때 현재 카메라와 타겟 사이의 거리와 각도를 계산하여 저장합니다.
+        Vector3 offset = transform.position - target.position;
+        offset.y = 0; // 수평 각도만 계산
+        currentAngle = Vector3.SignedAngle(Vector3.forward, offset, Vector3.up);
+        targetAngle = currentAngle;
+        currentDistance = Vector3.Distance(transform.position, target.position);
+    }
+
+    void Update()
+    {
+        HandleRotation();
+        HandleZoom();
+        UpdateCameraPosition();
+    }
+
+    // 🔄 Q / E 키로 정팔각형(45도씩) 목표 각도 설정
+    private void HandleRotation()
+    {
+        if (Input.GetKeyDown(KeyCode.Q))
+        {
+            targetAngle += angleStep; // 왼쪽으로 45도
+        }
+        else if (Input.GetKeyDown(KeyCode.E))
+        {
+            targetAngle -= angleStep; // 오른쪽으로 45도
+        }
+
+        // 부드럽게 목표 각도로 회전 (스무딩 효과)
+        currentAngle = Mathf.LerpAngle(currentAngle, targetAngle, Time.deltaTime * rotationSpeed);
+    }
+
+    // 🔍 마우스 휠로 거리감(Zoom) 조절
+    private void HandleZoom()
+    {
+        float scroll = Input.GetAxis("Mouse ScrollWheel");
+        if (scroll != 0f)
+        {
+            // 휠을 굴리면 거리가 변하지만, 설정한 최소/최대 거리를 넘지 못하게 막습니다.
+            currentDistance -= scroll * scrollSpeed;
+            currentDistance = Mathf.Clamp(currentDistance, minDistance, maxDistance);
+        }
+    }
+
+    // 🎥 계산된 각도와 거리를 바탕으로 카메라의 실제 위치와 방향 업데이트
+    private void UpdateCameraPosition()
+    {
+        // 삼각함수를 써서 타겟 주변을 도는 새로운 X, Z 위치를 계산합니다.
+        float rad = currentAngle * Mathf.Deg2Rad;
+
+        // 현재 카메라의 높이(Y)와 내려다보는 각도(Pitch)는 그대로 유지!
+        float heightOffset = transform.position.y - target.position.y;
+
+        // 수평 거리(바닥 기준)를 피타고라스 정리로 역계산
+        float horizontalDistance = Mathf.Sqrt(currentDistance * currentDistance - heightOffset * heightOffset);
+        // 만약 너무 가까이 줌인해서 에러가 나면 보정해줍니다.
+        if (float.IsNaN(horizontalDistance)) horizontalDistance = 1f;
+
+        Vector3 newPos = target.position + new Vector3(Mathf.Sin(rad) * horizontalDistance, heightOffset, Mathf.Cos(rad) * horizontalDistance);
+
+        transform.position = newPos;
+
+        // 항상 타겟(중심점)을 정면으로 바라보게 각도를 돌려줍니다.
+        transform.LookAt(target);
+    }
+}
+
+==================================================
+// FILE: CameraFollowSystem.cs
+﻿using Unity.Entities;
+using Unity.Transforms;
+using Unity.Mathematics;
+using UnityEngine;
+
+// 화면을 그리기 직전에 카메라 위치를 업데이트합니다.
+[UpdateInGroup(typeof(PresentationSystemGroup))]
+public partial struct CameraFollowSystem : ISystem
+{
+    private float3 offset;
+
+    public void OnCreate(ref SystemState state)
+    {
+        state.RequireForUpdate<PlayerData>();
+        offset = new float3(0, 15f, -15f); // 연줄의 길이
+    }
+
+    public void OnUpdate(ref SystemState state)
+    {
+        if (Camera.main == null) return;
+
+        // ⭐ 핵심: .WithNone<Prefab>() 을 추가해서 정중앙에 숨어있는 투명 프리팹 유령을 무시합니다!
+        foreach (var transform in SystemAPI.Query<RefRO<LocalTransform>>().WithAll<PlayerData>().WithNone<Prefab>())
+        {
+            float3 playerPos = transform.ValueRO.Position;
+
+            // 1. 카메라 목표 위치 계산
+            Vector3 targetPos = playerPos + offset;
+
+            // 2. 부드럽게 고무줄처럼 따라가기
+            Camera.main.transform.position = Vector3.Lerp(Camera.main.transform.position, targetPos, SystemAPI.Time.DeltaTime * 5f);
+
+            // 3. 고개 까딱임 방지 (항상 45도 땅을 내려다봄)
+            Camera.main.transform.rotation = Quaternion.Euler(45f, 0f, 0f);
+
+            // ⭐ 1명만 찾았으면 바로 반복문을 종료해서 화면 떨림(지진)을 완벽 차단!
+            break;
+        }
+    }
+}
+
+==================================================

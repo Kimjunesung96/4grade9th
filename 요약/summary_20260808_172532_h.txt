@@ -1,0 +1,685 @@
+// Project: 20260808_172532 Code Summary (Part h)
+// Total Lines: 682
+
+// FILE: SpawnerSystem_Cylinder.cs
+﻿using Unity.Entities;
+using Unity.Transforms;
+using Unity.Mathematics;
+using UnityEngine;
+using Unity.Physics;
+using Unity.Collections;
+using Unity.Rendering;
+
+public partial struct SpawnerSystem
+{
+    private void BuildCircularPattern(ref SystemState state, SpawnerData data, float3 startPos, float3 endPos, float targetY, Entity hitEntity, float3 hitEntityPos, int structureID, bool isGhost)
+    {
+        var ecb = SystemAPI.GetSingleton<BeginSimulationEntityCommandBufferSystem.Singleton>().CreateCommandBuffer(state.WorldUnmanaged);
+        float blockSize = 3.0f;
+        float margin = 0.05f;
+
+        float3 startXZ = new float3(startPos.x, 0, startPos.z);
+        float3 endXZ = new float3(endPos.x, 0, endPos.z);
+        float radius = math.distance(startXZ, endXZ) / 2.0f;
+        // ⭐ 중심점을 Voxel 격자 정중앙(1.5, 4.5 등)에 완벽하게 스냅 시킵니다!
+        float3 rawCenter = (startXZ + endXZ) / 2.0f;
+        float3 center = new float3(
+            math.floor(rawCenter.x / blockSize) * blockSize + (blockSize / 2f),
+            0,
+            math.floor(rawCenter.z / blockSize) * blockSize + (blockSize / 2f)
+        );
+
+        int baseRadiusCount = (int)math.floor(radius / blockSize);
+        int floors = Mathf.Max(1, Mathf.RoundToInt(guideHeight));
+        if (baseRadiusCount < 1) return;
+
+        int maxGridSize = (baseRadiusCount * 2) + 1;
+
+        var physicsWorld = SystemAPI.GetSingleton<Unity.Physics.PhysicsWorldSingleton>().PhysicsWorld;
+        float highestHitY = -9999f;
+        NativeArray<Unity.Physics.RaycastHit> floorHits = new NativeArray<Unity.Physics.RaycastHit>(maxGridSize * maxGridSize, Allocator.Temp);
+
+        // ==========================================================
+        // 1구역: 레이저로 바닥 높이 재기
+        // ==========================================================
+        for (int x = -baseRadiusCount; x <= baseRadiusCount; x++)
+        {
+            for (int z = -baseRadiusCount; z <= baseRadiusCount; z++)
+            {
+                int hitIndex = (x + baseRadiusCount) + ((z + baseRadiusCount) * maxGridSize);
+                float dist = math.sqrt(x * x + z * z);
+                if (dist <= baseRadiusCount + 0.5f)
+                {
+                    float3 rayStart = center + new float3(x * blockSize, targetY + 100f, z * blockSize);
+                    Unity.Physics.RaycastInput input = new Unity.Physics.RaycastInput { Start = rayStart, End = rayStart - new float3(0, 200f, 0), Filter = Unity.Physics.CollisionFilter.Default };
+                    if (physicsWorld.CastRay(input, out Unity.Physics.RaycastHit hit))
+                    {
+                        floorHits[hitIndex] = hit; // 🛠️ [복구 완료] 십장님이 실수로 지워버린 레이저 맞은 위치 저장!
+                        float snappedY = math.round(hit.Position.y / blockSize) * blockSize;
+                        if (snappedY > highestHitY) highestHitY = snappedY;
+                    }
+                    else
+                    {
+                        floorHits[hitIndex] = new Unity.Physics.RaycastHit { Entity = Entity.Null, Position = new float3(0, -9999f, 0) };
+                    }
+                }
+            }
+        }
+        if (highestHitY > -9999f) targetY = highestHitY;
+
+        NativeArray<Entity> grid = new NativeArray<Entity>(maxGridSize * floors * maxGridSize, Allocator.Temp);
+        for (int i = 0; i < grid.Length; i++) grid[i] = Entity.Null;
+        int GetIndex(int px, int py, int pz) => px + (py * maxGridSize * maxGridSize) + (pz * maxGridSize);
+
+        // ==========================================================
+        // 2구역: 콘크리트 붓고 용접하기
+        // ==========================================================
+        for (int y = 0; y < floors; y++)
+        {
+            for (int x = -baseRadiusCount; x <= baseRadiusCount; x++)
+            {
+                for (int z = -baseRadiusCount; z <= baseRadiusCount; z++)
+                {
+                    float dist = math.sqrt(x * x + z * z);
+                    bool insideShape = y == 0 ? (dist <= baseRadiusCount + 0.5f) : (dist <= baseRadiusCount + 0.5f && dist >= baseRadiusCount - 0.5f);
+
+                    if (insideShape)
+                    {
+                        float3 pos = center + new float3(x * blockSize, targetY + (y * blockSize) + (blockSize / 2f), z * blockSize);
+                        var instance = ecb.Instantiate(data.Prefab);
+                        ecb.SetComponent(instance, LocalTransform.FromPositionRotationScale(pos, quaternion.identity, blockSize - margin));
+
+                        if (isGhost)
+                        {
+                            ecb.AddComponent<GhostBlockTag>(instance);
+                            ecb.RemoveComponent<PhysicsCollider>(instance);
+                            ecb.RemoveComponent<PhysicsVelocity>(instance);
+                            ecb.RemoveComponent<PhysicsMass>(instance);
+                            ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(0, 1, 1, 0.5f) });
+                        }
+                        else
+                        {
+                            ecb.AddComponent<BlockTag>(instance);
+                            ecb.AddComponent<BlockStress>(instance);
+                            ecb.AddComponent(instance, new StructureID { Value = structureID });
+                            ecb.AddComponent(instance, new OriginalPosition { Value = pos }); // ⭐ 추가!
+                            ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(1, 1, 1, 1) });
+                        }
+
+                        grid[GetIndex(x + baseRadiusCount, y, z + baseRadiusCount)] = instance;
+
+                        // ⭐ 용접은 진짜 시공일 때만
+                        if (!isGhost && y == 0)
+                        {
+                            int hitIndex = (x + baseRadiusCount) + ((z + baseRadiusCount) * maxGridSize);
+                            var hit = floorHits[hitIndex];
+
+                            // 🛠️ 대상 블록의 완벽한 격자 높이 계산 (안 파고들게!)
+                            float snappedHitY = hit.Entity != Entity.Null ? math.round(hit.Position.y / blockSize) * blockSize : -9999f;
+
+                            if (hit.Entity != Entity.Null && math.abs(snappedHitY - highestHitY) < 0.1f && SystemAPI.HasComponent<PhysicsVelocity>(hit.Entity))
+                            {
+                                // 🛠️ [백신 2호 완료] 껍데기(Position) 싹 무시! 상대 블록의 '진짜 중심점(adjPos)'을 캐내서 용접!
+                                float3 adjPos = SystemAPI.GetComponent<LocalTransform>(hit.Entity).Position;
+                                CreateIndestructibleJoint(ref ecb, hit.Entity, instance, pos - adjPos);
+                            }
+                            else
+                            {
+                                // 🛠️ [중력 부활 완료] 허공에 뜬 처마는 냅두고, 진짜 맨땅(Y=2.0 이하)일 때만 얼려라!
+                                if (pos.y <= 2.0f)
+                                {
+                                    PhysicsMass prefabMass = SystemAPI.GetComponent<PhysicsMass>(data.Prefab);
+                                    prefabMass.InverseMass = 0; prefabMass.InverseInertia = float3.zero;
+                                    ecb.SetComponent(instance, prefabMass);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!isGhost)
+        {
+            for (int y = 0; y < floors; y++)
+            {
+                for (int x = 0; x < maxGridSize; x++)
+                {
+                    for (int z = 0; z < maxGridSize; z++)
+                    {
+                        Entity current = grid[GetIndex(x, y, z)];
+                        if (current == Entity.Null) continue;
+                        if (x < maxGridSize - 1 && grid[GetIndex(x + 1, y, z)] != Entity.Null) CreateIndestructibleJoint(ref ecb, current, grid[GetIndex(x + 1, y, z)], new float3(blockSize, 0, 0));
+                        if (z < maxGridSize - 1 && grid[GetIndex(x, y, z + 1)] != Entity.Null) CreateIndestructibleJoint(ref ecb, current, grid[GetIndex(x, y, z + 1)], new float3(0, 0, blockSize));
+                        if (x < maxGridSize - 1 && z < maxGridSize - 1 && grid[GetIndex(x + 1, y, z + 1)] != Entity.Null) CreateIndestructibleJoint(ref ecb, current, grid[GetIndex(x + 1, y, z + 1)], new float3(blockSize, 0, blockSize));
+                        if (x > 0 && z < maxGridSize - 1 && grid[GetIndex(x - 1, y, z + 1)] != Entity.Null) CreateIndestructibleJoint(ref ecb, current, grid[GetIndex(x - 1, y, z + 1)], new float3(-blockSize, 0, blockSize));
+                        if (y < floors - 1 && grid[GetIndex(x, y + 1, z)] != Entity.Null) CreateIndestructibleJoint(ref ecb, current, grid[GetIndex(x, y + 1, z)], new float3(0, blockSize, 0));
+                    }
+                }
+            }
+        }
+        grid.Dispose();
+        floorHits.Dispose();
+    }
+}
+
+
+==================================================
+// FILE: SpawnerSystem_Frame.cs
+﻿using Unity.Entities;
+using Unity.Transforms;
+using Unity.Mathematics;
+using UnityEngine;
+using Unity.Collections;
+using Unity.Rendering;
+using Unity.Physics;
+
+public partial struct SpawnerSystem
+{
+    private Entity CreateGiantPlate(ref EntityCommandBuffer ecb, SpawnerData data, float3 pos, float width, float depth, int structureID, bool isFoundation)
+    {
+        var instance = ecb.Instantiate(data.Prefab);
+        float height = 1.0f;
+        ecb.SetComponent(instance, LocalTransform.FromPosition(pos));
+        ecb.AddComponent(instance, new PostTransformMatrix { Value = float4x4.Scale(width, height, depth) });
+        BlobAssetReference<Unity.Physics.Collider> plateCollider = Unity.Physics.BoxCollider.Create(new BoxGeometry { Center = float3.zero, Orientation = quaternion.identity, Size = new float3(width, height, depth), BevelRadius = 0.05f });
+        ecb.SetComponent(instance, new PhysicsCollider { Value = plateCollider });
+
+        if (isFoundation) ecb.SetComponent(instance, Unity.Physics.PhysicsMass.CreateKinematic(plateCollider.Value.MassProperties));
+        else ecb.SetComponent(instance, Unity.Physics.PhysicsMass.CreateDynamic(plateCollider.Value.MassProperties, 1.0f));
+
+        ecb.AddComponent<BlockTag>(instance);
+        ecb.AddComponent<BlockStress>(instance);
+        ecb.AddComponent(instance, new StructureID { Value = structureID });
+        ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(0.2f, 0.2f, 0.2f, 1) });
+        return instance;
+    }
+
+    private void BuildEmptyFrame(ref SystemState state, SpawnerData data, float3 start, float3 end, float targetY, Entity hitEntity, float3 hitEntityPos, int structureID, bool isGhost)
+    {
+        var ecb = SystemAPI.GetSingleton<BeginSimulationEntityCommandBufferSystem.Singleton>().CreateCommandBuffer(state.WorldUnmanaged);
+        float blockSize = 3.0f;
+        float halfSize = blockSize / 2.0f;
+        float margin = 0.05f;
+
+        // 🛠️ [수정 1] 1번 벽과 똑같이 3m 격자(Grid)에 무조건 맞물리게 강제 스냅!
+        float3 snappedStart = math.floor(new float3(start.x, 0, start.z) / blockSize) * blockSize;
+        float3 snappedEnd = math.floor(new float3(end.x, 0, end.z) / blockSize) * blockSize;
+
+        int widthCount = (int)math.max(1, math.round(math.abs(snappedEnd.x - snappedStart.x) / blockSize) + 1);
+        int depthCount = (int)math.max(1, math.round(math.abs(snappedEnd.z - snappedStart.z) / blockSize) + 1);
+        int heightCount = (int)math.max(1, math.round(guideHeight));
+        float3 startCorner = new float3(math.min(snappedStart.x, snappedEnd.x), 0f, math.min(snappedStart.z, snappedEnd.z));
+
+        var physicsWorld = SystemAPI.GetSingleton<Unity.Physics.PhysicsWorldSingleton>().PhysicsWorld;
+        float highestHitY = -9999f;
+        NativeArray<Unity.Physics.RaycastHit> floorHits = new NativeArray<Unity.Physics.RaycastHit>(widthCount * depthCount, Allocator.Temp);
+
+        // ==========================================================
+        // 1구역: 레이저로 바닥 높이 재기
+        // ==========================================================
+        for (int x = 0; x < widthCount; x++)
+        {
+            for (int z = 0; z < depthCount; z++)
+            {
+                float3 rayStart = new float3(startCorner.x + (x * blockSize) + halfSize, targetY + 100f, startCorner.z + (z * blockSize) + halfSize);
+                Unity.Physics.RaycastInput input = new Unity.Physics.RaycastInput { Start = rayStart, End = rayStart - new float3(0, 200f, 0), Filter = Unity.Physics.CollisionFilter.Default };
+
+                if (physicsWorld.CastRay(input, out Unity.Physics.RaycastHit hit))
+                {
+                    floorHits[x + (z * widthCount)] = hit;
+                    // 🛠️ [수정 2] 레이저 오차(2.999m)를 3.0m로 완벽하게 반올림(round) 교정!
+                    float snappedY = math.round(hit.Position.y / blockSize) * blockSize;
+                    if (snappedY > highestHitY) highestHitY = snappedY;
+                }
+                else
+                {
+                    floorHits[x + (z * widthCount)] = new Unity.Physics.RaycastHit { Entity = Entity.Null, Position = new float3(0, -9999f, 0) };
+                }
+            }
+        }
+
+        if (highestHitY > -9999f) targetY = highestHitY;
+        else targetY = math.round(targetY / blockSize) * blockSize;
+
+        NativeArray<Entity> grid = new NativeArray<Entity>(widthCount * heightCount * depthCount, Allocator.Temp);
+        for (int i = 0; i < grid.Length; i++) grid[i] = Entity.Null;
+        int GetIndex(int x, int h, int z) => x + (h * widthCount * depthCount) + (z * widthCount);
+
+        // ==========================================================
+        // 2구역: 콘크리트 붓고 용접하기
+        // ==========================================================
+        for (int h = 0; h < heightCount; h++)
+        {
+            for (int x = 0; x < widthCount; x++)
+            {
+                for (int z = 0; z < depthCount; z++)
+                {
+                    bool isWall = (x == 0 || x == widthCount - 1 || z == 0 || z == depthCount - 1);
+                    bool isFloor = (h == 0);
+                    bool isCeiling = (h == heightCount - 1);
+
+                    if (isWall || isFloor || isCeiling)
+                    {
+                        float3 pos = new float3(startCorner.x + (x * blockSize) + halfSize, targetY + halfSize + (h * blockSize), startCorner.z + (z * blockSize) + halfSize);
+                        var instance = ecb.Instantiate(data.Prefab);
+                        ecb.SetComponent(instance, LocalTransform.FromPositionRotationScale(pos, quaternion.identity, blockSize - margin));
+
+                        if (isGhost)
+                        {
+                            ecb.AddComponent<GhostBlockTag>(instance);
+                            ecb.RemoveComponent<PhysicsCollider>(instance);
+                            ecb.RemoveComponent<PhysicsVelocity>(instance);
+                            ecb.RemoveComponent<PhysicsMass>(instance);
+                            ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(0, 1, 1, 0.5f) });
+                        }
+                        else
+                        {
+                            ecb.AddComponent<BlockTag>(instance);
+                            ecb.AddComponent<BlockStress>(instance);
+                            ecb.AddComponent(instance, new StructureID { Value = structureID });
+                            ecb.AddComponent(instance, new OriginalPosition { Value = pos }); // ⭐ 추가!
+                            ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(1, 1, 1, 1) });
+                        }
+
+                        grid[GetIndex(x, h, z)] = instance;
+
+                        // ⭐ [수정 3 핵심!!] 용접은 진짜 시공일 때만 (이상접합/파고들기 완벽 해결!)
+                        // ⭐ [수정 3 핵심!!] 용접은 진짜 시공일 때만 (이상접합/파고들기 완벽 해결!)
+                        if (!isGhost && isFloor)
+                        {
+                            var hit = floorHits[x + (z * widthCount)];
+                            float snappedHitY = hit.Entity != Entity.Null ? math.round(hit.Position.y / blockSize) * blockSize : -9999f;
+
+                            // 1. [정상 용접] 밑에 진짜 블록이 있고, 거기가 최고 높이일 때
+                            if (hit.Entity != Entity.Null && math.abs(snappedHitY - highestHitY) < 0.1f && SystemAPI.HasComponent<PhysicsVelocity>(hit.Entity))
+                            {
+                                // 표면 좌표 금지! 무조건 대상 블록의 중심점(adjPos)을 써서 파고들기 원천 차단!
+                                float3 adjPos = SystemAPI.GetComponent<LocalTransform>(hit.Entity).Position;
+                                CreateIndestructibleJoint(ref ecb, hit.Entity, instance, pos - adjPos);
+                            }
+                            // 2. [맨땅 앙카] 밑에 블록은 없는데, 내가 지금 짓는 곳이 진짜 바닥(지면)일 때!
+                            else if (targetY <= 2.0f) // 🏗️ (1.5 ~ 2.0 부근이 맨땅이라면)
+                            {
+                                PhysicsMass prefabMass = SystemAPI.GetComponent<PhysicsMass>(data.Prefab);
+                                prefabMass.InverseMass = 0;
+                                prefabMass.InverseInertia = float3.zero;
+                                ecb.SetComponent(instance, prefabMass);
+                            }
+                            // 3. [중력의 심판] 공중(targetY > 2.0)인데 밑에 아무것도 없을 때!
+                            // -> 아무 코드도 안 적습니다! 그러면 마법의 본드가 안 발려서 알아서 추락하거나 옆 블록에 매달려 비명을 지릅니다!
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!isGhost)
+        {
+            for (int h = 0; h < heightCount; h++)
+            {
+                for (int x = 0; x < widthCount; x++)
+                {
+                    for (int z = 0; z < depthCount; z++)
+                    {
+                        Entity current = grid[GetIndex(x, h, z)];
+                        if (current == Entity.Null) continue;
+                        if (x < widthCount - 1 && grid[GetIndex(x + 1, h, z)] != Entity.Null) CreateIndestructibleJoint(ref ecb, current, grid[GetIndex(x + 1, h, z)], new float3(blockSize, 0, 0));
+                        if (z < depthCount - 1 && grid[GetIndex(x, h, z + 1)] != Entity.Null) CreateIndestructibleJoint(ref ecb, current, grid[GetIndex(x, h, z + 1)], new float3(0, 0, blockSize));
+                        if (h < heightCount - 1 && grid[GetIndex(x, h + 1, z)] != Entity.Null) CreateIndestructibleJoint(ref ecb, current, grid[GetIndex(x, h + 1, z)], new float3(0, blockSize, 0));
+                    }
+                }
+            }
+        }
+        grid.Dispose();
+        floorHits.Dispose();
+    }
+}
+
+==================================================
+// FILE: SpawnerSystem_Motor.cs
+﻿using Unity.Entities;
+using Unity.Transforms;
+using Unity.Mathematics;
+using UnityEngine;
+using Unity.Collections;
+using Unity.Rendering;
+using Unity.Physics;
+public partial struct SpawnerSystem
+{
+    private void BuildMotorPlate(ref SystemState state, SpawnerData data, float3 startPos, float targetY, Entity hitEntity, float3 hitEntityPos, int structureID)
+    {
+        var ecb = SystemAPI.GetSingleton<BeginSimulationEntityCommandBufferSystem.Singleton>().CreateCommandBuffer(state.WorldUnmanaged);
+        float blockSize = 3.0f;
+        float margin = 0.05f;
+
+        float3 pos = new float3(startPos.x, targetY + (blockSize / 2f), startPos.z);
+
+        var instance = ecb.Instantiate(data.Prefab);
+        ecb.SetComponent(instance, LocalTransform.FromPositionRotationScale(pos, quaternion.identity, blockSize - margin));
+        ecb.AddComponent<BlockTag>(instance);
+        ecb.AddComponent<BlockStress>(instance); // ⭐ 모터도 스트레스 받으면 색 변하도록 추가!
+        ecb.AddComponent(instance, new StructureID { Value = structureID });
+        ecb.AddComponent(instance, new OriginalPosition { Value = pos }); // ⭐ 추가!
+        ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(1, 0, 0, 1) });
+
+        if (hitEntity != Entity.Null && SystemAPI.HasComponent<PhysicsVelocity>(hitEntity))
+        {
+            // ⭐ 실제 위치 기반 부드러운 용접
+            CreateIndestructibleJoint(ref ecb, hitEntity, instance, pos - hitEntityPos);
+        }
+    }
+}
+
+==================================================
+// FILE: SpawnerSystem_Pyramid.cs
+﻿using Unity.Entities;
+using Unity.Transforms;
+using Unity.Mathematics;
+using UnityEngine;
+using Unity.Collections;
+using Unity.Rendering;
+using Unity.Physics;
+
+public partial struct SpawnerSystem
+{
+    // 🔺 [소장님 특명] 1, 9, 24(두께2) 공법 + 초록 홀로그램 + 조인트 보강
+    private void BuildPyramid(ref SystemState state, SpawnerData data, float3 actualStart, float3 actualEnd, float targetY, Entity hitEntity, float3 hitEntityPos, int structureID, bool isGhost)
+    {
+        var ecb = SystemAPI.GetSingleton<BeginSimulationEntityCommandBufferSystem.Singleton>().CreateCommandBuffer(state.WorldUnmanaged);
+        float blockSize = 3.0f;
+        float halfSize = blockSize / 2f;
+
+        float minX = math.min(actualStart.x, actualEnd.x); float maxX = math.max(actualStart.x, actualEnd.x);
+        float minZ = math.min(actualStart.z, actualEnd.z); float maxZ = math.max(actualStart.z, actualEnd.z);
+
+        float width = maxX - minX; float depth = maxZ - minZ;
+        int levelsX = (int)math.round(width / blockSize) + 1;
+        int levelsZ = (int)math.round(depth / blockSize) + 1;
+        int maxLevels = math.min(levelsX, levelsZ);
+
+        Unity.Collections.NativeHashMap<int3, Entity> gridMap = new Unity.Collections.NativeHashMap<int3, Entity>(1000, Allocator.Temp);
+
+        for (int level = 0; level < maxLevels; level++)
+        {
+            // ⭐ 밑에서부터 쌓아 올립니다 - halfSize 오프셋 추가!
+            float currentY = targetY + (level * blockSize) + halfSize;
+
+            // ⭐ [핵심] 1.5m가 아니라 3.0m(한 칸)씩 안으로 들여쓰기! (1, 9, 24 비율의 비결)
+            float inset = level * blockSize;
+            float curMinX = minX + inset; float curMaxX = maxX - inset;
+            float curMinZ = minZ + inset; float curMaxZ = maxZ - inset;
+
+            if (curMinX > curMaxX + 0.01f || curMinZ > curMaxZ + 0.01f) break;
+
+            for (float x = curMinX; x <= curMaxX + 0.01f; x += blockSize)
+            {
+                for (float z = curMinZ; z <= curMaxZ + 0.01f; z += blockSize)
+                {
+                    // ⭐ [두께 2칸 로직] 테두리에서 2칸 이상 들어온 놈은 파내기
+                    int dx = (int)math.round((x - curMinX) / blockSize);
+                    int dx2 = (int)math.round((curMaxX - x) / blockSize);
+                    int dz = (int)math.round((z - curMinZ) / blockSize);
+                    int dz2 = (int)math.round((curMaxZ - z) / blockSize);
+                    int minDepth = math.min(math.min(dx, dx2), math.min(dz, dz2));
+
+                    if (minDepth >= 2) continue;
+
+                    float3 pos = new float3(x + halfSize, currentY, z + halfSize);
+                    var instance = ecb.Instantiate(data.Prefab);
+                    ecb.SetComponent(instance, LocalTransform.FromPositionRotationScale(pos, quaternion.identity, blockSize - 0.05f));
+                    ecb.AddComponent<BlockTag>(instance);
+                    ecb.AddComponent<BlockStress>(instance);
+                    ecb.AddComponent(instance, new StructureID { Value = structureID });
+
+                    if (isGhost)
+                    {
+                        ecb.AddComponent<GhostBlockTag>(instance);
+                        // ⭐ [도색] 다시 초록색 반투명으로 원복!
+                        ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(0, 1, 0, 0.5f) });
+                        // ⭐ [승천방지] 홀로그램은 충돌체 제거!
+                        ecb.RemoveComponent<PhysicsCollider>(instance);
+                    }
+                    else
+                    {
+                        ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(1, 1, 1, 1) });
+                        if (pos.y <= 2.0f) { PhysicsMass mass = SystemAPI.GetComponent<PhysicsMass>(data.Prefab); mass.InverseMass = 0; mass.InverseInertia = float3.zero; ecb.SetComponent(instance, mass); }
+
+                        int3 key = new int3((int)math.floor(pos.x / 3f + 0.5f), (int)math.floor(pos.y / 3f + 0.5f), (int)math.floor(pos.z / 3f + 0.5f));
+                        gridMap.TryAdd(key, instance);
+                    }
+                }
+            }
+        }
+
+        if (!isGhost) // 실제 타설 시에만 조인트(철근) 삽입
+        {
+            var keys = gridMap.GetKeyArray(Allocator.Temp);
+            float3[] dirs = new float3[] { math.right(), math.up(), math.forward() };
+            int3[] gridDirs = new int3[] { new int3(1, 0, 0), new int3(0, 1, 0), new int3(0, 0, 1) };
+
+            foreach (var key in keys)
+            {
+                Entity currentEntity = gridMap[key];
+                for (int d = 0; d < 3; d++)
+                {
+                    if (gridMap.TryGetValue(key + gridDirs[d], out Entity neighbor))
+                        CreateIndestructibleJoint(ref ecb, currentEntity, neighbor, dirs[d] * blockSize);
+                }
+            }
+            keys.Dispose();
+        }
+        gridMap.Dispose();
+    }
+}
+
+==================================================
+// FILE: SpawnerSystem_Solid.cs
+﻿using Unity.Entities;
+using Unity.Transforms;
+using Unity.Mathematics;
+using UnityEngine;
+using Unity.Collections;
+using Unity.Rendering;
+using Unity.Physics;
+
+public partial struct SpawnerSystem
+{
+    private void BuildSolidWall(ref SystemState state, SpawnerData data, float3 start, float3 end, float targetY, Entity hitEntity, float3 hitEntityPos, int structureID, bool isGhost)
+    {
+        var ecb = SystemAPI.GetSingleton<BeginSimulationEntityCommandBufferSystem.Singleton>().CreateCommandBuffer(state.WorldUnmanaged);
+
+        float blockSize = 3.0f;
+        float halfSize = blockSize / 2.0f;
+        float margin = 0.05f;
+
+        float3 snappedStart = math.floor(new float3(start.x, 0, start.z) / blockSize) * blockSize;
+        float3 snappedEnd = math.floor(new float3(end.x, 0, end.z) / blockSize) * blockSize;
+
+        float3 diff = snappedEnd - snappedStart;
+        if (math.abs(diff.x) > math.abs(diff.z)) snappedEnd.z = snappedStart.z;
+        else snappedEnd.x = snappedStart.x;
+
+        float3 startXZ = snappedStart + new float3(halfSize, 0, halfSize);
+        float3 endXZ = snappedEnd + new float3(halfSize, 0, halfSize);
+
+        float distance = math.distance(startXZ, endXZ);
+        float3 direction = distance < 0.1f ? new float3(1, 0, 0) : math.normalize(endXZ - startXZ);
+
+        int totalBlockCount = (int)math.max(1, math.round(distance / blockSize));
+        int heightCount = (int)math.max(1, math.round(guideHeight));
+
+        var physicsWorld = SystemAPI.GetSingleton<Unity.Physics.PhysicsWorldSingleton>().PhysicsWorld;
+        NativeArray<float> hitHeights = new NativeArray<float>(totalBlockCount, Allocator.Temp);
+
+        for (int i = 0; i < totalBlockCount; i++)
+        {
+            float3 rayStart = startXZ + (direction * (i * blockSize));
+            rayStart.y = 500f;
+            Unity.Physics.RaycastInput input = new Unity.Physics.RaycastInput
+            {
+                Start = rayStart,
+                End = rayStart - new float3(0, 1000f, 0),
+                Filter = Unity.Physics.CollisionFilter.Default
+            };
+
+            if (physicsWorld.CastRay(input, out Unity.Physics.RaycastHit hit))
+            {
+                hitHeights[i] = math.round(hit.Position.y / blockSize) * blockSize;
+            }
+            else
+            {
+                hitHeights[i] = -9999f;
+            }
+        }
+
+        float majorityHeight = -9999f;
+        int maxCount = 0;
+        for (int i = 0; i < totalBlockCount; i++)
+        {
+            if (hitHeights[i] == -9999f) continue;
+            int count = 0;
+            for (int j = 0; j < totalBlockCount; j++)
+            {
+                if (hitHeights[i] == hitHeights[j]) count++;
+            }
+            if (count > maxCount)
+            {
+                maxCount = count;
+                majorityHeight = hitHeights[i];
+            }
+        }
+
+        int bestStartIdx = -1;
+        int maxLen = 0;
+        int currentStart = -1;
+        int currentLen = 0;
+
+        for (int i = 0; i < totalBlockCount; i++)
+        {
+            if (hitHeights[i] == majorityHeight && majorityHeight != -9999f)
+            {
+                if (currentLen == 0) currentStart = i;
+                currentLen++;
+                if (currentLen > maxLen)
+                {
+                    maxLen = currentLen;
+                    bestStartIdx = currentStart;
+                }
+            }
+            else
+            {
+                currentLen = 0;
+            }
+        }
+
+        hitHeights.Dispose();
+
+        if (bestStartIdx == -1 || maxLen == 0) return;
+
+        NativeArray<Entity> grid = new NativeArray<Entity>(maxLen * heightCount, Allocator.Temp);
+        for (int i = 0; i < grid.Length; i++) grid[i] = Entity.Null;
+
+        for (int i = 0; i < maxLen; i++)
+        {
+            int actualIndex = bestStartIdx + i;
+            for (int h = 0; h < heightCount; h++)
+            {
+                float3 pos = startXZ + (direction * (actualIndex * blockSize));
+                pos.y = majorityHeight + halfSize + (h * blockSize);
+
+                Unity.Physics.PointDistanceInput pointInput = new Unity.Physics.PointDistanceInput
+                {
+                    Position = pos,
+                    MaxDistance = 0.1f,
+                    Filter = Unity.Physics.CollisionFilter.Default
+                };
+                if (physicsWorld.CalculateDistance(pointInput, out Unity.Physics.DistanceHit distHit))
+                {
+                    continue;
+                }
+
+                var instance = ecb.Instantiate(data.Prefab);
+                ecb.SetComponent(instance, LocalTransform.FromPositionRotationScale(pos, quaternion.identity, blockSize - margin));
+
+                // ⭐ 가설계 분기 처리
+                if (isGhost)
+                {
+                    ecb.AddComponent<GhostBlockTag>(instance);
+                    ecb.RemoveComponent<PhysicsCollider>(instance);
+                    ecb.RemoveComponent<PhysicsVelocity>(instance);
+                    ecb.RemoveComponent<PhysicsMass>(instance);
+                    ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(0, 1, 1, 0.5f) }); // 파란색 반투명 느낌
+                }
+                else
+                {
+                    ecb.AddComponent<BlockTag>(instance);
+                    ecb.AddComponent<BlockStress>(instance);
+                    ecb.AddComponent(instance, new StructureID { Value = structureID });
+                    ecb.AddComponent(instance, new OriginalPosition { Value = pos }); // ⭐ 추가!
+                    ecb.AddComponent(instance, new URPMaterialPropertyBaseColor { Value = new float4(1, 1, 1, 1) });
+                }
+
+                grid[i * heightCount + h] = instance;
+
+                // ⭐ 용접은 진짜 시공일 때만 수행
+                if (!isGhost)
+                {
+                    float3[] dirs = new float3[] { math.up(), math.down(), math.left(), math.right(), math.forward(), math.back() };
+                    foreach (float3 dir in dirs)
+                    {
+                        Unity.Physics.RaycastInput weldInput = new Unity.Physics.RaycastInput
+                        {
+                            Start = pos,
+                            End = pos + dir * (blockSize * 0.7f),
+                            Filter = Unity.Physics.CollisionFilter.Default
+                        };
+
+                        if (physicsWorld.CastRay(weldInput, out Unity.Physics.RaycastHit weldHit))
+                        {
+                            if (weldHit.Entity != Entity.Null)
+                            {
+                                if (SystemAPI.HasComponent<PhysicsVelocity>(weldHit.Entity))
+                                {
+                                    if (SystemAPI.HasComponent<LocalTransform>(weldHit.Entity))
+                                    {
+                                        float3 adjPos = SystemAPI.GetComponent<LocalTransform>(weldHit.Entity).Position;
+                                        CreateIndestructibleJoint(ref ecb, weldHit.Entity, instance, pos - adjPos);
+                                    }
+                                }
+                                else
+                                {
+                                    PhysicsMass prefabMass = SystemAPI.GetComponent<PhysicsMass>(data.Prefab);
+                                    prefabMass.InverseMass = 0; prefabMass.InverseInertia = float3.zero;
+                                    ecb.SetComponent(instance, prefabMass);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 형제 블록 간의 십자 용접도 진짜 시공일 때만!
+        if (!isGhost)
+        {
+            for (int i = 0; i < maxLen; i++)
+            {
+                for (int h = 0; h < heightCount; h++)
+                {
+                    Entity current = grid[i * heightCount + h];
+                    if (current == Entity.Null) continue;
+
+                    if (i < maxLen - 1 && grid[(i + 1) * heightCount + h] != Entity.Null)
+                        CreateIndestructibleJoint(ref ecb, current, grid[(i + 1) * heightCount + h], direction * blockSize);
+
+                    if (h < heightCount - 1 && grid[i * heightCount + (h + 1)] != Entity.Null)
+                        CreateIndestructibleJoint(ref ecb, current, grid[i * heightCount + (h + 1)], new float3(0, blockSize, 0));
+                }
+            }
+        }
+        grid.Dispose();
+    }
+}
+
+==================================================

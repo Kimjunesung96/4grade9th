@@ -1,0 +1,978 @@
+// Project: 20260816_133649 Code Summary (Part e)
+// Total Lines: 975
+
+// FILE: CameraController.cs
+﻿using UnityEngine;
+using Unity.Mathematics;
+
+public class CameraController : MonoBehaviour
+{
+    [Header("📷 카메라 회전 (Orbit) 설정")]
+    public Transform target; // 🎯 바라볼 중심점 (공사 현장 중앙)
+    public float rotationSpeed = 10f; // Q/E 키 누를 때 회전하는 속도
+    public float angleStep = 45f; // 한 번에 돌아가는 각도 (정팔각형 = 45도)
+
+    [Header("🔍 카메라 줌 (Zoom) 설정")]
+    public float scrollSpeed = 5f; // 휠 스크롤 속도
+    public float minDistance = 10f; // 최대한 가까이 갈 수 있는 거리
+    public float maxDistance = 100f; // 최대한 멀리 갈 수 있는 거리
+
+    private float currentDistance; // 현재 중심점과의 거리
+    private float targetAngle; // 목표 회전 각도
+    private float currentAngle; // 현재 회전 각도
+
+    void Start()
+    {
+        // 1. 시작할 때 타겟(중심점)이 없으면, 카메라 앞쪽 바닥을 임시 타겟으로 잡습니다.
+        if (target == null)
+        {
+            GameObject tempTarget = new GameObject("CameraCenterPoint");
+            // 카메라가 바라보는 방향으로 땅바닥(y=0)과 만나는 지점을 찾습니다.
+            float distanceToGround = transform.position.y / Mathf.Cos(Vector3.Angle(Vector3.down, transform.forward) * Mathf.Deg2Rad);
+            tempTarget.transform.position = transform.position + transform.forward * distanceToGround;
+            tempTarget.transform.position = new Vector3(tempTarget.transform.position.x, 0, tempTarget.transform.position.z);
+            target = tempTarget.transform;
+            Debug.Log("🎯 [카메라] 중심점(Target)이 없어서 임시 중심점을 생성했습니다.");
+        }
+
+        // 2. 시작할 때 현재 카메라와 타겟 사이의 거리와 각도를 계산하여 저장합니다.
+        Vector3 offset = transform.position - target.position;
+        offset.y = 0; // 수평 각도만 계산
+        currentAngle = Vector3.SignedAngle(Vector3.forward, offset, Vector3.up);
+        targetAngle = currentAngle;
+        currentDistance = Vector3.Distance(transform.position, target.position);
+    }
+
+    void Update()
+    {
+        HandleRotation();
+        HandleZoom();
+        UpdateCameraPosition();
+    }
+
+    // 🔄 Q / E 키로 정팔각형(45도씩) 목표 각도 설정
+    private void HandleRotation()
+    {
+        if (Input.GetKeyDown(KeyCode.Q))
+        {
+            targetAngle += angleStep; // 왼쪽으로 45도
+        }
+        else if (Input.GetKeyDown(KeyCode.E))
+        {
+            targetAngle -= angleStep; // 오른쪽으로 45도
+        }
+
+        // 부드럽게 목표 각도로 회전 (스무딩 효과)
+        currentAngle = Mathf.LerpAngle(currentAngle, targetAngle, Time.deltaTime * rotationSpeed);
+    }
+
+    // 🔍 마우스 휠로 거리감(Zoom) 조절
+    private void HandleZoom()
+    {
+        float scroll = Input.GetAxis("Mouse ScrollWheel");
+        if (scroll != 0f)
+        {
+            // 휠을 굴리면 거리가 변하지만, 설정한 최소/최대 거리를 넘지 못하게 막습니다.
+            currentDistance -= scroll * scrollSpeed;
+            currentDistance = Mathf.Clamp(currentDistance, minDistance, maxDistance);
+        }
+    }
+
+    // 🎥 계산된 각도와 거리를 바탕으로 카메라의 실제 위치와 방향 업데이트
+    private void UpdateCameraPosition()
+    {
+        // 삼각함수를 써서 타겟 주변을 도는 새로운 X, Z 위치를 계산합니다.
+        float rad = currentAngle * Mathf.Deg2Rad;
+
+        // 현재 카메라의 높이(Y)와 내려다보는 각도(Pitch)는 그대로 유지!
+        float heightOffset = transform.position.y - target.position.y;
+
+        // 수평 거리(바닥 기준)를 피타고라스 정리로 역계산
+        float horizontalDistance = Mathf.Sqrt(currentDistance * currentDistance - heightOffset * heightOffset);
+        // 만약 너무 가까이 줌인해서 에러가 나면 보정해줍니다.
+        if (float.IsNaN(horizontalDistance)) horizontalDistance = 1f;
+
+        Vector3 newPos = target.position + new Vector3(Mathf.Sin(rad) * horizontalDistance, heightOffset, Mathf.Cos(rad) * horizontalDistance);
+
+        transform.position = newPos;
+
+        // 항상 타겟(중심점)을 정면으로 바라보게 각도를 돌려줍니다.
+        transform.LookAt(target);
+    }
+}
+
+==================================================
+// FILE: CameraFollowSystem.cs
+﻿using Unity.Entities;
+using Unity.Transforms;
+using Unity.Mathematics;
+using UnityEngine;
+
+// 화면을 그리기 직전에 카메라 위치를 업데이트합니다.
+[UpdateInGroup(typeof(PresentationSystemGroup))]
+public partial struct CameraFollowSystem : ISystem
+{
+    private float3 offset;
+
+    public void OnCreate(ref SystemState state)
+    {
+        state.RequireForUpdate<PlayerData>();
+        offset = new float3(0, 15f, -15f); // 연줄의 길이
+    }
+
+    public void OnUpdate(ref SystemState state)
+    {
+        if (Camera.main == null) return;
+
+        // ⭐ 핵심: .WithNone<Prefab>() 을 추가해서 정중앙에 숨어있는 투명 프리팹 유령을 무시합니다!
+        foreach (var transform in SystemAPI.Query<RefRO<LocalTransform>>().WithAll<PlayerData>().WithNone<Prefab>())
+        {
+            float3 playerPos = transform.ValueRO.Position;
+
+            // 1. 카메라 목표 위치 계산
+            Vector3 targetPos = playerPos + offset;
+
+            // 2. 부드럽게 고무줄처럼 따라가기
+            Camera.main.transform.position = Vector3.Lerp(Camera.main.transform.position, targetPos, SystemAPI.Time.DeltaTime * 5f);
+
+            // 3. 고개 까딱임 방지 (항상 45도 땅을 내려다봄)
+            Camera.main.transform.rotation = Quaternion.Euler(45f, 0f, 0f);
+
+            // ⭐ 1명만 찾았으면 바로 반복문을 종료해서 화면 떨림(지진)을 완벽 차단!
+            break;
+        }
+    }
+}
+
+==================================================
+// FILE: FixedStepLimiterBootstrap.cs
+using Unity.Entities;
+using UnityEngine;
+
+// ⭐ 커스텀 IRateManager: FixedStepSimulationSystemGroup이 한 프레임에
+// 밀린 물리 스텝을 무한정 몰아서 처리("따라잡기 폭주")하지 못하도록
+// 프레임당 최대 실행 횟수를 강제로 제한합니다.
+public class CappedFixedRateManager : IRateManager
+{
+    private readonly float timestep;
+    private readonly int maxStepsPerFrame;
+    private float accumulatedTime;
+    private int stepsThisFrame;
+
+    public CappedFixedRateManager(float timestep, int maxStepsPerFrame)
+    {
+        this.timestep = timestep;
+        this.maxStepsPerFrame = maxStepsPerFrame;
+        this.accumulatedTime = 0f;
+        this.stepsThisFrame = 0;
+    }
+
+    public float Timestep
+    {
+        get => timestep;
+        set { /* 고정값 사용, 런타임 변경 무시 */ }
+    }
+
+    public bool ShouldGroupUpdate(ComponentSystemGroup group)
+    {
+        // 새 실제 프레임이 시작될 때(누적시간이 리셋 직후) 딱 한 번만 deltaTime을 더합니다.
+        if (stepsThisFrame == 0)
+        {
+            accumulatedTime += group.World.Time.DeltaTime;
+        }
+
+        if (accumulatedTime >= timestep && stepsThisFrame < maxStepsPerFrame)
+        {
+            accumulatedTime -= timestep;
+            stepsThisFrame++;
+
+            // 그룹 내부 시간(World Time)을 고정 스텝 시간으로 세팅
+            group.World.SetTime(new Unity.Core.TimeData(
+                elapsedTime: group.World.Time.ElapsedTime,
+                deltaTime: timestep));
+
+            return true;
+        }
+
+        // ⭐ 폭주 방지 핵심: 밀린 시간이 남아있어도 max에 도달하면
+        // 남은 시간을 버리고(드롭) 다음 실제 프레임으로 넘어갑니다.
+        if (stepsThisFrame >= maxStepsPerFrame)
+        {
+            accumulatedTime = 0f;
+        }
+
+        stepsThisFrame = 0; // 다음 실제 프레임을 위해 리셋
+        return false;
+    }
+}
+
+public class FixedStepLimiterBootstrap : MonoBehaviour
+{
+    [Tooltip("한 프레임당 최대 몇 번까지 물리 스텝을 몰아서 처리할지 제한합니다. 렉이 나도 이 값 이상은 절대 몰아서 처리하지 않습니다.")]
+    public int maxStepsPerFrame = 2;
+
+    void Start()
+    {
+        var world = World.DefaultGameObjectInjectionWorld;
+        if (world == null)
+        {
+            Debug.LogWarning("[FixedStepLimiter] DOTS 월드를 찾을 수 없습니다.");
+            return;
+        }
+
+        var fixedGroup = world.GetExistingSystemManaged<FixedStepSimulationSystemGroup>();
+        if (fixedGroup != null)
+        {
+            fixedGroup.RateManager = new CappedFixedRateManager(1f / 60f, maxStepsPerFrame);
+            Debug.Log($"[FixedStepLimiter] 적용 완료! 프레임당 최대 {maxStepsPerFrame}회로 물리 스텝 제한.");
+        }
+        else
+        {
+            Debug.LogWarning("[FixedStepLimiter] FixedStepSimulationSystemGroup을 찾을 수 없습니다.");
+        }
+    }
+}
+
+==================================================
+// FILE: GridUtility.cs
+using UnityEngine;
+using Unity.Mathematics;
+
+public static class GridUtility
+{
+    public const float BlockSize = 3.0f;
+    public const float HalfBlock = 1.5f;
+
+    // DOTS 안전 (Burst 호환) 사사오입 스냅
+    public static float Snap(float val)
+    {
+        return math.floor((val - HalfBlock) / BlockSize + 0.5f) * BlockSize + HalfBlock;
+    }
+
+    public static Vector3 Snap(Vector3 pos) => new Vector3(Snap(pos.x), Snap(pos.y), Snap(pos.z));
+    public static float3 Snap(float3 pos) => new float3(Snap(pos.x), Snap(pos.y), Snap(pos.z));
+
+    // 통합 블록 ID 생성 규칙
+    public static string ToBlockID(float x, float y, float z)
+    {
+        float sx = Snap(x);
+        float sy = Snap(y);
+        float sz = Snap(z);
+
+        // 부동소수점 오차 방지를 위해 0.001f 더하기
+        float ix = math.round((sx + 0.001f) * 10f);
+        float iy = math.round((sy + 0.001f) * 10f);
+        float iz = math.round((sz + 0.001f) * 10f);
+
+        string strX = $"{(ix < 0f ? "-" : "0")}{math.abs(ix):000}";
+        string strZ = $"{(iz < 0f ? "-" : "0")}{math.abs(iz):000}";
+        string strY = $"{(iy < 0f ? "-" : "0")}{math.abs(iy):000}";
+
+        return $"{strX}_{strZ}_{strY}";
+    }
+
+    public static string ToBlockID(Vector3 pos) => ToBlockID(pos.x, pos.y, pos.z);
+    public static string ToBlockID(float3 pos) => ToBlockID(pos.x, pos.y, pos.z);
+}
+
+==================================================
+// FILE: InGameConsole.cs
+using UnityEngine;
+using System.Collections.Generic;
+
+public class InGameConsole : MonoBehaviour
+{
+    [Header("콘솔 설정")]
+    public KeyCode toggleKey = KeyCode.F3; // 콘솔창을 켜고 끄는 단축키
+    public int maxLogs = 50; // 화면에 유지할 최대 로그 개수
+
+    private bool showConsole = false;
+    private Vector2 scrollPosition;
+    private List<string> logList = new List<string>();
+
+    void OnEnable()
+    {
+        // ⭐ DOTS(멀티스레드) 환경에서 안전하게 로그를 가로채기 위해 Threaded 사용
+        Application.logMessageReceivedThreaded += HandleLog;
+    }
+
+    void OnDisable()
+    {
+        Application.logMessageReceivedThreaded -= HandleLog;
+    }
+
+    void Update()
+    {
+        if (Input.GetKeyDown(toggleKey))
+        {
+            showConsole = !showConsole;
+        }
+    }
+
+    private void HandleLog(string logString, string stackTrace, LogType type)
+    {
+        // 🛑 [핵심] '메모리 체크'가 포함된 로그는 무시 (스팸 방지)
+        if (logString.Contains("메모리 체크")) return;
+
+        // 로그 타입에 따라 색상 지정
+        string color = "white";
+        if (type == LogType.Warning) color = "yellow";
+        else if (type == LogType.Error || type == LogType.Exception) color = "red";
+
+        // 멀티스레드 환경 충돌 방지를 위한 lock
+        lock (logList)
+        {
+            logList.Add($"<color={color}>{logString}</color>");
+            
+            // 지정된 개수를 넘어가면 가장 오래된 로그 삭제
+            if (logList.Count > maxLogs)
+            {
+                logList.RemoveAt(0);
+            }
+            
+            // 새 로그가 들어오면 스크롤을 맨 아래로 자동 이동
+            scrollPosition.y = float.MaxValue;
+        }
+    }
+
+    void OnGUI()
+    {
+        if (!showConsole) return;
+
+        // 콘솔창 크기 및 위치 설정 (화면 우측 상단)
+        float width = 450f;
+        float height = 350f;
+        float x = Screen.width - width - 20f;
+        float y = 20f;
+
+        GUILayout.BeginArea(new Rect(x, y, width, height), $"인게임 현장 무전기 ({toggleKey}로 닫기)", GUI.skin.window);
+        
+        // 스크롤 뷰 시작
+        scrollPosition = GUILayout.BeginScrollView(scrollPosition);
+        
+        // 폰트 스타일 (RichText 활성화로 색상 적용)
+        GUIStyle logStyle = new GUIStyle(GUI.skin.label);
+        logStyle.richText = true;
+        logStyle.wordWrap = true;
+
+        // 저장된 로그들 출력
+        lock (logList)
+        {
+            foreach (string log in logList)
+            {
+                GUILayout.Label(log, logStyle);
+            }
+        }
+
+        GUILayout.EndScrollView();
+        GUILayout.EndArea();
+    }
+}
+
+==================================================
+// FILE: Keyboardoverlayui.cs
+using UnityEngine;
+using Unity.Entities;
+using System.Collections.Generic;
+
+// ⭐ [신규 파일] 기존 시스템은 전혀 건드리지 않고, 밖에서 상태만 읽어서
+//    화면에 키보드 레이아웃 + 지금 쓸 수 있는 키를 진하게 표시하는 오버레이.
+//
+//    - isBMode(진동)/isNMode(폭발): VibrationTestSystem.IsBModeActive / ShockwaveTestSystem.IsNModeActive
+//      가 이미 public static이라 그대로 읽음 (수정 없음)
+//    - CurrentMode(0~6): BuilderStateData ECS 싱글톤을 쿼리해서 읽음 (수정 없음)
+//    - 건설 여부: BlockTag 붙은 엔티티가 있는지 세어봄 (수정 없음)
+//    - isOMode/isLMode/isUMode/isYMode: SpawnerSystem.cs 안에 private라서
+//      외부에서 읽을 방법이 없음 → 일단 수동 토글 버튼으로 대체.
+//      나중에 SpawnerSystem.cs 쪽 필드를 public으로만 바꿔주면 여기 자동 감지로 교체 가능.
+public class KeyboardOverlayUI : MonoBehaviour
+{
+    public int overlayState = 1; // 0=꺼짐, 1=오버레이만, 2=오버레이+키 설명 텍스트
+    public KeyCode toggleKey = KeyCode.F2; // F1/F5는 이미 다른 용도라 F2로 둠. 원하는 키로 바꿔도 됨.
+
+    // 수동 토글 (SpawnerSystem 내부 상태를 외부에서 못 읽어서 대체용)
+    private bool manualBlueprintMode = false; // O/L/U 모드 흉내
+    private bool manualYMode = false;         // Y모드(보강 CSV 로딩) 흉내
+
+    private struct KeyBox
+    {
+        public string id;
+        public string label;
+        public Rect rect; // 0~1330 x 0~720 기준 좌표(원본 배치 이미지 기준)
+        public KeyBox(string id, string label, float x, float y, float w, float h)
+        { this.id = id; this.label = label; this.rect = new Rect(x, y, w, h); }
+    }
+
+    private readonly List<KeyBox> keys = new List<KeyBox>
+    {
+        new KeyBox("F1", "F1", 40, 20, 80, 70),
+        new KeyBox("F5", "f5", 135, 20, 80, 70),
+        new KeyBox("Y", "y", 475, 20, 60, 70),
+        new KeyBox("O", "o", 735, 20, 60, 70),
+        new KeyBox("U", "u", 810, 20, 60, 70),
+        new KeyBox("R", "r", 885, 20, 60, 70),
+        new KeyBox("Alpha1", "1", 910, 100, 60, 70),
+        new KeyBox("V", "v", 20, 130, 60, 70),
+        new KeyBox("Q", "q", 280, 130, 60, 70),
+        new KeyBox("E", "e", 590, 130, 60, 70),
+        new KeyBox("Wheel", "휠", 700, 130, 60, 250),
+        new KeyBox("Alpha2", "2", 910, 180, 60, 70),
+        new KeyBox("B", "b", 20, 210, 60, 70),
+        new KeyBox("G", "g", 780, 250, 60, 70),
+        new KeyBox("Alpha3", "3", 910, 260, 60, 70),
+        new KeyBox("N", "n", 20, 290, 60, 70),
+        new KeyBox("Alpha4", "4", 910, 340, 60, 70),
+        new KeyBox("Alpha5", "5", 910, 420, 60, 70),
+        new KeyBox("Space", "Space", 280, 450, 400, 60),
+        new KeyBox("F", "f", 715, 450, 60, 60),
+        new KeyBox("Alpha6", "6", 910, 500, 60, 70),
+        new KeyBox("H", "h", 20, 370, 60, 70),
+        new KeyBox("Delete", "del", 20, 450, 60, 70),
+        new KeyBox("Enter", "enter", 1000, 580, 100, 60),
+    };
+
+    private readonly HashSet<string> alwaysActive = new HashSet<string> { "F1", "F5", "Y", "O", "U", "Q", "E", "Space", "G" };
+
+    private readonly Dictionary<string, string> keyDescriptions = new Dictionary<string, string>
+    {
+        { "F1", "도움말" },
+        { "F5", "설정창" },
+        { "Y", "예산/보강 UI (연타시 순환)" },
+        { "O", "블루프린트 UI 토글" },
+        { "U", "마지막 건물 불러오기" },
+        { "R", "블록 청소/취소" },
+        { "Q", "카메라·설계도 회전(좌)" },
+        { "E", "카메라·설계도 회전(우)" },
+        { "Wheel", "층수/가이드 높이/진도 조절" },
+        { "V", "응력 스캔" },
+        { "B", "진동 테스트" },
+        { "N", "폭발 테스트" },
+        { "G", "고스트 확정/빌드" },
+        { "F", "미리보기" },
+        { "Space", "젯팩(공중 이동)" },
+        { "H", "블록 보호 토글" },
+        { "Delete", "블록 즉시 삭제" },
+        { "Enter", "가이드 확정" },
+        { "Alpha1", "벽(통짜) 건설" },
+        { "Alpha2", "빈 프레임(윤곽만) 건설" },
+        { "Alpha3", "원형 패턴 건설" },
+        { "Alpha4", "피라미드 건설" },
+        { "Alpha5", "원뿔 건설" },
+        { "Alpha6", "미사용(예약)" },
+    };
+
+    private readonly Dictionary<string, string> blueprintGridDescriptions = new Dictionary<string, string>
+    {
+        { "Alpha1", "그리드 크기 10" },
+        { "Alpha2", "그리드 크기 20" },
+        { "Alpha3", "그리드 크기 30" },
+        { "Alpha4", "그리드 크기 40" },
+        { "Alpha5", "그리드 크기 50" },
+    };
+
+    void Update()
+    {
+        if (Input.GetKeyDown(toggleKey)) overlayState = (overlayState + 1) % 3;
+    }
+
+    private HashSet<string> ComputeActiveKeys()
+    {
+        var active = new HashSet<string>(alwaysActive);
+
+        bool isBMode = VibrationTestSystem.IsBModeActive;
+        bool isNMode = ShockwaveTestSystem.IsNModeActive;
+
+        int currentMode = 1;
+        bool hasBuilderState = false;
+        var world = World.DefaultGameObjectInjectionWorld;
+        if (world != null && world.IsCreated)
+        {
+            var em = world.EntityManager;
+            var query = em.CreateEntityQuery(ComponentType.ReadOnly<BuilderStateData>());
+            if (!query.IsEmpty)
+            {
+                currentMode = query.GetSingleton<BuilderStateData>().CurrentMode;
+                hasBuilderState = true;
+            }
+        }
+
+        bool built = false;
+        if (world != null && world.IsCreated)
+        {
+            var em = world.EntityManager;
+            var blockQuery = em.CreateEntityQuery(ComponentType.ReadOnly<BlockTag>());
+            built = !blockQuery.IsEmpty;
+        }
+
+        bool isAnySpecialMode = manualBlueprintMode || manualYMode;
+
+        // 테스트 모드가 최우선 (실제 코드에서도 !isBMode && !isNMode 가드가 대부분이라 상호 배타적으로 취급)
+        // G는 실제 코드상 진동/폭발 테스트 진행중엔 꺼짐 (isBuildGEnabled && !isBMode && !isNMode 가드)
+        if (isBMode) { active.Add("Wheel"); active.Remove("G"); return active; }
+        if (isNMode) { active.Remove("G"); return active; }
+
+        // 블루프린트/Y모드 (수동 토글) — F/G, 그리고 블루프린트일 땐 휠도
+        if (manualBlueprintMode) { active.Add("F"); active.Add("G"); active.Add("Wheel"); }
+        if (manualYMode) { active.Add("F"); active.Add("G"); }
+
+        if (!isAnySpecialMode)
+        {
+            if (hasBuilderState && currentMode == 0)
+            {
+                active.Add("H"); active.Add("Delete"); active.Add("R");
+                active.Add("Alpha1"); active.Add("Alpha2"); active.Add("Alpha3");
+                active.Add("Alpha4"); active.Add("Alpha5"); active.Add("Alpha6");
+            }
+            else
+            {
+                active.Add("Alpha1"); active.Add("Alpha2"); active.Add("Alpha3");
+                active.Add("Alpha4"); active.Add("Alpha5"); active.Add("Alpha6");
+                active.Add("Wheel"); active.Add("Enter");
+            }
+
+            if (built) { active.Add("R"); active.Add("V"); active.Add("B"); active.Add("N"); }
+        }
+
+        return active;
+    }
+
+    void OnGUI()
+    {
+        if (overlayState == 0) return;
+
+        bool showLabels = overlayState == 2;
+        float panelW = showLabels ? 1180f : 780f, panelH = showLabels ? 620f : 460f;
+        float ox = 20f, oy = Screen.height - panelH - 20f;
+
+        GUI.Box(new Rect(ox, oy, panelW, panelH), showLabels ? "키보드 (F2: 끄기)" : "키보드 (F2: 설명 보기)");
+
+        var active = ComputeActiveKeys();
+        bool isAnySpecial = manualBlueprintMode || manualYMode;
+
+        var keyStyle = new GUIStyle(GUI.skin.box) { fontSize = 14, fontStyle = FontStyle.Bold };
+        var labelStyle = new GUIStyle(GUI.skin.label) { fontSize = 12, wordWrap = false, normal = { textColor = Color.white } };
+
+        Color prevColor = GUI.color;
+        foreach (var k in keys)
+        {
+            float sx = ox + (k.rect.x / 1330f) * panelW;
+            float sy = oy + 32f + (k.rect.y / 720f) * (panelH - 56f);
+            float sw = (k.rect.width / 1330f) * panelW;
+            float sh = (k.rect.height / 720f) * (panelH - 56f);
+
+            bool isActive = active.Contains(k.id);
+            GUI.color = isActive ? new Color(0.35f, 0.65f, 1f, 1f) : new Color(1f, 1f, 1f, 0.25f);
+            GUI.Box(new Rect(sx, sy, sw, sh), k.label, keyStyle);
+
+            // ⭐ [F2 3단계] 설명 모드일 때, 활성화된 키 옆(오른쪽)에 기능 설명을 짧게 표시.
+            //    1~5번 키는 상황에 따라 뜻이 달라짐: 블루프린트/Y모드 중엔 "그리드 크기", 아니면 "건설 모양"
+            if (showLabels && isActive)
+            {
+                string desc = null;
+                if (isAnySpecial && blueprintGridDescriptions.ContainsKey(k.id)) desc = blueprintGridDescriptions[k.id];
+                else keyDescriptions.TryGetValue(k.id, out desc);
+
+                if (!string.IsNullOrEmpty(desc))
+                {
+                    Color prevColor2 = GUI.color;
+                    GUI.color = Color.white;
+                    GUI.Label(new Rect(sx + sw + 8f, sy, 220f, sh), desc, labelStyle);
+                    GUI.color = prevColor2;
+                }
+            }
+        }
+        GUI.color = prevColor;
+
+        GUI.Box(new Rect(ox, oy + panelH + 4f, panelW, 60f), "");
+        manualBlueprintMode = GUI.Toggle(new Rect(ox + 8f, oy + panelH + 10f, 240f, 24f), manualBlueprintMode, " 블루프린트 모드 (O/L/U) 흉내");
+        manualYMode = GUI.Toggle(new Rect(ox + 8f, oy + panelH + 34f, 240f, 24f), manualYMode, " Y모드(보강 로딩) 흉내");
+    }
+}
+
+==================================================
+// FILE: LagDetectiveSystem.cs
+using Unity.Entities;
+using UnityEngine;
+using Unity.Profiling;
+using System.Collections.Generic;
+using System.Linq;
+
+[UpdateInGroup(typeof(SimulationSystemGroup), OrderLast = true)]
+public partial class LagDetectiveSystem : SystemBase
+{
+    // 감시 대상 시스템 이름들 (프로젝트에 있는 시스템 이름 그대로 적어주세요)
+    private static readonly string[] WatchedSystems = new string[]
+    {
+        "SpawnerSystem",
+        "SpawnerSystem_Cone",
+        "SpawnerSystem_Cylinder",
+        "SpawnerSystem_Frame",
+        "SpawnerSystem_Motor",
+        "SpawnerSystem_Pyramid",
+        "SpawnerSystem_Solid",
+        "StressVisualizationSystem",
+        "VibrationTestSystem",
+        "ShockwaveTestSystem",
+        "BuilderActionSystem",
+        "BuilderInputSystem",
+        "MaterialPropertyInitSystem",
+        "DefaultMaterialInitSystem",
+        "CameraFollowSystem",
+        "OptimizedColorSystem",
+        "PlayerMovementSystem",
+    };
+
+    private Dictionary<string, ProfilerRecorder> recorders = new Dictionary<string, ProfilerRecorder>();
+    private float checkTimer;
+
+    protected override void OnCreate()
+    {
+        // 각 시스템 이름으로 프로파일러 레코더를 만들어 둡니다.
+        // Unity가 내부적으로 시스템 OnUpdate를 이 이름으로 프로파일링하고 있어서 그대로 후킹 가능합니다.
+        foreach (var name in WatchedSystems)
+        {
+            var recorder = ProfilerRecorder.StartNew(ProfilerCategory.Scripts, name, 1);
+            recorders[name] = recorder;
+        }
+    }
+
+    protected override void OnDestroy()
+    {
+        foreach (var kv in recorders)
+        {
+            kv.Value.Dispose();
+        }
+        recorders.Clear();
+    }
+
+    protected override void OnUpdate()
+    {
+        float dt = SystemAPI.Time.DeltaTime;
+
+        // 0.1초(100ms) 이상 걸린 프레임만 상세 분석
+        if (dt > 0.1f)
+        {
+            var results = new List<(string name, double ms)>();
+
+            foreach (var kv in recorders)
+            {
+                if (kv.Value.Valid && kv.Value.Count > 0)
+                {
+                    // 나노초 -> 밀리초 변환
+                    double ms = kv.Value.LastValue / 1000000.0;
+                    results.Add((kv.Key, ms));
+                }
+            }
+
+            // 오래 걸린 순서로 정렬
+            var sorted = results.OrderByDescending(r => r.ms).ToList();
+
+            string report = $"🚨 [렉 감지 상세] 프레임 {dt * 1000f:F1}ms 지연 발생! 범인 랭킹:\n";
+            for (int i = 0; i < sorted.Count && i < 5; i++)
+            {
+                if (sorted[i].ms > 1.0) // 1ms 이상만 표시 (의미없는 항목 제거)
+                {
+                    report += $"  {i + 1}위: {sorted[i].name} - {sorted[i].ms:F2}ms\n";
+                }
+            }
+
+            // 어떤 시스템도 크게 잡히지 않았다면 -> Unity 내부(물리 솔버, GC 등) 병목 가능성
+            if (sorted.Count == 0 || sorted[0].ms < 1.0)
+            {
+                report += "  ⚠️ 감시 대상 시스템 중엔 범인이 없습니다. Unity.Physics 솔버, GC(가비지 컬렉션), 또는 렌더링 스레드 병목일 가능성이 높습니다.";
+            }
+
+            UnityEngine.Debug.LogWarning(report);
+        }
+
+        // GC 발생 감지 (매 프레임 체크는 가볍습니다)
+        checkTimer += dt;
+        if (checkTimer >= 1.0f)
+        {
+            checkTimer = 0f;
+            long gcMemory = System.GC.GetTotalMemory(false);
+            UnityEngine.Debug.Log($"📈 [메모리 체크] 현재 관리 힙: {gcMemory / 1024 / 1024}MB");
+        }
+    }
+}
+
+==================================================
+// FILE: LogManager.cs
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
+using UnityEngine;
+
+// 1. 단일 기록 (십장님 특허 3합축 기술 적용!)
+[Serializable]
+public class ActionLog
+{
+    public string time;
+    public string tool;
+    public string sizeXZH;
+    public string centerXYZ;
+    public string action;
+    public string status;
+    public string pivotXYZ;
+}
+
+[Serializable]
+public class ProjectAttempt
+{
+    public int Attempt;
+    public string Start_Time;
+    public string End_Time;
+    public string Status;
+    public List<ActionLog> Actions = new List<ActionLog>();
+}
+
+[Serializable]
+public class DailyRawLog
+{
+    public string Date;
+    public int Total_Attempts;
+    public List<string> Reset_Timestamps = new List<string>();
+    public List<ProjectAttempt> Projects_Details = new List<ProjectAttempt>();
+}
+
+[Serializable]
+public class TempLog
+{
+    public string Notice = "현재 타설 중인 블록입니다. (R키 누르면 날아감)";
+    public List<ActionLog> Current_Blocks = new List<ActionLog>();
+}
+
+[Serializable]
+public class Blueprint
+{
+    public int Blueprint_ID;
+    public string Saved_Time;
+    public List<ActionLog> Blocks = new List<ActionLog>();
+}
+
+[Serializable]
+public class MasterBlueprintLog
+{
+    public string Date;
+    public int Total_Masterpieces;
+    public List<Blueprint> Blueprints = new List<Blueprint>();
+}
+
+public class LogManager : MonoBehaviour
+{
+    public static LogManager Instance;
+
+    private DailyRawLog rawDailyLog;
+    private TempLog tempLogData;
+    private MasterBlueprintLog masterLogData;
+    private ProjectAttempt currentAttempt;
+
+    private string rawFilePath;
+    private string tempFilePath;
+    private string masterFilePath;
+
+    private Transform simulationPivot;
+
+    void Awake()
+    {
+        if (Instance == null) Instance = this;
+        else Destroy(gameObject);
+    }
+
+    void Start()
+    {
+        string dateStr = DateTime.Now.ToString("yyyyMMdd");
+
+        // 🚨 [에러 대참사 완벽 해결!] 
+        // Application.dataPath(Assets 폴더)에 저장하면 유니티가 실시간으로 임포트하려다 DOTS와 충돌합니다!
+        // Assets 폴더 바깥인 "프로젝트루트경로/BuildingLogs" 폴더로 장부 보관소를 아예 이사시킵니다!
+        string basePath = Path.Combine(Application.dataPath, "../BuildingLogs");
+
+        string historyDir = Path.Combine(basePath, "history");
+        string tempDir = Path.Combine(basePath, "temp");
+        string architectDir = Path.Combine(basePath, "architecture");
+
+        if (!Directory.Exists(historyDir)) Directory.CreateDirectory(historyDir);
+        if (!Directory.Exists(tempDir)) Directory.CreateDirectory(tempDir);
+        if (!Directory.Exists(architectDir)) Directory.CreateDirectory(architectDir);
+
+        rawFilePath = Path.Combine(historyDir, $"Log_Raw_{dateStr}.json");
+        tempFilePath = Path.Combine(tempDir, "Temp_Current_Building.json");
+        masterFilePath = Path.Combine(architectDir, $"Master_Blueprint_{dateStr}.json");
+
+        LoadOrCreateLogs();
+    }
+
+    void Update()
+    {
+        if (simulationPivot == null)
+        {
+            GameObject pivotObj = GameObject.Find("SimulationPivot");
+            if (pivotObj != null) simulationPivot = pivotObj.transform;
+        }
+    }
+
+    void LoadOrCreateLogs()
+    {
+        if (File.Exists(rawFilePath)) rawDailyLog = JsonUtility.FromJson<DailyRawLog>(File.ReadAllText(rawFilePath));
+        else rawDailyLog = new DailyRawLog { Date = DateTime.Now.ToString("yyyy-MM-dd") };
+
+        if (File.Exists(masterFilePath)) masterLogData = JsonUtility.FromJson<MasterBlueprintLog>(File.ReadAllText(masterFilePath));
+        else masterLogData = new MasterBlueprintLog { Date = DateTime.Now.ToString("yyyy-MM-dd") };
+
+        tempLogData = new TempLog();
+        SaveTempLog();
+
+        if (rawDailyLog.Projects_Details.Count == 0 || rawDailyLog.Projects_Details[rawDailyLog.Projects_Details.Count - 1].Status != "In_Progress")
+        {
+            StartNewAttempt();
+        }
+        else
+        {
+            currentAttempt = rawDailyLog.Projects_Details[rawDailyLog.Projects_Details.Count - 1];
+        }
+    }
+
+    void StartNewAttempt()
+    {
+        rawDailyLog.Total_Attempts++;
+        currentAttempt = new ProjectAttempt { Attempt = rawDailyLog.Total_Attempts, Start_Time = DateTime.Now.ToString("HH:mm:ss"), Status = "In_Progress" };
+        rawDailyLog.Projects_Details.Add(currentAttempt);
+        SaveRawLog();
+    }
+
+    public void AddLog(string tool, int heightCount, string action, string status, string centerStr, float sizeX, float sizeZ)
+    {
+        string pivotStr = "Center_Fixed";
+        if (simulationPivot != null)
+        {
+            pivotStr = $"[{simulationPivot.position.x:F2}, {simulationPivot.position.y:F2}, {simulationPivot.position.z:F2}]";
+        }
+
+        ActionLog newLog = new ActionLog
+        {
+            time = DateTime.Now.ToString("HH:mm:ss"),
+            tool = tool,
+            sizeXZH = $"[{sizeX:F1}, {sizeZ:F1}, {heightCount}]",
+            centerXYZ = centerStr,
+            action = action,
+            status = status,
+            pivotXYZ = pivotStr
+        };
+
+        currentAttempt.Actions.Add(newLog);
+        SaveRawLog();
+
+        if (action == "Key_G" || status == "Build_Complete")
+        {
+            tempLogData.Current_Blocks.Add(newLog);
+            SaveTempLog();
+            Debug.Log($"[현장보고] 타설 완료! (타설중앙: {centerStr} / 바닥코어: {pivotStr})");
+        }
+    }
+
+    public void OnPressRKey()
+    {
+        string nowTime = DateTime.Now.ToString("HH:mm:ss");
+        currentAttempt.End_Time = nowTime;
+        currentAttempt.Status = "Reset";
+        rawDailyLog.Reset_Timestamps.Add($"Attempt {currentAttempt.Attempt}: {nowTime} (Reset)");
+        SaveRawLog();
+        StartNewAttempt();
+
+        tempLogData.Current_Blocks.Clear();
+        SaveTempLog();
+    }
+
+    public void SaveToMaster()
+    {
+        if (tempLogData.Current_Blocks.Count == 0) return;
+        string nowTime = DateTime.Now.ToString("HH:mm:ss");
+        masterLogData.Total_Masterpieces++;
+        Blueprint newBlueprint = new Blueprint { Blueprint_ID = masterLogData.Total_Masterpieces, Saved_Time = nowTime, Blocks = new List<ActionLog>(tempLogData.Current_Blocks) };
+        masterLogData.Blueprints.Add(newBlueprint);
+        SaveMasterLog();
+
+        currentAttempt.End_Time = nowTime;
+        currentAttempt.Status = "Success";
+        rawDailyLog.Reset_Timestamps.Add($"Attempt {currentAttempt.Attempt}: {nowTime} (Success)");
+        SaveRawLog();
+        StartNewAttempt();
+
+        Debug.Log("🎉 마스터 도면집에 십장님 특허 장부 도장 쾅! (Temp 장부 기록은 계속 유지됩니다)");
+    }
+
+    private void SaveRawLog() { try { File.WriteAllText(rawFilePath, JsonUtility.ToJson(rawDailyLog, true)); } catch (Exception e) { Debug.LogWarning("Raw Log 저장 실패: " + e.Message); } }
+    private void SaveTempLog() { try { File.WriteAllText(tempFilePath, JsonUtility.ToJson(tempLogData, true)); } catch (Exception e) { Debug.LogWarning("Temp Log 저장 실패: " + e.Message); } }
+    private void SaveMasterLog() { try { File.WriteAllText(masterFilePath, JsonUtility.ToJson(masterLogData, true)); } catch (Exception e) { Debug.LogWarning("Master Log 저장 실패: " + e.Message); } }
+}
+
+==================================================
+// FILE: F1HelpManual.cs
+using UnityEngine;
+
+public class F1HelpManual : MonoBehaviour
+{
+    [Header("여기에 아까 만든 HelpPanel을 끌어다 넣으세요")]
+    public GameObject helpUI;
+
+    void Update()
+    {
+        // UI가 연결되어 있지 않으면 무시
+        if (helpUI == null) return;
+
+        // F1 키를 '누르고 있는 동안만' UI를 켜고, 떼면 끕니다! (오버워치 방식)
+        if (Input.GetKeyDown(KeyCode.F1))
+        {
+            helpUI.SetActive(true);
+        }
+        else if (Input.GetKeyUp(KeyCode.F1))
+        {
+            helpUI.SetActive(false);
+        }
+    }
+}
+
+==================================================
+// FILE: ObjectColorAuthoring.cs
+using UnityEngine;
+using Unity.Entities;
+using Unity.Mathematics;
+
+// 이 클래스 이름이 파일명과 반드시 같아야 합니다!
+public class ObjectColorAuthoring : MonoBehaviour
+{
+    public Color initialColor = Color.white;
+
+    // Baker 클래스는 Authoring 클래스 안에 포함되어 있어야 합니다.
+    public class ObjectColorBaker : Baker<ObjectColorAuthoring>
+    {
+        public override void Bake(ObjectColorAuthoring authoring)
+        {
+            var entity = GetEntity(TransformUsageFlags.Dynamic);
+            AddComponent(entity, new ObjectColorData
+            {
+                Value = new float4(
+                    authoring.initialColor.r,
+                    authoring.initialColor.g,
+                    authoring.initialColor.b,
+                    authoring.initialColor.a
+                )
+            });
+        }
+    }
+}
+
+==================================================
+// FILE: ObjectColorData.cs
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.Rendering;
+
+[MaterialProperty("_BaseColor")]
+public struct ObjectColorData : IComponentData
+{
+    public float4 Value;
+}
+
+==================================================

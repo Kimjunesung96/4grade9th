@@ -1,0 +1,408 @@
+// Project: 20260821_041354 Code Summary (Part k)
+// Total Lines: 405
+
+// FILE: VibrationTestSystem.cs
+﻿using Unity.Entities;
+using Unity.Transforms;
+using Unity.Mathematics;
+using UnityEngine;
+using Unity.Physics;
+using Unity.Rendering;
+using Unity.Collections;
+using System.IO;
+using System;
+
+public struct VibrationTracker : IComponentData
+{
+    public float3 OriginalPos;
+    public quaternion OriginalRot;
+    public float MaxDisplacement;
+}
+
+[UpdateInGroup(typeof(SimulationSystemGroup))]
+public partial struct VibrationTestSystem : ISystem
+{
+    public static bool IsBModeActive = false;
+    private bool isBMode; private int vibeLevel; private float actualVibePower;
+    private bool isVibrating; private float vibeTimer;
+    public static bool IsSimulationRunning = false; 
+    
+    private static float MAX_VIBE_TIME => SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.vibrationMaxTime : 5.0f;
+
+    private static readonly int3[] gridDirs = new int3[] { new int3(1, 0, 0), new int3(0, 0, 1), new int3(0, 1, 0) };
+    private static readonly float3[] internalDirs = new float3[] { new float3(1, 0, 0), new float3(0, 0, 1), new float3(0, 1, 0) };
+
+    public void OnCreate(ref SystemState state)
+    {
+        isBMode = false; IsBModeActive = false; vibeLevel = 1; actualVibePower = 1f; isVibrating = false; vibeTimer = 0f; state.RequireForUpdate<PhysicsWorldSingleton>();
+    }
+
+    public void OnUpdate(ref SystemState state)
+    {
+        if (!SystemAPI.HasSingleton<PhysicsWorldSingleton>()) return;
+
+        if (Input.GetKeyDown(KeyCode.B) && !isVibrating)
+        {
+            if (!isBMode) 
+            {
+                isBMode = true; IsBModeActive = true;
+                Debug.Log($"🚨 [지진 세팅 모드] B모드 켜짐! (현재 진도: {vibeLevel}단계) 한 번 더 B를 누르면 격발합니다.");
+                foreach (var color in SystemAPI.Query<RefRW<URPMaterialPropertyBaseColor>>().WithAll<BlockTag>()) { color.ValueRW.Value = new float4(1, 1, 1, 1); }
+            }
+            else 
+            {
+                isBMode = false; IsBModeActive = false;
+                isVibrating = true; vibeTimer = MAX_VIBE_TIME;
+                IsSimulationRunning = true;
+                Debug.Log($"💥 [격발!] 진도 {vibeLevel} 강진 발생!!");
+
+                var initEcb = new EntityCommandBuffer(Allocator.Temp);
+                foreach (var (transform, mass, gravity, entity) in SystemAPI.Query<RefRO<LocalTransform>, RefRW<PhysicsMass>, RefRW<PhysicsGravityFactor>>().WithAll<BlockTag>().WithEntityAccess())
+                {
+                    gravity.ValueRW.Value = 1.0f;
+                    if (transform.ValueRO.Position.y <= 3.1f) { 
+                        mass.ValueRW.InverseMass = 0f; 
+                        mass.ValueRW.InverseInertia = float3.zero; 
+                    }
+                    else { 
+                        mass.ValueRW.InverseMass = 0.1f; 
+                        mass.ValueRW.InverseInertia = new float3(0.1f, 0.1f, 0.1f); 
+                    }
+
+                    float3 trueOrig = SystemAPI.HasComponent<OriginalPosition>(entity) ? SystemAPI.GetComponent<OriginalPosition>(entity).Value : transform.ValueRO.Position;
+                    initEcb.AddComponent(entity, new VibrationTracker { OriginalPos = trueOrig, OriginalRot = quaternion.identity, MaxDisplacement = 0f });
+                }
+                initEcb.Playback(state.EntityManager); initEcb.Dispose();
+            }
+        }
+
+        if (isBMode && Input.mouseScrollDelta.y != 0)
+        {
+            vibeLevel = math.clamp(vibeLevel + (int)math.sign(Input.mouseScrollDelta.y), 1, 8); actualVibePower = math.pow(2f, vibeLevel - 1);
+            Debug.Log($"🌍 [진도 설정] 레벨 {vibeLevel} / 파워: {actualVibePower}배");
+        }
+
+        if (isVibrating)
+        {
+            vibeTimer -= SystemAPI.Time.DeltaTime;
+            var random = Unity.Mathematics.Random.CreateFromIndex((uint)(vibeTimer * 1000f + 1));
+
+            float3 groundAccel = new float3(math.sin(vibeTimer * 10.0f) * actualVibePower, 0, 0);
+            foreach (var (transform, tracker, velocity, color) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<VibrationTracker>, RefRW<PhysicsVelocity>, RefRW<URPMaterialPropertyBaseColor>>().WithAll<BlockTag>())
+            {
+                float currentDist = math.distance(transform.ValueRO.Position, tracker.ValueRO.OriginalPos);
+                if (currentDist > tracker.ValueRW.MaxDisplacement) tracker.ValueRW.MaxDisplacement = currentDist;
+
+                if (vibeTimer > 0f)
+                {
+                    if (transform.ValueRO.Position.y > 3.1f)
+                    {
+                        velocity.ValueRW.Linear += groundAccel * SystemAPI.Time.DeltaTime;
+                    }
+                    color.ValueRW.Value = new float4(1, 1, 1, 1);
+                }
+            }
+
+            state.Dependency.Complete();
+            var breakEcb = new EntityCommandBuffer(Allocator.Temp);
+            var transLookup = SystemAPI.GetComponentLookup<LocalTransform>(true);
+            var matLookup = SystemAPI.GetComponentLookup<BlockMaterial>(true);
+
+            foreach (var (jointPair, joint, jointEntity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>, RefRO<PhysicsJoint>>().WithAll<JointTag>().WithEntityAccess())
+            {
+                Entity eA = jointPair.ValueRO.EntityA; 
+                Entity eB = jointPair.ValueRO.EntityB;
+
+                if (eA == Entity.Null || eB == Entity.Null) continue;
+
+                if (transLookup.HasComponent(eA) && transLookup.HasComponent(eB) &&
+                    matLookup.HasComponent(eA) && matLookup.HasComponent(eB))
+                {
+                    var transA = transLookup[eA]; var transB = transLookup[eB];
+                    var matA = matLookup[eA]; var matB = matLookup[eB];
+
+                    float3 pivotA = math.transform(new RigidTransform(transA.Rotation, transA.Position), joint.ValueRO.BodyAFromJoint.Position);
+                    float3 pivotB = math.transform(new RigidTransform(transB.Rotation, transB.Position), joint.ValueRO.BodyBFromJoint.Position);
+                    
+                    float stretch = math.distance(pivotA, pivotB);
+                    if (stretch > 0.05f) 
+                    {
+                        float tensionScale = SimulationSettingsProvider.Instance != null ? SimulationSettingsProvider.Instance.TensionStressScale : 5000.0f;
+                        float tensileStress = stretch * tensionScale; 
+                        
+                        float tensileDefense = (matA.TensileStiffness + matB.TensileStiffness) * 0.5f * math.max(0.1f, (10.0f - actualVibePower));
+
+                        if (tensileStress > tensileDefense) 
+                        { 
+                            breakEcb.DestroyEntity(jointEntity); 
+                        }
+                    }
+                }
+            }
+            breakEcb.Playback(state.EntityManager); breakEcb.Dispose();
+
+            if (vibeTimer <= 0f)
+            {
+                isVibrating = false; IsSimulationRunning = false; Debug.Log("🛑 [지진 종료] 도면(ID) 기준 위치로 원상복구 완료!");
+
+                var ecb = new EntityCommandBuffer(Allocator.Temp);
+                NativeList<float3> finalPositions = new NativeList<float3>(Allocator.Temp);
+                NativeList<float> finalStresses = new NativeList<float>(Allocator.Temp);
+                NativeList<FixedString32Bytes> finalMaterials = new NativeList<FixedString32Bytes>(Allocator.Temp);
+
+                foreach (var (transform, tracker, velocity, gravity, mass, color, mat, entity) in SystemAPI.Query<RefRW<LocalTransform>, RefRW<VibrationTracker>, RefRW<PhysicsVelocity>, RefRW<PhysicsGravityFactor>, RefRW<PhysicsMass>, RefRW<URPMaterialPropertyBaseColor>, RefRO<BlockMaterial>>().WithAll<BlockTag>().WithEntityAccess())
+                {
+                    transform.ValueRW.Position = tracker.ValueRO.OriginalPos;
+                    transform.ValueRW.Rotation = tracker.ValueRO.OriginalRot;
+                    velocity.ValueRW.Linear = float3.zero;
+                    velocity.ValueRW.Angular = float3.zero;
+                    gravity.ValueRW.Value = 0.0f;
+                    mass.ValueRW.InverseMass = 0.0f;
+                    mass.ValueRW.InverseInertia = float3.zero;
+
+                    float maxDisp = tracker.ValueRO.MaxDisplacement; 
+                    string mName = mat.ValueRO.MaterialName.ToString();
+
+                    float4 baseCol = new float4(0.7f, 0.7f, 0.7f, 1.0f);
+                    if (mName.Contains("Steel")) baseCol = new float4(0.2f, 0.5f, 1.0f, 1.0f); 
+                    else if (mName.Contains("Wood") || mName.Contains("Timber")) baseCol = new float4(0.6f, 0.4f, 0.2f, 1.0f); 
+                    else if (mName.Contains("Brick")) baseCol = new float4(0.8f, 0.3f, 0.2f, 1.0f);
+
+                    float t = math.clamp(maxDisp / 2.0f, 0.0f, 1.0f);
+                    color.ValueRW.Value = math.lerp(baseCol, new float4(1.0f, 0.0f, 0.0f, 1.0f), t);
+
+                    finalPositions.Add(tracker.ValueRO.OriginalPos);
+                    finalStresses.Add(maxDisp);
+                    finalMaterials.Add(mat.ValueRO.MaterialName);
+
+                    ecb.RemoveComponent<VibrationTracker>(entity);
+                }
+
+                foreach (var (transform, mat, entity) in SystemAPI.Query<RefRO<LocalTransform>, RefRO<BlockMaterial>>().WithAll<BlockTag>().WithNone<VibrationTracker>().WithEntityAccess())
+                {
+                    finalPositions.Add(transform.ValueRO.Position);
+                    finalStresses.Add(0f);
+                    finalMaterials.Add(mat.ValueRO.MaterialName);
+                }
+
+                SaveVibrationExcel(finalPositions, finalStresses, finalMaterials);
+
+                finalPositions.Dispose(); finalStresses.Dispose(); finalMaterials.Dispose();
+                ecb.Playback(state.EntityManager); ecb.Dispose();
+
+                RebuildAllJoints(ref state);
+            }
+        }
+    }
+
+    private void RebuildAllJoints(ref SystemState state)
+    {
+        var destroyEcb = new EntityCommandBuffer(Allocator.Temp);
+        foreach (var (pair, jointEntity) in SystemAPI.Query<RefRO<PhysicsConstrainedBodyPair>>().WithAll<JointTag>().WithEntityAccess())
+        {
+            destroyEcb.DestroyEntity(jointEntity);
+        }
+        destroyEcb.Playback(state.EntityManager);
+        destroyEcb.Dispose();
+
+        var gridMap = new NativeHashMap<int3, Entity>(4096, Allocator.Temp);
+        var posMap = new NativeHashMap<Entity, float3>(4096, Allocator.Temp);
+
+        foreach (var (transform, entity) in SystemAPI.Query<RefRO<LocalTransform>>().WithAll<BlockTag>().WithEntityAccess())
+        {
+            float3 pos = transform.ValueRO.Position;
+            int3 key = new int3(
+                (int)math.floor(pos.x / 3f + 0.5f),
+                (int)math.floor(pos.y / 3f + 0.5f),
+                (int)math.floor(pos.z / 3f + 0.5f));
+            gridMap.TryAdd(key, entity);
+            posMap.TryAdd(entity, pos);
+        }
+
+        var buildEcb = new EntityCommandBuffer(Allocator.Temp);
+        var keys = gridMap.GetKeyArray(Allocator.Temp);
+        
+        int3[] localGridDirs = new int3[] { new int3(1, 0, 0), new int3(0, 0, 1), new int3(0, 1, 0) };
+        float3[] localInternalDirs = new float3[] { new float3(1, 0, 0), new float3(0, 0, 1), new float3(0, 1, 0) };
+
+        int newJointCount = 0;
+        
+        var matLookup = SystemAPI.GetComponentLookup<BlockMaterial>(true);
+
+        for (int k = 0; k < keys.Length; k++)
+        {
+            int3 key = keys[k];
+            Entity cur = gridMap[key];
+
+            for (int d = 0; d < 3; d++)
+            {
+                if (gridMap.TryGetValue(key + localGridDirs[d], out Entity neighbor) && neighbor != cur)
+                {
+                    CreateMaterialJoint(ref buildEcb, ref matLookup, cur, neighbor, localInternalDirs[d] * 3.0f);
+                    newJointCount++;
+                }
+            }
+        }
+
+        buildEcb.Playback(state.EntityManager);
+        buildEcb.Dispose();
+        keys.Dispose();
+        gridMap.Dispose();
+        posMap.Dispose();
+        
+        UnityEngine.Debug.Log($"🔧 [조인트 전면 재구성] 기존 조인트 삭제 후 인접 블록 {newJointCount}쌍 재결합 완료!");
+    }
+
+    private void CreateMaterialJoint(ref EntityCommandBuffer ecb, ref ComponentLookup<BlockMaterial> matLookup, Entity entityA, Entity entityB, float3 offsetToB)
+    {
+        Entity jointEntity = ecb.CreateEntity();
+        ecb.AddSharedComponent(jointEntity, new PhysicsWorldIndex());
+        ecb.AddComponent<JointTag>(jointEntity);
+        ecb.AddComponent(jointEntity, new PhysicsConstrainedBodyPair(entityA, entityB, true));
+
+        var joint = PhysicsJoint.CreateFixed(new RigidTransform(quaternion.identity, offsetToB * 0.5f), new RigidTransform(quaternion.identity, -offsetToB * 0.5f));
+
+        float freq = 30f, damp = 0.3f; 
+        
+        if (matLookup.HasComponent(entityA) && matLookup.HasComponent(entityB))
+        {
+            var matA = matLookup[entityA];
+            var matB = matLookup[entityB];
+            if (matA.SpringFrequency > 0f && matB.SpringFrequency > 0f)
+            {
+                freq = (matA.SpringFrequency + matB.SpringFrequency) * 0.5f;
+                damp = (matA.SpringDamping + matB.SpringDamping) * 0.5f;
+            }
+        }
+
+        var constraints = joint.GetConstraints();
+        for (int i = 0; i < constraints.Length; i++)
+        {
+            var c = constraints[i];
+            if (c.Type == ConstraintType.Linear) 
+            {
+                c.SpringFrequency = freq;
+                c.DampingRatio = damp;
+            }
+            constraints[i] = c;
+        }
+        joint.SetConstraints(constraints);
+
+        ecb.AddComponent(jointEntity, joint);
+    }  
+
+    private void SaveVibrationExcel(NativeList<float3> positions, NativeList<float> stresses, NativeList<FixedString32Bytes> materials)
+    {
+        string dateStamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        string vibDir = Path.Combine(Application.dataPath, "StressBlock", "vibration");
+        if (!Directory.Exists(vibDir)) Directory.CreateDirectory(vibDir);
+
+        string historyPath = Path.Combine(vibDir, "Vibration_All_" + dateStamp + ".csv");
+        string currentPath = Path.Combine(Application.dataPath, "StressBlock", "CurrentStress.csv");
+
+        var toolMap = new System.Collections.Generic.Dictionary<string, string>();
+        if (File.Exists(currentPath))
+        {
+            var oldLines = File.ReadAllLines(currentPath);
+            for (int i = 1; i < oldLines.Length; i++)
+            {
+                var c = oldLines[i].Split(',');
+                if (c.Length >= 12) toolMap[c[0]] = c[10];
+            }
+        }
+
+        string reinforcePath = Path.Combine(Application.dataPath, "StressBlock", "Reinforcement_Plan.csv");
+        if (File.Exists(reinforcePath))
+        {
+            var rLines = File.ReadAllLines(reinforcePath);
+            for (int i = 1; i < rLines.Length; i++)
+            {
+                var c = rLines[i].Split(',');
+                if (c.Length < 12) continue;
+                string k = c[0];
+                if (toolMap.TryGetValue(k, out var existingTag) && existingTag == "Reinforcement" && c[10] != "Reinforcement") continue;
+                toolMap[k] = c[10];
+            }
+        }
+
+        string lastBuildPath = Path.Combine(Application.dataPath, "StressBlock", "Last_Building.csv");
+        if (File.Exists(lastBuildPath))
+        {
+            var lLines = File.ReadAllLines(lastBuildPath);
+            for (int i = 1; i < lLines.Length; i++)
+            {
+                var c = lLines[i].Split(',');
+                if (c.Length < 12) continue;
+                string k = c[0];
+                if (toolMap.TryGetValue(k, out var existingTag2) && existingTag2 == "Reinforcement" && c[10] != "Reinforcement") continue;
+                toolMap[k] = c[10];
+            }
+        }
+
+var bpManager = UnityEngine.Object.FindFirstObjectByType<BlueprintManager>();
+
+// 🆕 [바닥/벽 2-pass 필터] 진동 전 원본 배치 기준으로 미리 판정
+var allBlocksForFloorCheck = new System.Collections.Generic.List<(float x, float y, float z, string id)>();
+var existingBlocksForFloorCheck = new System.Collections.Generic.HashSet<string>();
+for (int fi = 0; fi < positions.Length; fi++)
+{
+    float3 fp = positions[fi];
+    string fid = GridUtility.ToBlockID(fp);
+    allBlocksForFloorCheck.Add((fp.x, fp.y, fp.z, fid));
+    existingBlocksForFloorCheck.Add(fid);
+}
+var floorSet = GridUtility.ComputeFloorBlocks(allBlocksForFloorCheck, existingBlocksForFloorCheck);
+
+System.Collections.Generic.List<string> currentLines = new System.Collections.Generic.List<string>();
+currentLines.Add("BlockID,PosX,PosY,PosZ,Stress,RiskLevel,Prescription,Material,Tensile,Compressive,Tool,Type");
+
+        for (int i = 0; i < positions.Length; i++)
+        {
+            float3 pos = positions[i]; float stress = stresses[i]; string mat = materials[i].ToString();
+
+            // ⭐ GridUtility를 사용한 클린 ID 포맷팅
+            string id = GridUtility.ToBlockID(pos);
+
+            string posX = stress >= 2.0f ? "DESTROYED" : pos.x.ToString("F2");
+            string posY = stress >= 2.0f ? "DESTROYED" : pos.y.ToString("F2");
+            string posZ = stress >= 2.0f ? "DESTROYED" : pos.z.ToString("F2");
+
+string risk = stress >= 2.0f ? "Quake_Destroyed" : (stress >= 0.5f ? "Quake_Danger" : "Safe");
+string pres = stress >= 2.0f ? "Y" : (stress >= 0.5f ? "Y" : "N");
+string toolTag = toolMap.ContainsKey(id) ? toolMap[id] : (bpManager != null ? bpManager.GetToolName(id) : "Existing");
+string typeStr = toolTag == "Reinforcement" ? "Reinforcement" : (floorSet.Contains(id) ? "Floor" : "Wall");
+
+            string lineData = id + "," + posX + "," + posY + "," + posZ + "," + stress.ToString("F2") + "," + risk + "," + pres + "," + mat + ",0.0,0.0," + toolTag + "," + typeStr;
+            currentLines.Add(lineData);
+        }
+        
+        string saveHistoryPath = historyPath;
+        string saveCurrentPath = currentPath;
+        System.Collections.Generic.List<string> linesToWrite = new System.Collections.Generic.List<string>(currentLines);
+
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            File.WriteAllLines(saveHistoryPath, linesToWrite);
+            File.WriteAllLines(saveCurrentPath, linesToWrite);
+        });
+    }
+}
+
+==================================================
+// FILE: Tags.cs
+using Unity.Entities;
+
+// 1. 이 엔티티가 '블록'임을 알려주는 꼬리표
+public struct BlockTag : IComponentData { }
+
+// 2. 이 엔티티가 '조인트'임을 알려주는 꼬리표
+public struct JointTag : IComponentData { }
+
+// 3. (보너스) 나중에 파괴 시스템 만들 때 쓸 꼬리표
+public struct DestroyTag : IComponentData { }
+public struct StructureID : IComponentData
+{
+    public float Value; // 같은 값 = 같은 덩어리(하나의 객체)
+}
+
+==================================================

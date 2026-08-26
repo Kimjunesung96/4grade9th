@@ -1,0 +1,621 @@
+// Project: 20260722_213037 Code Summary (Part d)
+// Total Lines: 618
+
+// FILE: LagDetectiveSystem.cs
+using Unity.Entities;
+using UnityEngine;
+using Unity.Profiling;
+using System.Collections.Generic;
+using System.Linq;
+
+[UpdateInGroup(typeof(SimulationSystemGroup), OrderLast = true)]
+public partial class LagDetectiveSystem : SystemBase
+{
+    // 감시 대상 시스템 이름들 (프로젝트에 있는 시스템 이름 그대로 적어주세요)
+    private static readonly string[] WatchedSystems = new string[]
+    {
+        "SpawnerSystem",
+        "SpawnerSystem_Cone",
+        "SpawnerSystem_Cylinder",
+        "SpawnerSystem_Frame",
+        "SpawnerSystem_Motor",
+        "SpawnerSystem_Pyramid",
+        "SpawnerSystem_Solid",
+        "StressVisualizationSystem",
+        "VibrationTestSystem",
+        "ShockwaveTestSystem",
+        "BuilderActionSystem",
+        "BuilderInputSystem",
+        "MaterialPropertyInitSystem",
+        "DefaultMaterialInitSystem",
+        "CameraFollowSystem",
+        "OptimizedColorSystem",
+        "PlayerMovementSystem",
+    };
+
+    private Dictionary<string, ProfilerRecorder> recorders = new Dictionary<string, ProfilerRecorder>();
+    private float checkTimer;
+
+    protected override void OnCreate()
+    {
+        // 각 시스템 이름으로 프로파일러 레코더를 만들어 둡니다.
+        // Unity가 내부적으로 시스템 OnUpdate를 이 이름으로 프로파일링하고 있어서 그대로 후킹 가능합니다.
+        foreach (var name in WatchedSystems)
+        {
+            var recorder = ProfilerRecorder.StartNew(ProfilerCategory.Scripts, name, 1);
+            recorders[name] = recorder;
+        }
+    }
+
+    protected override void OnDestroy()
+    {
+        foreach (var kv in recorders)
+        {
+            kv.Value.Dispose();
+        }
+        recorders.Clear();
+    }
+
+    protected override void OnUpdate()
+    {
+        float dt = SystemAPI.Time.DeltaTime;
+
+        // 0.1초(100ms) 이상 걸린 프레임만 상세 분석
+        if (dt > 0.1f)
+        {
+            var results = new List<(string name, double ms)>();
+
+            foreach (var kv in recorders)
+            {
+                if (kv.Value.Valid && kv.Value.Count > 0)
+                {
+                    // 나노초 -> 밀리초 변환
+                    double ms = kv.Value.LastValue / 1000000.0;
+                    results.Add((kv.Key, ms));
+                }
+            }
+
+            // 오래 걸린 순서로 정렬
+            var sorted = results.OrderByDescending(r => r.ms).ToList();
+
+            string report = $"🚨 [렉 감지 상세] 프레임 {dt * 1000f:F1}ms 지연 발생! 범인 랭킹:\n";
+            for (int i = 0; i < sorted.Count && i < 5; i++)
+            {
+                if (sorted[i].ms > 1.0) // 1ms 이상만 표시 (의미없는 항목 제거)
+                {
+                    report += $"  {i + 1}위: {sorted[i].name} - {sorted[i].ms:F2}ms\n";
+                }
+            }
+
+            // 어떤 시스템도 크게 잡히지 않았다면 -> Unity 내부(물리 솔버, GC 등) 병목 가능성
+            if (sorted.Count == 0 || sorted[0].ms < 1.0)
+            {
+                report += "  ⚠️ 감시 대상 시스템 중엔 범인이 없습니다. Unity.Physics 솔버, GC(가비지 컬렉션), 또는 렌더링 스레드 병목일 가능성이 높습니다.";
+            }
+
+            UnityEngine.Debug.LogWarning(report);
+        }
+
+        // GC 발생 감지 (매 프레임 체크는 가볍습니다)
+        checkTimer += dt;
+        if (checkTimer >= 1.0f)
+        {
+            checkTimer = 0f;
+            long gcMemory = System.GC.GetTotalMemory(false);
+            UnityEngine.Debug.Log($"📈 [메모리 체크] 현재 관리 힙: {gcMemory / 1024 / 1024}MB");
+        }
+    }
+}
+
+==================================================
+// FILE: LogManager.cs
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
+using UnityEngine;
+
+// 1. 단일 기록 (십장님 특허 3합축 기술 적용!)
+[Serializable]
+public class ActionLog
+{
+    public string time;
+    public string tool;
+    public string sizeXZH;
+    public string centerXYZ;
+    public string action;
+    public string status;
+    public string pivotXYZ;
+}
+
+[Serializable]
+public class ProjectAttempt
+{
+    public int Attempt;
+    public string Start_Time;
+    public string End_Time;
+    public string Status;
+    public List<ActionLog> Actions = new List<ActionLog>();
+}
+
+[Serializable]
+public class DailyRawLog
+{
+    public string Date;
+    public int Total_Attempts;
+    public List<string> Reset_Timestamps = new List<string>();
+    public List<ProjectAttempt> Projects_Details = new List<ProjectAttempt>();
+}
+
+[Serializable]
+public class TempLog
+{
+    public string Notice = "현재 타설 중인 블록입니다. (R키 누르면 날아감)";
+    public List<ActionLog> Current_Blocks = new List<ActionLog>();
+}
+
+[Serializable]
+public class Blueprint
+{
+    public int Blueprint_ID;
+    public string Saved_Time;
+    public List<ActionLog> Blocks = new List<ActionLog>();
+}
+
+[Serializable]
+public class MasterBlueprintLog
+{
+    public string Date;
+    public int Total_Masterpieces;
+    public List<Blueprint> Blueprints = new List<Blueprint>();
+}
+
+public class LogManager : MonoBehaviour
+{
+    public static LogManager Instance;
+
+    private DailyRawLog rawDailyLog;
+    private TempLog tempLogData;
+    private MasterBlueprintLog masterLogData;
+    private ProjectAttempt currentAttempt;
+
+    private string rawFilePath;
+    private string tempFilePath;
+    private string masterFilePath;
+
+    private Transform simulationPivot;
+
+    void Awake()
+    {
+        if (Instance == null) Instance = this;
+        else Destroy(gameObject);
+    }
+
+    void Start()
+    {
+        string dateStr = DateTime.Now.ToString("yyyyMMdd");
+
+        // 🚨 [에러 대참사 완벽 해결!] 
+        // Application.dataPath(Assets 폴더)에 저장하면 유니티가 실시간으로 임포트하려다 DOTS와 충돌합니다!
+        // Assets 폴더 바깥인 "프로젝트루트경로/BuildingLogs" 폴더로 장부 보관소를 아예 이사시킵니다!
+        string basePath = Path.Combine(Application.dataPath, "../BuildingLogs");
+
+        string historyDir = Path.Combine(basePath, "history");
+        string tempDir = Path.Combine(basePath, "temp");
+        string architectDir = Path.Combine(basePath, "architecture");
+
+        if (!Directory.Exists(historyDir)) Directory.CreateDirectory(historyDir);
+        if (!Directory.Exists(tempDir)) Directory.CreateDirectory(tempDir);
+        if (!Directory.Exists(architectDir)) Directory.CreateDirectory(architectDir);
+
+        rawFilePath = Path.Combine(historyDir, $"Log_Raw_{dateStr}.json");
+        tempFilePath = Path.Combine(tempDir, "Temp_Current_Building.json");
+        masterFilePath = Path.Combine(architectDir, $"Master_Blueprint_{dateStr}.json");
+
+        LoadOrCreateLogs();
+    }
+
+    void Update()
+    {
+        if (simulationPivot == null)
+        {
+            GameObject pivotObj = GameObject.Find("SimulationPivot");
+            if (pivotObj != null) simulationPivot = pivotObj.transform;
+        }
+    }
+
+    void LoadOrCreateLogs()
+    {
+        if (File.Exists(rawFilePath)) rawDailyLog = JsonUtility.FromJson<DailyRawLog>(File.ReadAllText(rawFilePath));
+        else rawDailyLog = new DailyRawLog { Date = DateTime.Now.ToString("yyyy-MM-dd") };
+
+        if (File.Exists(masterFilePath)) masterLogData = JsonUtility.FromJson<MasterBlueprintLog>(File.ReadAllText(masterFilePath));
+        else masterLogData = new MasterBlueprintLog { Date = DateTime.Now.ToString("yyyy-MM-dd") };
+
+        tempLogData = new TempLog();
+        SaveTempLog();
+
+        if (rawDailyLog.Projects_Details.Count == 0 || rawDailyLog.Projects_Details[rawDailyLog.Projects_Details.Count - 1].Status != "In_Progress")
+        {
+            StartNewAttempt();
+        }
+        else
+        {
+            currentAttempt = rawDailyLog.Projects_Details[rawDailyLog.Projects_Details.Count - 1];
+        }
+    }
+
+    void StartNewAttempt()
+    {
+        rawDailyLog.Total_Attempts++;
+        currentAttempt = new ProjectAttempt { Attempt = rawDailyLog.Total_Attempts, Start_Time = DateTime.Now.ToString("HH:mm:ss"), Status = "In_Progress" };
+        rawDailyLog.Projects_Details.Add(currentAttempt);
+        SaveRawLog();
+    }
+
+    public void AddLog(string tool, int heightCount, string action, string status, string centerStr, float sizeX, float sizeZ)
+    {
+        string pivotStr = "Center_Fixed";
+        if (simulationPivot != null)
+        {
+            pivotStr = $"[{simulationPivot.position.x:F2}, {simulationPivot.position.y:F2}, {simulationPivot.position.z:F2}]";
+        }
+
+        ActionLog newLog = new ActionLog
+        {
+            time = DateTime.Now.ToString("HH:mm:ss"),
+            tool = tool,
+            sizeXZH = $"[{sizeX:F1}, {sizeZ:F1}, {heightCount}]",
+            centerXYZ = centerStr,
+            action = action,
+            status = status,
+            pivotXYZ = pivotStr
+        };
+
+        currentAttempt.Actions.Add(newLog);
+        SaveRawLog();
+
+        if (action == "Key_G" || status == "Build_Complete")
+        {
+            tempLogData.Current_Blocks.Add(newLog);
+            SaveTempLog();
+            Debug.Log($"[현장보고] 타설 완료! (타설중앙: {centerStr} / 바닥코어: {pivotStr})");
+        }
+    }
+
+    public void OnPressRKey()
+    {
+        string nowTime = DateTime.Now.ToString("HH:mm:ss");
+        currentAttempt.End_Time = nowTime;
+        currentAttempt.Status = "Reset";
+        rawDailyLog.Reset_Timestamps.Add($"Attempt {currentAttempt.Attempt}: {nowTime} (Reset)");
+        SaveRawLog();
+        StartNewAttempt();
+
+        tempLogData.Current_Blocks.Clear();
+        SaveTempLog();
+    }
+
+    public void SaveToMaster()
+    {
+        if (tempLogData.Current_Blocks.Count == 0) return;
+        string nowTime = DateTime.Now.ToString("HH:mm:ss");
+        masterLogData.Total_Masterpieces++;
+        Blueprint newBlueprint = new Blueprint { Blueprint_ID = masterLogData.Total_Masterpieces, Saved_Time = nowTime, Blocks = new List<ActionLog>(tempLogData.Current_Blocks) };
+        masterLogData.Blueprints.Add(newBlueprint);
+        SaveMasterLog();
+
+        currentAttempt.End_Time = nowTime;
+        currentAttempt.Status = "Success";
+        rawDailyLog.Reset_Timestamps.Add($"Attempt {currentAttempt.Attempt}: {nowTime} (Success)");
+        SaveRawLog();
+        StartNewAttempt();
+
+        Debug.Log("🎉 마스터 도면집에 십장님 특허 장부 도장 쾅! (Temp 장부 기록은 계속 유지됩니다)");
+    }
+
+    private void SaveRawLog() { try { File.WriteAllText(rawFilePath, JsonUtility.ToJson(rawDailyLog, true)); } catch (Exception e) { Debug.LogWarning("Raw Log 저장 실패: " + e.Message); } }
+    private void SaveTempLog() { try { File.WriteAllText(tempFilePath, JsonUtility.ToJson(tempLogData, true)); } catch (Exception e) { Debug.LogWarning("Temp Log 저장 실패: " + e.Message); } }
+    private void SaveMasterLog() { try { File.WriteAllText(masterFilePath, JsonUtility.ToJson(masterLogData, true)); } catch (Exception e) { Debug.LogWarning("Master Log 저장 실패: " + e.Message); } }
+}
+
+==================================================
+// FILE: F1HelpManual.cs
+using UnityEngine;
+
+public class F1HelpManual : MonoBehaviour
+{
+    [Header("여기에 아까 만든 HelpPanel을 끌어다 넣으세요")]
+    public GameObject helpUI;
+
+    void Update()
+    {
+        // UI가 연결되어 있지 않으면 무시
+        if (helpUI == null) return;
+
+        // F1 키를 '누르고 있는 동안만' UI를 켜고, 떼면 끕니다! (오버워치 방식)
+        if (Input.GetKeyDown(KeyCode.F1))
+        {
+            helpUI.SetActive(true);
+        }
+        else if (Input.GetKeyUp(KeyCode.F1))
+        {
+            helpUI.SetActive(false);
+        }
+    }
+}
+
+==================================================
+// FILE: ObjectColorAuthoring.cs
+using UnityEngine;
+using Unity.Entities;
+using Unity.Mathematics;
+
+// 이 클래스 이름이 파일명과 반드시 같아야 합니다!
+public class ObjectColorAuthoring : MonoBehaviour
+{
+    public Color initialColor = Color.white;
+
+    // Baker 클래스는 Authoring 클래스 안에 포함되어 있어야 합니다.
+    public class ObjectColorBaker : Baker<ObjectColorAuthoring>
+    {
+        public override void Bake(ObjectColorAuthoring authoring)
+        {
+            var entity = GetEntity(TransformUsageFlags.Dynamic);
+            AddComponent(entity, new ObjectColorData
+            {
+                Value = new float4(
+                    authoring.initialColor.r,
+                    authoring.initialColor.g,
+                    authoring.initialColor.b,
+                    authoring.initialColor.a
+                )
+            });
+        }
+    }
+}
+
+==================================================
+// FILE: ObjectColorData.cs
+using Unity.Entities;
+using Unity.Mathematics;
+using Unity.Rendering;
+
+[MaterialProperty("_BaseColor")]
+public struct ObjectColorData : IComponentData
+{
+    public float4 Value;
+}
+
+==================================================
+// FILE: OptimizedColorSystem.cs
+using Unity.Entities;
+using Unity.Burst;
+using Unity.Mathematics;
+using Unity.Transforms;
+
+[BurstCompile]
+public partial struct OptimizedColorSystem : ISystem
+{
+    [BurstCompile]
+    public void OnUpdate(ref SystemState state)
+    {
+        var time = (float)SystemAPI.Time.ElapsedTime;
+
+        // 모든 ObjectColorData를 가진 엔티티를 병렬로 업데이트
+        new ColorUpdateJob { Time = time }.ScheduleParallel();
+    }
+}
+
+[BurstCompile]
+public partial struct ColorUpdateJob : IJobEntity
+{
+    public float Time;
+
+    public void Execute(ref ObjectColorData colorData, in LocalTransform transform)
+    {
+        // 위치(position) 값에 따라 색상이 다르게 변하도록 오프셋 추가
+        colorData.Value = new float4(
+            math.sin(Time + transform.Position.x) * 0.5f + 0.5f,
+            math.cos(Time + transform.Position.y) * 0.5f + 0.5f,
+            math.sin(Time + transform.Position.z) * 0.5f + 0.5f,
+            1.0f
+        );
+    }
+}
+
+==================================================
+// FILE: PlayerAuthoring.cs
+using Unity.Entities;
+using Unity.Mathematics;
+using UnityEngine;
+
+public class PlayerAuthoring : MonoBehaviour
+{
+    public float MoveSpeed = 10f;
+    public float JetpackForce = 25f; // 제트팩 상승 기류의 세기
+    public float MaxFallSpeed = -20f; // 너무 빨리 추락하지 않게 제한
+
+    class Baker : Baker<PlayerAuthoring>
+    {
+        public override void Bake(PlayerAuthoring authoring)
+        {
+            var entity = GetEntity(TransformUsageFlags.Dynamic);
+            AddComponent(entity, new PlayerData
+            {
+                MoveSpeed = authoring.MoveSpeed,
+                JetpackForce = authoring.JetpackForce,
+                MaxFallSpeed = authoring.MaxFallSpeed
+            });
+        }
+    }
+}
+
+public struct PlayerData : IComponentData
+{
+    public float MoveSpeed;
+    public float JetpackForce;
+    public float MaxFallSpeed;
+}
+
+==================================================
+// FILE: PlayerMovementSystem.cs
+using Unity.Entities;
+using Unity.Transforms;
+using Unity.Mathematics;
+using Unity.Physics;
+using UnityEngine;
+
+// ISystem(구조체) 대신 SystemBase(클래스)를 사용하면
+// 키보드 입력(Input)이나 Debug.Log 같은 기존 유니티 기능을 훨씬 안정적으로 쓸 수 있습니다.
+public partial class PlayerMovementSystem : SystemBase
+{
+    protected override void OnUpdate()
+    {
+        // 1. 키보드 입력 받기
+        float moveX = Input.GetAxisRaw("Horizontal");
+        float moveZ = Input.GetAxisRaw("Vertical");
+        float3 moveInput = new float3(moveX, 0, moveZ);
+        bool isJetpackActive = Input.GetKey(KeyCode.Space);
+        float deltaTime = SystemAPI.Time.DeltaTime;
+
+        bool foundPlayer = false; // 플레이어를 찾았는지 확인하는 스위치
+
+        // 2. 물리 속도(PhysicsVelocity)와 플레이어 데이터(PlayerData)가 있는 놈을 찾아서 움직입니다.
+        foreach (var (velocity, mass, player) in
+                 SystemAPI.Query<RefRW<PhysicsVelocity>, RefRW<PhysicsMass>, RefRO<PlayerData>>())
+        {
+            foundPlayer = true; // 오! 찾았다!
+
+            // 회전 잠금 (오뚝이 유지)
+            mass.ValueRW.InverseInertia = float3.zero;
+            velocity.ValueRW.Angular = float3.zero;
+
+            // 기존 y축 속도(중력/제트팩)는 그대로 두고, x와 z축(수평) 이동만 덮어씌웁니다.
+            float currentY = velocity.ValueRO.Linear.y;
+            velocity.ValueRW.Linear = new float3(moveInput.x * player.ValueRO.MoveSpeed, currentY, moveInput.z * player.ValueRO.MoveSpeed);
+
+            // 제트팩 상승 (스페이스바)
+            if (isJetpackActive)
+            {
+                velocity.ValueRW.Linear.y += player.ValueRO.JetpackForce * deltaTime;
+            }
+
+            // 추락 속도 제한
+            if (velocity.ValueRW.Linear.y < player.ValueRO.MaxFallSpeed)
+            {
+                velocity.ValueRW.Linear.y = player.ValueRO.MaxFallSpeed;
+            }
+        }
+
+        // 3. 디버그: 만약 씬에 캐릭터가 없다면 콘솔창에 빨간불을 띄워줍니다.
+        if (!foundPlayer)
+        {
+            // 이 경고가 뜬다면, 유니티가 캡슐을 엔티티로 제대로 변환(Baking)하지 못한 겁니다!
+            // Debug.LogWarning("플레이어 엔티티를 찾지 못했습니다! 서브 씬을 껐다 켜보세요.");
+        }
+    }
+}
+
+==================================================
+// FILE: SimulationDragController.cs
+﻿using UnityEngine;
+using Unity.Mathematics;
+using Unity.Entities;
+
+public class SimulationDragController : MonoBehaviour
+{
+    public float blockSize = 3.0f;
+    public LayerMask groundLayer = ~0;
+    public Material coreMaterial;
+    public Material previewMaterial;
+
+    private Transform simulationPivot;
+    private bool isSimulationActive = false;
+    private float3 definedStart;
+    private float3 definedEnd;
+
+    void Start()
+    {
+        simulationPivot = new GameObject("SimulationPivot").transform;
+        simulationPivot.gameObject.SetActive(false);
+        // ... ( Start 내부 GameObject 생성 로직 기존과 동일하게 유지 ) ...
+    }
+
+    void Update()
+    {
+        Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
+        if (!Physics.Raycast(ray, out RaycastHit hit, 1000f, groundLayer)) return;
+        float3 hitPoint = hit.point;
+
+        if (Input.GetMouseButtonDown(0)) { definedStart = SnapToGrid(hitPoint); definedEnd = definedStart; isSimulationActive = true; simulationPivot.gameObject.SetActive(true); SyncWithDOTS(); }
+        if (Input.GetMouseButton(0) && isSimulationActive) { definedEnd = SnapToGrid(hitPoint); SyncWithDOTS(); }
+        if (Input.GetMouseButtonUp(0) && math.distance(definedStart, definedEnd) < 0.1f) { CancelDrag(); }
+    }
+
+    float3 SnapToGrid(float3 pos) { return math.floor(pos / blockSize) * blockSize; }
+
+    void SyncWithDOTS()
+    {
+        // 🚀 [추가된 코드] DOTS 월드가 아직 안 만들어졌으면(Null) 동기화를 건너뜁니다!
+        if (Unity.Entities.World.DefaultGameObjectInjectionWorld == null) return;
+
+        var em = Unity.Entities.World.DefaultGameObjectInjectionWorld.EntityManager;
+        var query = em.CreateEntityQuery(typeof(BuilderStateData));
+        if (query.HasSingleton<BuilderStateData>())
+        {
+            var data = query.GetSingleton<BuilderStateData>();
+            data.GuideStartPos = definedStart; data.GuideEndPos = definedEnd;
+            query.SetSingleton(data);
+        }
+    }
+
+    // 📡 [최종 보강] R, L 키 눌렀을 때 초록색 선까지 싹 지워버리는 유배 무전기
+    public void CancelDrag()
+    {
+        isSimulationActive = false;
+        if (simulationPivot) simulationPivot.gameObject.SetActive(false);
+
+        // 좌표를 -9999로 멀리 보내서 초록색 가이드를 화면에서 치워버립니다.
+        definedStart = new float3(-9999f, -9999f, -9999f);
+        definedEnd = new float3(-9999f, -9999f, -9999f);
+        SyncWithDOTS();
+    }
+}
+
+==================================================
+// FILE: SpawnerAuthoring.cs
+using UnityEngine;
+using Unity.Entities;
+using Unity.Mathematics;
+
+public class SpawnerAuthoring : MonoBehaviour
+{
+    public GameObject Prefab;
+    public int2 Count;
+
+    public class SpawnerBaker : Baker<SpawnerAuthoring>
+    {
+        public override void Bake(SpawnerAuthoring authoring)
+        {
+            var entity = GetEntity(TransformUsageFlags.None);
+            AddComponent(entity, new SpawnerData
+            {
+                Prefab = GetEntity(authoring.Prefab, TransformUsageFlags.Dynamic),
+                Count = authoring.Count
+            });
+        }
+    }
+}
+
+==================================================
+// FILE: SpawnerData.cs
+using Unity.Entities;
+using Unity.Mathematics;
+
+public struct SpawnerData : IComponentData
+{
+    public Entity Prefab;
+    public int2 Count;
+}
+
+==================================================
