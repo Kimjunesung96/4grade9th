@@ -1,2 +1,13 @@
 4grade9th/
 prototypejolup_BurstDebugInformation_DoNotShip/
+
+# auto-added
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.zip
+tree.txt
+node_modules/
+.env
+push_*.bat

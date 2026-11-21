@@ -1,0 +1,591 @@
+{
+    "Date": "2026-11-21",
+    "Total_Attempts": 5,
+    "Reset_Timestamps": [
+        "Attempt 1: 21:28:36 (Reset)",
+        "Attempt 2: 21:28:54 (Reset)",
+        "Attempt 3: 21:29:34 (Reset)",
+        "Attempt 4: 21:29:34 (Reset)"
+    ],
+    "Projects_Details": [
+        {
+            "Attempt": 1,
+            "Start_Time": "20:50:42",
+            "End_Time": "21:28:36",
+            "Status": "Reset",
+            "Actions": [
+                {
+                    "time": "20:50:47",
+                    "tool": "1_Solid_Wall",
+                    "sizeXZH": "[0.0, 0.0, 16]",
+                    "centerXYZ": "[4.5, 1.5, 79.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "20:50:49",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 30]",
+                    "centerXYZ": "[4.5, 1.5, 79.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "20:50:49",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 30]",
+                    "centerXYZ": "[4.5, 1.5, 79.5]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                }
+            ]
+        },
+        {
+            "Attempt": 2,
+            "Start_Time": "21:28:36",
+            "End_Time": "21:28:54",
+            "Status": "Reset",
+            "Actions": [
+                {
+                    "time": "21:28:44",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 74]",
+                    "centerXYZ": "[-13.5, 1.5, 154.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:28:44",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 65]",
+                    "centerXYZ": "[-13.5, 1.5, 154.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:28:45",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 58]",
+                    "centerXYZ": "[-13.5, 1.5, 154.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:28:45",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 53]",
+                    "centerXYZ": "[-13.5, 1.5, 154.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:28:46",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 47]",
+                    "centerXYZ": "[-13.5, 1.5, 154.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:28:46",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 47]",
+                    "centerXYZ": "[-13.5, 1.5, 154.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:28:47",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 27]",
+                    "centerXYZ": "[-13.5, 1.5, 154.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:28:47",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 21]",
+                    "centerXYZ": "[-13.5, 1.5, 154.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:28:47",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 21]",
+                    "centerXYZ": "[-13.5, 1.5, 154.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:28:48",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 16]",
+                    "centerXYZ": "[-13.5, 1.5, 154.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:28:48",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 11]",
+                    "centerXYZ": "[-13.5, 1.5, 154.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:28:49",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[-13.5, 1.5, 154.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:28:50",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[-13.5, 1.5, 154.5]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:28:51",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[28.5, 1.5, 147.0]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:28:51",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[28.5, 1.5, 147.0]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:28:52",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[-13.5, 1.5, 81.0]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:28:53",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[19.5, 1.5, 72.0]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                }
+            ]
+        },
+        {
+            "Attempt": 3,
+            "Start_Time": "21:28:54",
+            "End_Time": "21:29:34",
+            "Status": "Reset",
+            "Actions": [
+                {
+                    "time": "21:29:02",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[-7.5, 1.5, 88.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:02",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[-7.5, 1.5, 88.5]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:07",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[16.5, 1.5, 82.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:07",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[16.5, 1.5, 82.5]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:09",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[-7.5, 1.5, 58.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:09",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[-7.5, 1.5, 58.5]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:10",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[13.5, 1.5, 58.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:11",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[13.5, 1.5, 58.5]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:12",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[55.5, 1.5, 91.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:12",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[55.5, 1.5, 91.5]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:13",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[46.5, 1.5, 61.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:13",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[46.5, 1.5, 61.5]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:23",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[19.5, 22.5, 85.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:23",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[19.5, 22.5, 85.5]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                }
+            ]
+        },
+        {
+            "Attempt": 4,
+            "Start_Time": "21:29:34",
+            "End_Time": "21:29:34",
+            "Status": "Reset",
+            "Actions": []
+        },
+        {
+            "Attempt": 5,
+            "Start_Time": "21:29:34",
+            "End_Time": "",
+            "Status": "In_Progress",
+            "Actions": [
+                {
+                    "time": "21:29:48",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[-13.5, 1.5, 130.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:49",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[-13.5, 1.5, 130.5]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:50",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[7.5, 1.5, 129.0]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:50",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[7.5, 1.5, 129.0]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:51",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[28.5, 1.5, 123.0]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:51",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[28.5, 1.5, 123.0]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:52",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[52.5, 1.5, 117.0]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:52",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[52.5, 1.5, 117.0]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:54",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[-13.5, 1.5, 87.0]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:54",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[-13.5, 1.5, 87.0]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:57",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[25.5, 1.5, 87.0]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:57",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[25.5, 1.5, 87.0]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:58",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[52.5, 1.5, 84.0]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:29:58",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[52.5, 1.5, 84.0]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:30:02",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[1.5, 1.5, 87.0]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:30:02",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[1.5, 1.5, 87.0]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:30:06",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[22.5, 22.5, 109.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:30:07",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[22.5, 22.5, 109.5]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:31:27",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[-16.5, 22.5, 118.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:31:28",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[21.0, 22.5, 105.0]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:31:35",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[18.0, 22.5, 114.0]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:31:37",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[18.0, 22.5, 114.0]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:32:50",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[-55.5, 1.5, 97.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:32:52",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[15.0, 22.5, 103.5]",
+                    "action": "Key_F",
+                    "status": "Preview",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:32:56",
+                    "tool": "2_Empty_Frame",
+                    "sizeXZH": "[0.0, 0.0, 8]",
+                    "centerXYZ": "[15.0, 22.5, 103.5]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                },
+                {
+                    "time": "21:37:49",
+                    "tool": "1_Solid_Wall",
+                    "sizeXZH": "[0.0, 0.0, 35]",
+                    "centerXYZ": "[-1.5, 1.5, -61.5]",
+                    "action": "Key_G",
+                    "status": "Build",
+                    "pivotXYZ": "[0.00, 0.00, 0.00]"
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,47 @@
+{
+    "Date": "2026-11-17",
+    "Total_Attempts": 5,
+    "Reset_Timestamps": [
+        "Attempt 1: 15:38:54 (Reset)",
+        "Attempt 2: 15:42:24 (Reset)",
+        "Attempt 3: 20:10:46 (Reset)",
+        "Attempt 4: 20:12:22 (Reset)"
+    ],
+    "Projects_Details": [
+        {
+            "Attempt": 1,
+            "Start_Time": "15:35:20",
+            "End_Time": "15:38:54",
+            "Status": "Reset",
+            "Actions": []
+        },
+        {
+            "Attempt": 2,
+            "Start_Time": "15:38:54",
+            "End_Time": "15:42:24",
+            "Status": "Reset",
+            "Actions": []
+        },
+        {
+            "Attempt": 3,
+            "Start_Time": "15:42:24",
+            "End_Time": "20:10:46",
+            "Status": "Reset",
+            "Actions": []
+        },
+        {
+            "Attempt": 4,
+            "Start_Time": "20:10:46",
+            "End_Time": "20:12:22",
+            "Status": "Reset",
+            "Actions": []
+        },
+        {
+            "Attempt": 5,
+            "Start_Time": "20:12:22",
+            "End_Time": "",
+            "Status": "In_Progress",
+            "Actions": []
+        }
+    ]
+}
